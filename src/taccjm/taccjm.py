@@ -1,4 +1,5 @@
 import os                       # OS system utility functions
+import errno                    # For error messages
 import tarfile                  # For sending compressed directories
 import re                       # Regular Expressions
 import pdb                      # Debug
@@ -10,7 +11,7 @@ import logging                  # Used to setup the Paramiko log file
 import paramiko                 # Provides SSH functionality
 import datetime                 # Date time functionality
 import configparser             # For reading configs
-from jinja2 import template     # For templating input json files
+from jinja2 import Template     # For templating input json files
 
 import os.path
 
@@ -106,42 +107,41 @@ class SSHClient2FA(paramiko.SSHClient):
         t.auth_interactive(user, inter_handler)
 
 
-class Stampede2Manager():
+class JobManager():
 
-    def __init__(self, user=None, psw=None, mfa=None, apps_dir=None, jobs_dir=None):
+    TACC_SYSTEMS = ['stampede2', 'ls5', 'frontera', 'maverick2']
+
+    def __init__(self, system, user=None, psw=None, mfa=None, apps_dir=None, jobs_dir=None):
         """
-        Create a new Job Manager for jobs executed on Stampede2.
+        Create a new Job Manager for jobs executed on desired system
         """
+
+        if system not in self.TACC_SYSTEMS:
+            msg = f"Unrecognized TACC system {system}. Must be one of {self.TACC_SYSTEMS}."
+            logger.error(msg)
+            raise Exception(msg)
+
+        self._system= f"{system}.tacc.utexas.edu"
         self._user = user
         self._apps_dir = apps_dir
         self._jobs_dir = jobs_dir
 
         # Connect to server
-        logger.info("Connecting to stampede2...")
+        logger.info(f"Connecting to TACC system {system}...")
         self._client = SSHClient2FA()
         self._client.load_system_host_keys()
-        self._client.connect("stampede2.tacc.utexas.edu", uid=user, pswd=psw, mfa_pswd=mfa)
-        logger.info("Connecting to stampede2...")
+        self._client.connect(self._system, uid=user, pswd=psw, mfa_pswd=mfa)
+        logger.info(f"Succesfuly connected to {system}")
 
         # Set and Create jobs and apps dirs if necessary
-        if self._jobs_dir==None:
+        if self._jobs_dir is None:
             self._jobs_dir = '/'.join([self._execute_command('echo $SCRATCH').strip(), 'taccjm-jobs'])
-        if self._apps_dir==None:
-            self._apps_dir = '/'.join([self._execute_command('echo $WORK').strip(), 'taccjm-apps'])
+        if self._apps_dir is None:
+            self._apps_dir = '/'.join([self._execute_command('echo $SCRATCH').strip(), 'taccjm-apps'])
 
         logger.info("Creating if apps/jobs dirs if they don't already exist")
-        self._mkdir(self._jobs_dir)
-        self._mkdir(self._apps_dir)
-
-
-    def _mkdir(self, remote_path):
-        sftp = self._client.open_sftp()
-        try:
-            sftp.chdir(remote_path)  # Test if remote_path exists
-        except FileNotFoundError:
-            sftp.mkdir(remote_path)  # Create remote_path
-        sftp.close()
-
+        self._execute_command(f"mkdir -p {self._jobs_dir}")
+        self._execute_command(f"mkdir -p {self._apps_dir}")
 
 
     # TODO - Generate custom exception for failed command
@@ -168,35 +168,29 @@ class Stampede2Manager():
         return self._execute_command(cmd)
 
 
-    def send_file(self, local, remote, isdir=False, exclude_hidden=True):
+    def send_file(self, local, remote, exclude_hidden=True):
         sftp = self._client.open_sftp()
-        if isdir:
+        if os.path.isdir(local):
             fname = os.path.basename(local)
             remote_fname = os.path.basename(remote)
             remote_dir = os.path.abspath(os.path.join(remote, os.pardir))
-            tmp_remote_dir = remote_dir + '/.taccjm_tmp'
-            self._mkdir(tmp_remote_dir)
 
             local_tar_file = f".{fname}.taccjm.tar"
-            remote_tar_file = f"{tmp_remote_dir}/.taccjm.temp.{fname}.tar"
+            remote_tar_file = f"{remote_dir}/.taccjm.temp.{fname}.tar"
             with tarfile.open(local_tar_file, "w:gz") as tar:
                 if exclude_hidden:
-                    tar.add(local, arcname=fname,
+                    tar.add(local, arcname=remote_fname,
                       filter=lambda x : x if not os.path.basename(x.name).startswith('.') else None)
                 else:
-                    tar.add(local, arcname=fname)
+                    tar.add(local, arcname=remote_fname)
             sftp.put(local_tar_file, remote_tar_file)
 
             # Remove local tar file if sent successfully
             os.remove(local_tar_file)
 
             # Now untar file in destination and remove remote tar file
-            untar_cmd = f"tar -xzvf {remote_tar_file} -C {tmp_remote_dir}; rm {remote_tar_file}"
+            untar_cmd = f"tar -xzvf {remote_tar_file}; rm {remote_tar_file}"
             self._execute_command(untar_cmd)
-
-            # Move to desired destination and remove tmpdir
-            remote = remote[:-1] if remote[-1]=='/' else remote
-            self._execute_command(f"mv {tmp_remote_dir}/{fname} {remote}; rm -rf {tmp_remote_dir}")
         else:
             sftp = self._client.open_sftp()
             sftp.put(local, remote)
@@ -209,22 +203,68 @@ class Stampede2Manager():
         sftp.close()
 
 
-    def deploy_app(self, app_name, local_app_dir, version=None, overwrite=False):
+    def load_project_config(self, local_dir='.'):
+        project_config_file = os.path.join(local_dir, 'project.ini')
+
+        if not os.path.exists(project_config_file):
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), project_config_file)
+
+        # Read project config file
+        config = configparser.ConfigParser()
+        config.read(project_config_file)
+
+        return config
+
+
+    def load_templated_json_file(self, path, config):
+        try:
+            with open(path) as file_:
+                return json.loads(Template(file_.read()).render(config))
+        except FileNotFoundError:
+            msg = 'Unable to find json file to template ' + path
+            logger.error(msg)
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), path)
+
+
+    def deploy_app(self, local_app_dir='.', app_config_path=None, overwrite=False):
+        # Load project configuration file
+        proj_config = self.load_project_config(local_dir=local_app_dir)
+
+        # Load templated app configuration
+        if app_config_path is None:
+            app_config_path = os.path.join(local_app_dir, 'app.json')
+        app_config = self.load_templated_json_file(app_config_path,  proj_config._sections)
+
+        # Get current apps already deployed
         cur_apps = self.get_apps()
-        if version!=None:
-            app_name = app_name + f"-v{version}"
+
+        # Version app name if necessary so different version apps can be created and deployed
+        app_name = app_config['name']
+        if 'version' in app_config.keys():
+            app_name = f"{app_config['name']}-{app_config['version']}"
+
+        # Only overwrite previous version of app (a new revision) if overwrite is set.
         if (app_name in cur_apps) and (not overwrite):
             msg = f"Unable to deploy app {app_name} - already exists and overwite is not set."
             logger.info(msg)
             raise Exception(msg)
-        else:
-            remote_app_dir = '/'.join([self._apps_dir, app_name])
-            self.send_file(local_app_dir, remote_app_dir, isdir=True)
 
-        if (app_name in cur_apps) and overwrite:
-            cmd = f"cp {remote_app_dir}/{app_name}/* {remote_app_dir}/; rm -rf {remote_app_dir}/{app_name}"
-            self._execute_command(cmd)
+        local_app_dir = os.path.join(local_app_dir, 'assets')
+        remote_app_dir = '/'.join([self._apps_dir, app_name])
+        self.send_file(local_app_dir, remote_app_dir)
 
+        # Put app config in deployed app folder
+        app_config_path = '/'.join([remote_app_dir, 'app.json'])
+        try:
+            with self._client.open_sftp() as sftp:
+                with sftp.open(app_config_path, 'w') as jc:
+                    json.dump(app_config, jc)
+        except Exception as e:
+            msg = f"Unable to save app config file to {app_config_path}. Retry deploying app."
+            logger.error(msg)
+            raise e
+
+        return app_config
 
 
     def get_apps(self, head:int=-1, prnt:bool=False):
@@ -232,8 +272,7 @@ class Stampede2Manager():
             cmnd = 'ls -lat ' + self._apps_dir + '| head -' + str(head)
         else:
             cmnd = 'ls -lat ' + self._apps_dir
-
-        # Try to access apps dir
+        #Try to access apps dir
         try:
             ret = self._execute_command(cmnd)
         except Exception:
@@ -251,8 +290,9 @@ class Stampede2Manager():
         return apps
 
 
-    def get_app_wrapper_script(self, app):
-        wrapper_script = '/'.join([self._apps_dir, app, 'wrapper.sh'])
+    def get_app_wrapper_script(self, appId):
+        app_config = self.get_app_config(appId)
+        wrapper_script = '/'.join([self._apps_dir, appId, app_config['templatePath']])
         cmnd = 'cat ' + wrapper_script
         try:
             output = self._execute_command(cmnd)
@@ -319,8 +359,35 @@ class Stampede2Manager():
 
         return job_config
 
+    def load_app_config(self, appId):
+        # Get current apps already deployed
+        cur_apps = self.get_apps()
+        if appId not in cur_apps:
+            msg = f"Application {job_config['appId']} does not exist."
+            logger.error(msg)
+            raise Exception(msg)
 
-    def setup_job(self, job_config):
+        # Load application config
+        app_config_path = '/'.join([self._apps_dir, appId, 'app.json'])
+        with self._client.open_sftp() as sftp:
+            with sftp.open(app_config_path, 'rb') as jc:
+                app_config = json.load(jc)
+
+        return app_config
+
+
+    def setup_job(self, local_job_dir='.', job_config_path=None):
+        # Load project configuration file
+        proj_config = self.load_project_config(local_dir=local_job_dir)
+
+        # Load templated job configuration -> Default is job.json
+        if job_config_path is None:
+            job_config_path = os.path.join(local_job_dir, 'job.json')
+        job_config = self.load_templated_json_file(job_config_path,  proj_config._sections)
+
+        # Get app config
+        app_config = self.load_app_config(job_config['appId'])
+
         job_config['ts'] = {'setup_ts': None,
                             'submit_ts': None,
                             'start_ts': None,
@@ -348,10 +415,10 @@ class Stampede2Manager():
 
         # Copy app contents to job directory
         cmnd = 'cp -r {apps_dir}/{app}/* {job_dir}/'.format(apps_dir=self._apps_dir,
-                app=job_config['app'], job_dir=job_config['job_dir'])
+                app=job_config['appId'], job_dir=job_config['job_dir'])
         ret = self._execute_command(cmnd)
 
-        # chmod setup script and run
+        # chmod setup script and run - Remove this since tapisv2 doesn't do?
         self._execute_command('chmod +x {job_dir}/setup.sh'.format(job_dir=job_config['job_dir']))
         cmnd = '{job_dir}/setup.sh {job_dir}'.format(job_dir=job_config['job_dir'])
         ret = self._execute_command(cmnd)
@@ -374,7 +441,7 @@ class Stampede2Manager():
 
         # wrapper script - Load from app directory, Insert at beginning argument parsing
         try:
-            wrapper_script = self.get_app_wrapper_script(job_config['app'])
+            wrapper_script = self.get_app_wrapper_script(job_config['appId'])
         except Exception as e:
             _cleanup()
             msg = "Couldn't get wrapper script to setup job dir for " + job_config['job_id']
@@ -384,18 +451,19 @@ class Stampede2Manager():
         # Format submit scripts with appropriate inputs for job
         submit_script = submit_script.format(job_name=job_config['name'],
                 job_desc=job_config['desc'], ts=job_config['ts']['setup_ts'],
-                job_id=job_config['job_id'], queue=job_config['slurm']['queue'],
-                N=job_config['slurm']['nodes'], n=job_config['slurm']['mpi_tasks'],
-                rt=job_config['slurm']['max_runtime'])
+                job_id=job_config['job_id'], queue=app_config['defaultQueue'],
+                N=job_config['nodeCount'], n=job_config['processorsPerNode'],
+                rt=job_config['maxRunTime'])
 
         # submit script - add slurm directives for email and allocation if specified for job
-        if job_config['slurm']['email']!=None:
+        if job_config['email']!=None:
             submit_script += "\n#SBATCH --mail-user={email} # Email to send to".format(
-                    email=job_config['slurm']['email'])
+                    email=job_config['email'])
             submit_script += "\n#SBATCH --mail-type=all     # Email to send to"
-        if job_config['slurm']['allocation']!=None:
+        # TODO: Check allocation exists? Check if we need allocation for job -> if more than one is present then we need the argument
+        if job_config['allocation']!=None:
             submit_script += "\n#SBATCH -A {allocation} # Allocation name ".format(
-                    allocation=job_config['slurm']['allocation'])
+                    allocation=job_config['allocation'])
         submit_script += "\n#----------------------------------------------------\n"
         submit_script += "\ncd {job_dir}\n".format(job_dir=job_config['job_dir'])
 
@@ -412,34 +480,34 @@ class Stampede2Manager():
         # NP, the number of mpi processes available to job, is always a variable passed
         wrapper_preamble += "\n        NP)           NP=${VALUE} ;;"
         execute_line += " NP=" + str(job_config['slurm']['mpi_tasks'])
-        for arg in job_config['args']:
-            value = arg['value']
-            is_file = arg.copy().pop('is_file', False)
-            is_dir = arg.copy().pop('is_dir', False)
-            if is_file or is_dir:
-                # If local file, then transfer file over to execution system
-                dest_dir = arg.copy().pop('dest_dir', None)
-                if dest_dir==None:
-                    dest = job_config['job_dir'] + '/' + os.path.basename(arg['value'])
-                else:
-                    dest_dir = ('/' + dest_dir) if dest_dir[0]!='/' else dest_dir
-                    dest_dir = (dest_dir + '/') if dest_dir[-1]!='/' else dest_dir
-                    dest = job_config['job_dir'] + dest_dir + os.path.basename(arg['value'])
-                try:
-                    self.send_file(arg['value'], dest, isdir=is_dir)
-                except Exception as e:
-                    _cleanup()
-                    msg = "Unable to send file for arg " + arg['name'] + " to dest " + dest
-                    logger.error(msg)
-                    raise Exception(msg)
-                # Change arg value to file path on execution system
-                value  = dest
-            if arg['is_arg']:
-                # If is an actual argument, and not just data we are transferring over,
-                # pass name,value pair to application wrapper.sh
-                execute_line += " " + arg['name'] + "=" + str(value)
-                wrapper_preamble += "\n        {arg})           {arg}=${{VALUE}} ;;".format(arg=arg['name'])
 
+        # Transfer inputs to job directory
+        for arg in job_config['inputs'].keys():
+            path = job_config[arg]
+
+            dest_path = '/'.join([job_config['job_dir'], os.path.basename(path)])
+            try:
+                self.send_file(path, dest_path)
+            except Exception as e:
+                _cleanup()
+                msg = f"Unable to send input file for arg {arg['name']} to dest {dest_path}"
+                logger.error(msg)
+                raise Exception(msg)
+
+            # Pass in path to input file as argument to application
+            # pass name,value pair to application wrapper.sh
+            execute_line += f" {arg}={dest_path}"
+            wrapper_preamble += "\n        {arg})           {arg}=${{VALUE}} ;;".format(arg=arg)
+
+        # Add on parameters passed to job
+        for arg in job_config['parameters'].keys():
+            value = job_config[arg]
+
+            # pass name,value pair to application wrapper.sh
+            execute_line += f" {arg}={value}"
+            wrapper_preamble += f"\n        {arg})           {arg}=${{VALUE}} ;;"
+
+        # Close off wrapper preamble
         wrapper_preamble += "\n        *)\n    esac\n\ndone\n\n"
 
         # submit script - add execution line to wrapper.sh
@@ -449,13 +517,13 @@ class Stampede2Manager():
         wrapper_post = "\n# Create end ts file\ntouch end_$(date +\"%FT%H%M%S\")\n"
 
         # Write modified submit and wrapper scripts to job directory
-        sftp = self._client.open_sftp()
-        submit_dest = job_config['job_dir'] + '/submit_script.sh'
-        wrapper_dest = job_config['job_dir'] + '/wrapper.sh'
-        with sftp.open(submit_dest,  'w') as ss_file:
-            ss_file.write(submit_script)
-        with sftp.open(wrapper_dest, 'w') as ws_file:
-            ws_file.write(wrapper_preamble + wrapper_script + wrapper_post)
+        with self._client.open_sftp() as sftp:
+            submit_dest = job_config['job_dir'] + '/submit_script.sh'
+            wrapper_dest = '/'.join([job_config['job_dir'], '/wrapper.sh'])
+            with sftp.open(submit_dest,  'w') as ss_file:
+                ss_file.write(submit_script)
+            with sftp.open(wrapper_dest, 'w') as ws_file:
+                ws_file.write(wrapper_preamble + wrapper_script + wrapper_post)
 
         # chmod submit_scipt and wrapper script to make them executables
         try:

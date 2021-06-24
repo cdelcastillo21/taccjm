@@ -1,0 +1,7 @@
+{
+  "name": "{{ app.name }}-test-sleep",
+  "appId": "{{ app.name }}-{{ app.version}}",
+  "archive": true,
+  "inputs": {},
+  "parameters": {"command": "ls", "opts": "-alth", "data": "/scratch/06307/clos21/test"}
+}
