@@ -1,7 +1,11 @@
 {
-  "name": "{{ app.name }}-test-sleep",
-  "appId": "{{ app.name }}-{{ app.version}}",
+  "name": "{{ app.name }}-job-test",
+  "appId": "{{ app.name }}--{{ app.version}}",
   "archive": true,
+  "nodeCount": 1,
+  "processorsPerNode": 2,
+  "memoryPerNode": "1",
+  "maxRunTime": "00:01:00",
   "inputs": {},
-  "parameters": {"command": "ls", "opts": "-alth", "data": "/scratch/06307/clos21/test"}
+  "parameters": {"command": "ls", "opts": "-alth"}
 }

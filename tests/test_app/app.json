@@ -1,22 +1,16 @@
 {
-  "checkpointable": false,
-  "name": "{{ app.name }}",
-  "executionSystem": "designsafe.community.exec.stampede2.nores",
-  "executionType": "CLI",
-  "deploymentPath": "{{ username }}/apps/{{ app.name }}-{{ app.version }}",
-  "deploymentSystem": "{{ app.deployment_system }}",
-  "helpURI": "",
+  "name": "{{ app.name }}--{{ app.version }}",
   "label": "{{ app.label }}",
   "shortDescription": "{{ app.description }}",
-  "longDescription": "{{ env.test }}",
-  "modules": [],
-  "ontology": ["coreutils", "shell", "demo"],
-  "parallelism": "SERIAL",
-  "tags": [],
+  "longDescription": "{{ app.long_description}}",
   "templatePath": "run.sh",
   "testPath": "test.sh",
+  "defaultMaxRunTime": "00:01:00",
+  "defaultProcessorsPerNode": 2,
+  "defaultMemoryPerNode": 1,
+  "defaultNodeCount": 1,
+  "defaultQueue": "{{ app.queue }}",
   "version": "{{ app.version }}",
-  "defaultMaxRunTime": "00:30:00",
   "inputs": [   {
     "id": "target_file",
     "value": {
@@ -77,10 +71,10 @@
   ],
   "outputs": [
     {
-      "id": "log",
+      "id": "out",
       "value": {
         "order": 100,
-        "default": "{{ app.name }}.log"
+        "default": "out.txt"
       },
       "details": {
         "label": "STDOUT and STDERR from the command"

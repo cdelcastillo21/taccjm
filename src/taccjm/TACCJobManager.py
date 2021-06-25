@@ -9,7 +9,6 @@ References:
 
 """
 
-from taccjm.SSHClient2FA import SSHClient2FA  # Modified paramiko client
 
 import os                       # OS system utility functions
 import errno                    # For error messages
@@ -24,6 +23,8 @@ import configparser             # For reading configs
 from jinja2 import Template     # For templating input json files
 import os.path                  # Path manipulation
 
+from taccjm.SSHClient2FA import SSHClient2FA  # Modified paramiko client
+
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ class TACCJobManager():
     TACCJM_DIR = "$SCRATCH"
 
     def __init__(self, system, user=None, psw=None, mfa=None, apps_dir='taccjm-apps',
-            jobs_dir='taccjm-jobs'):
+            jobs_dir='taccjm-jobs', trash_dir='taccjm-trash'):
         """
         Create a new TACC Job Manager for jobs executed on TACC desired system
         """
@@ -63,6 +64,7 @@ class TACCJobManager():
         taccjm_path = self._execute_command(f"echo {self.TACCJM_DIR}").strip()
         self.jobs_dir = '/'.join([taccjm_path, jobs_dir])
         self.apps_dir = '/'.join([taccjm_path, apps_dir])
+        self.trash_dir = '/'.join([taccjm_path, trash_dir])
 
         logger.info("Creating if apps/jobs dirs if they don't already exist")
         self._execute_command(f"mkdir -p {self.jobs_dir}")
@@ -92,8 +94,10 @@ class TACCJobManager():
         cmd = '/usr/local/etc/taccinfo'
         return self._execute_command(cmd)
 
+
     def list_files(self, path=TACCJM_DIR):
         cmnd = f"ls -lat {path}"
+
         try:
             ret = self._execute_command(cmnd)
         except Exception:
@@ -103,7 +107,7 @@ class TACCJobManager():
 
         # Return list of files
         files = [re.split("\\s+", x)[-1] for x in re.split("\n", ret)[1:]]
-        for v in ['', '.', '..']:
+        for v in ['', '.', '..', None]:
             if v in files:
                 files.remove(v)
 
@@ -144,15 +148,50 @@ class TACCJobManager():
         return self.list_files(path=remote_dir)
 
 
+    def peak_file(self, path, head=-1, tail=-1):
+        if head>0:
+            cmnd = f"head -{head} {path}"
+        elif tail>0:
+            cmnd = f"tail -{tail} {path}"
+        else:
+            cmnd = f"head {path}"
+        try:
+            ret = self._execute_command(cmnd)
+        except Exception as e:
+            msg = f"Unable to peak at file at {path}"
+            logger.error(msg)
+            raise Exception(msg)
+
+        return ret
+
+
     def get_file(self, remote, local):
-        # TODO: If remote directory, tar file first on remote side and then transfer and unpack? 
-        with self._client.open_sftp() as sftp:
-            sftp.get(remote, local)
+        local = local.rstrip('/')
+        try:
+            # Try to tar file first -> If not directory and just file, this will fail
+            fname = os.path.basename(remote)
+            cmd = f"cd {remote}" + "/.. && { tar -czvf " + f"{fname}.tar.gz {fname}" +"; }"
+            self._execute_command(cmd)
+
+            # Transfer tar file to local directory
+            local_dir = os.path.abspath(os.path.join(local, os.pardir))
+            local_tar = f"{local_dir}/{fname}.tar.gz"
+            with self._client.open_sftp() as sftp:
+                sftp.get(f"{remote}.tar.gz", local_tar)
+
+            # Untar and remove tar file
+            with tarfile.open(local_tar) as tar:
+                tar.extractall(path=local_dir)
+            os.remove(local_tar)
+
+        except Exception:
+            # Just transfering simple file
+            with self._client.open_sftp() as sftp:
+                sftp.get(remote, local)
 
 
-    def load_project_config(self, local_dir='.'):
-        project_config_file = os.path.join(local_dir, 'project.ini')
-
+    def load_project_config(self, project_config_file):
+        # Check if it exists
         if not os.path.exists(project_config_file):
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), project_config_file)
 
@@ -160,7 +199,8 @@ class TACCJobManager():
         config = configparser.ConfigParser()
         config.read(project_config_file)
 
-        return config
+        # Return as dictionary
+        return config._sections
 
 
     def load_templated_json_file(self, path, config):
@@ -173,36 +213,34 @@ class TACCJobManager():
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), path)
 
 
-    def deploy_app(self, local_app_dir='.', app_config_path=None, overwrite=False):
+    def deploy_app(self, local_app_dir='.', app_config_file="app.json",
+            proj_config_file="project.ini", overwrite=False):
+
         # Load project configuration file
-        proj_config = self.load_project_config(local_dir=local_app_dir)
+        proj_config_path = os.path.join(local_app_dir, proj_config_file)
+        proj_config = self.load_project_config(proj_config_path)
 
         # Load templated app configuration
-        if app_config_path is None:
-            app_config_path = os.path.join(local_app_dir, 'app.json')
-        app_config = self.load_templated_json_file(app_config_path,  proj_config._sections)
+        app_config_path = os.path.join(local_app_dir, app_config_file)
+        app_config = self.load_templated_json_file(app_config_path,  proj_config)
 
         # Get current apps already deployed
         cur_apps = self.get_apps()
 
-        # Version app name if necessary so different version apps can be created and deployed
-        app_name = app_config['name']
-        if 'version' in app_config.keys():
-            app_name = f"{app_config['name']}-{app_config['version']}"
-
         # Only overwrite previous version of app (a new revision) if overwrite is set.
-        if (app_name in cur_apps) and (not overwrite):
-            msg = f"Unable to deploy app {app_name} - already exists and overwite is not set."
+        if (app_config['name'] in cur_apps) and (not overwrite):
+            msg = f"Unable to deploy app {app_config['name']} - already exists and overwite is not set."
             logger.info(msg)
             raise Exception(msg)
 
-        local_app_dir = os.path.join(local_app_dir, 'assets')
-        remote_app_dir = '/'.join([self.apps_dir, app_name])
-        self.send_file(local_app_dir, remote_app_dir)
-
-        # Put app config in deployed app folder
-        app_config_path = '/'.join([remote_app_dir, 'app.json'])
         try:
+            # Now try and send application data and config to system
+            local_app_dir = os.path.join(local_app_dir, 'assets')
+            remote_app_dir = '/'.join([self.apps_dir, app_config['name']])
+            self.send_file(local_app_dir, remote_app_dir)
+
+            # Put app config in deployed app folder
+            app_config_path = '/'.join([remote_app_dir, 'app.json'])
             with self._client.open_sftp() as sftp:
                 with sftp.open(app_config_path, 'w') as jc:
                     json.dump(app_config, jc)
@@ -214,63 +252,45 @@ class TACCJobManager():
         return app_config
 
 
-    def get_apps(self, head:int=-1, prnt:bool=False):
-        if head>0:
-            cmnd = 'ls -lat ' + self.apps_dir + '| head -' + str(head)
-        else:
-            cmnd = 'ls -lat ' + self.apps_dir
-        #Try to access apps dir
-        try:
-            ret = self._execute_command(cmnd)
-        except Exception:
-            raise Exception('Unable to access Apps Dir ' + self.apps_dir)
+    def get_apps(self):
+        apps = self.list_files(path=self.apps_dir)
 
-        # Process otuput into list of apps available
-        apps = [re.split("\\s+", x)[-1] for x in re.split("\n", ret)[1:]]
-        for v in ['', '.', '..']:
-            try:
-                apps.remove(v)
-            except ValueError:
-                pass
-        if prnt:
-            print(ret)
         return apps
 
 
     def get_app_wrapper_script(self, appId):
-        app_config = self.get_app_config(appId)
+        app_config = self.load_app_config(appId)
         wrapper_script = '/'.join([self.apps_dir, appId, app_config['templatePath']])
-        cmnd = 'cat ' + wrapper_script
+        cmnd = f"cat {wrapper_script}"
         try:
             output = self._execute_command(cmnd)
         except Exception as e:
-            msg = 'App wrapper sript for app ' + app + ' not found at ' + wrapper_script 
+            msg = "App main entry point {wrapper_script} not found for app {appId}"
             logger.error(msg)
             raise FileNotFoundError
         return output
 
 
-    def get_jobs(self, head=-1, prnt=False):
-        if head>0:
-            cmnd = 'ls -lat ' + self.jobs_dir + '| head -' + str(head)
-        else:
-            cmnd = 'ls -lat ' + self.jobs_dir
+    def load_app_config(self, appId):
+        # Get current apps already deployed
+        cur_apps = self.get_apps()
+        if appId not in cur_apps:
+            msg = f"Application {appId} does not exist."
+            logger.error(msg)
+            raise Exception(msg)
 
-        # Try to access jobs dir
-        try:
-            ret = self._execute_command(cmnd)
-        except Exception as e:
-            raise Exception('Unable to access Jobs Dir ' + self.jobs_dir)
+        # Load application config
+        app_config_path = '/'.join([self.apps_dir, appId, 'app.json'])
+        with self._client.open_sftp() as sftp:
+            with sftp.open(app_config_path, 'rb') as jc:
+                app_config = json.load(jc)
 
-        # Process otuput into list of jobs available
-        jobs = [re.split("\\s+", x)[-1] for x in re.split("\n", ret)[1:]]
-        for v in ['', '.', '..']:
-            try:
-                jobs.remove(v)
-            except ValueError:
-                pass
-        if prnt:
-            print(ret)
+        return app_config
+
+
+    def get_jobs(self):
+        jobs = self.list_files(path=self.jobs_dir)
+
         return jobs
 
 
@@ -280,9 +300,9 @@ class TACCJobManager():
             job_config['ts']['dump_ts'] = datetime.datetime.fromtimestamp(
                     time.time()).strftime('%Y%m%d_%H%M%S')
             dest = job_config['job_dir'] + '/job_config.json'
-            sftp = self._client.open_sftp()
-            with sftp.open(dest, 'w') as jc:
-                json.dump(job_config, jc)
+            with self._client.open_sftp() as sftp:
+                with sftp.open(dest, 'w') as jc:
+                    json.dump(job_config, jc)
         except Exception as e:
             msg = "Unable to write json job config file"
             logger.error(msg)
@@ -306,35 +326,22 @@ class TACCJobManager():
 
         return job_config
 
-    def load_app_config(self, appId):
-        # Get current apps already deployed
-        cur_apps = self.get_apps()
-        if appId not in cur_apps:
-            msg = f"Application {job_config['appId']} does not exist."
-            logger.error(msg)
-            raise Exception(msg)
 
-        # Load application config
-        app_config_path = '/'.join([self.apps_dir, appId, 'app.json'])
-        with self._client.open_sftp() as sftp:
-            with sftp.open(app_config_path, 'rb') as jc:
-                app_config = json.load(jc)
+    def setup_job(self, local_job_dir='.', job_config_file='job.json',
+            proj_config_file="project.ini"):
 
-        return app_config
-
-
-    def setup_job(self, local_job_dir='.', job_config_path=None):
         # Load project configuration file
-        proj_config = self.load_project_config(local_dir=local_job_dir)
+        proj_config_path = os.path.join(local_job_dir, proj_config_file)
+        proj_config = self.load_project_config(proj_config_path)
 
         # Load templated job configuration -> Default is job.json
-        if job_config_path is None:
-            job_config_path = os.path.join(local_job_dir, 'job.json')
-        job_config = self.load_templated_json_file(job_config_path,  proj_config._sections)
+        job_config_path = os.path.join(local_job_dir, job_config_file)
+        job_config = self.load_templated_json_file(job_config_path,  proj_config)
 
         # Get app config
         app_config = self.load_app_config(job_config['appId'])
 
+        # TACCJM stores ts of when it last did certain actions
         job_config['ts'] = {'setup_ts': None,
                             'submit_ts': None,
                             'start_ts': None,
@@ -366,9 +373,11 @@ class TACCJobManager():
         ret = self._execute_command(cmnd)
 
         # chmod setup script and run - Remove this since tapisv2 doesn't do?
-        self._execute_command('chmod +x {job_dir}/setup.sh'.format(job_dir=job_config['job_dir']))
-        cmnd = '{job_dir}/setup.sh {job_dir}'.format(job_dir=job_config['job_dir'])
-        ret = self._execute_command(cmnd)
+        if 'setup.sh' in self.list_files(job_config['job_dir']):
+            self._execute_command('chmod +x {job_dir}/setup.sh'.format(
+                job_dir=job_config['job_dir']))
+            cmnd = '{job_dir}/setup.sh {job_dir}'.format(job_dir=job_config['job_dir'])
+            ret = self._execute_command(cmnd)
 
         # Load submit script template
         submit_script = """#!/bin/bash
@@ -395,20 +404,34 @@ class TACCJobManager():
             logger.error(msg)
             Exception(msg)
 
+        # Helper function get attributes for job from app defaults if not present in job config
+        def _get_attr(j, a):
+            if j in job_config.keys():
+                return job_config[j]
+            else:
+                return app_config[a]
+        job_config['desc'] = _get_attr('desc','shortDescription')
+        job_config['queue'] = _get_attr('queue','defaultQueue')
+        job_config['nodeCount'] = _get_attr('nodeCount','defaultNodeCount')
+        job_config['processorsPerNode'] = _get_attr('processorsPerNode','defaultProcessorsPerNode')
+        job_config['maxRunTime'] = _get_attr('maxRunTime','defaultMaxRunTime')
+
         # Format submit scripts with appropriate inputs for job
         submit_script = submit_script.format(job_name=job_config['name'],
-                job_desc=job_config['desc'], ts=job_config['ts']['setup_ts'],
-                job_id=job_config['job_id'], queue=app_config['defaultQueue'],
-                N=job_config['nodeCount'], n=job_config['processorsPerNode'],
+                job_desc=job_config['desc'],
+                ts=job_config['ts']['setup_ts'],
+                job_id=job_config['job_id'],
+                queue=job_config['queue'],
+                N=job_config['nodeCount'],
+                n=job_config['processorsPerNode'],
                 rt=job_config['maxRunTime'])
 
         # submit script - add slurm directives for email and allocation if specified for job
-        if job_config['email']!=None:
+        if 'email' in job_config.keys():
             submit_script += "\n#SBATCH --mail-user={email} # Email to send to".format(
                     email=job_config['email'])
             submit_script += "\n#SBATCH --mail-type=all     # Email to send to"
-        # TODO: Check allocation exists? Check if we need allocation for job -> if more than one is present then we need the argument
-        if job_config['allocation']!=None:
+        if 'allocation' in job_config.keys():
             submit_script += "\n#SBATCH -A {allocation} # Allocation name ".format(
                     allocation=job_config['allocation'])
         submit_script += "\n#----------------------------------------------------\n"
@@ -426,11 +449,11 @@ class TACCJobManager():
 
         # NP, the number of mpi processes available to job, is always a variable passed
         wrapper_preamble += "\n        NP)           NP=${VALUE} ;;"
-        execute_line += " NP=" + str(job_config['slurm']['mpi_tasks'])
+        execute_line += " NP=" + str(job_config['processorsPerNode'])
 
         # Transfer inputs to job directory
         for arg in job_config['inputs'].keys():
-            path = job_config[arg]
+            path = job_config['inputs'][arg]
 
             dest_path = '/'.join([job_config['job_dir'], os.path.basename(path)])
             try:
@@ -448,7 +471,7 @@ class TACCJobManager():
 
         # Add on parameters passed to job
         for arg in job_config['parameters'].keys():
-            value = job_config[arg]
+            value = job_config['parameters'][arg]
 
             # pass name,value pair to application wrapper.sh
             execute_line += f" {arg}={value}"
@@ -489,7 +512,7 @@ class TACCJobManager():
             _cleanup()
             msg = "Unable to save job config after setup."
             logger.error(msg)
-            raise e 
+            raise e
 
         return job_config
 
@@ -563,32 +586,19 @@ class TACCJobManager():
         return job_config
 
 
-    def ls_job(self, job_config, path=''):
-        cmnd = 'ls -lat ' + job_config['job_dir'] + '/' + path
-        try:
-            ret = self._execute_command(cmnd)
-        except Exception as e:
-            msg = 'Unable to access job path at ' + path
-            logger.error(msg)
-            Exception(msg)
-
-        # Process otuput into list of jobs available
-        files = [re.split("\\s+", x)[-1] for x in re.split("\n", ret)[1:]]
-        for v in ['', '.', '..']:
-            try:
-                files.remove(v)
-            except ValueError:
-                pass
+    def ls_job(self, jobId, path=''):
+        # Get files from particular directory in job
+        fpath = job_config['job_dir'] + '/' + path
+        files = self.list_files(path=fpath)
 
         return files
 
 
-    def get_job_file(self, job_config, fpath, dest_dir=None):
+    def get_job_file(self, job_config, fpath, dest_dir='.'):
         # Downlaod to local job dir
         local_data_dir = os.path.basename(os.path.normpath(job_config['job_dir']))
         fname = os.path.basename(os.path.normpath(fpath))
-        if dest_dir!=None:
-            local_data_dir = os.path.join(dest_dir, local_data_dir)
+        local_data_dir = os.path.join(dest_dir, local_data_dir)
 
         # Make lotal data directory if it doesn't exist already
         try:
@@ -606,15 +616,12 @@ class TACCJobManager():
         return dest_path
 
 
-    def send_job_file(self, job_config, fpath, dest_dir=None):
-        # Get destination directory in job path to send file to
-        fname = os.path.basename(os.path.normpath(fpath))
-        if dest_dir!=None:
-            dest_path = '/'.join([job_config['job_dir'], dest_dir, fname])
-        else:
-            dest_path = '/'.join([job_config['job_dir'], fname])
-
+    def send_job_file(self, job_config, fpath, dest_dir='.'):
         try:
+            # Get destination directory in job path to send file to
+            fname = os.path.basename(os.path.normpath(fpath))
+            dest_path = '/'.join([job_config['job_dir'], dest_dir, fname])
+
             self.send_file(fpath, dest_path)
         except Exception as e:
             msg = f"Unable to send file {fpath} to destination destination {dest_path}"
@@ -623,38 +630,8 @@ class TACCJobManager():
         return dest_path
 
 
-    def peak_job_file(self, job_config, fpath, head=-1, tail=-1, prnt=False):
+    def peak_job_file(self, job_config, fpath, head=-1, tail=-1):
         path =  job_config['job_dir'] + '/' + fpath
-        if head>0:
-            cmnd = 'head -' + str(head) + ' ' + path
-        elif tail>0:
-            cmnd = 'tail -' + str(tail) + ' ' + path
-        else:
-            cmnd = 'head ' + path
 
-        try:
-            ret = self._execute_command(cmnd)
-        except Exception as e:
-            msg = 'Unable to peak at file at ' + fpath
-            logger.error(msg)
-            raise Exception(msg)
-
-        if prnt:
-            print(ret)
-        return ret
-
-    def query_job(self, job_config, args={}):
-        query_cmnd =  job_config['job_dir'] + '/query.sh'
-        for key, val in args.items():
-            query_cmnd += f" --{key}={val}"
-
-        # Run query script
-        try:
-            ret = self._execute_command(query_cmnd)
-        except Exception as e:
-            msg = f"Error in running query script {query_cmnd} - {e}"
-            logger.error(msg)
-            raise Exception(msg)
-
-        return ret
+        return self.peak_file(path, head=head, tail=tail)
 
