@@ -416,6 +416,8 @@ class TACCJobManager():
         job_config['processorsPerNode'] = _get_attr('processorsPerNode','defaultProcessorsPerNode')
         job_config['maxRunTime'] = _get_attr('maxRunTime','defaultMaxRunTime')
 
+        # The total number of MPI processes is the product of these two quantities
+        total_mpi_processes = job_config['nodeCount'] * job_config['processorsPerNode']
         # Format submit scripts with appropriate inputs for job
         submit_script = submit_script.format(job_name=job_config['name'],
                 job_desc=job_config['desc'],
@@ -423,7 +425,7 @@ class TACCJobManager():
                 job_id=job_config['job_id'],
                 queue=job_config['queue'],
                 N=job_config['nodeCount'],
-                n=job_config['processorsPerNode'],
+                n=total_mpi_processes,
                 rt=job_config['maxRunTime'])
 
         # submit script - add slurm directives for email and allocation if specified for job
@@ -449,7 +451,7 @@ class TACCJobManager():
 
         # NP, the number of mpi processes available to job, is always a variable passed
         wrapper_preamble += "\n        NP)           NP=${VALUE} ;;"
-        execute_line += " NP=" + str(job_config['processorsPerNode'])
+        execute_line += " NP=" + str(total_mpi_processes)
 
         # Transfer inputs to job directory
         for arg in job_config['inputs'].keys():
