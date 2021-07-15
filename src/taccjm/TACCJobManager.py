@@ -526,6 +526,8 @@ class TACCJobManager():
                 msg = 'Failed to run submit job - ' + job_config['job_id']
                 logger.error(msg)
                 Exception(msg)
+            if 'slurm' not in job_config:
+                job_config['slurm'] = {}
             job_config['slurm']['slurm_id'] = ret.split('\n')[-2].split(' ')[-1]
             if job_config['slurm']['slurm_id'] == 'FAILED' or job_config['slurm']['slurm_id'] == '':
                 job_config['slurm']['sbatch_ret'] = ret
