@@ -165,10 +165,9 @@ class TACCJobManager():
 #SBATCH -t {rt}                                   # Run time (hh:mm:ss)"""
 
 
-    def __init__(self, system, user=None, psw=None, mfa=None, apps_dir='taccjm-apps', 
-            jobs_dir='taccjm-jobs', trash_dir='taccjm-trash', scripts_dir='taccjm-scripts'):
-        Create a new TACC Job Manager for jobs executed on TACC desired system
-        
+    def __init__(self, system, user=None, psw=None, mfa=None, apps_dir='taccjm-apps',
+            jobs_dir='taccjm-jobs'):
+        """
         Parameters
         ----------
         system : str
@@ -186,10 +185,6 @@ class TACCJobManager():
         jobs_dir : str , optional
             Directory relative to TACCJM_DIR directory to place jobs managed by this taccjm instance
             (default is taccjm-jobs)
-        scripts_dir : str, optional
-            The subdirectory where scripts will be stored. Scripts are meant for quick operations 
-            that can't be done as a job, such as copying results off of the execution system, or 
-            custom checks of job progress (default is taccjm-scripts).
         """
 
         if system not in self.TACC_SYSTEMS:
@@ -214,9 +209,9 @@ class TACCJobManager():
         self.jobs_dir = '/'.join([taccjm_path, jobs_dir])
         self.apps_dir = '/'.join([taccjm_path, apps_dir])
 
-        logger.info("Creating if apps/jobs dirs if they don't already exist")
-        for d in [self.jobs_dir, self.apps_dir, self.scripts_dir, self.trash_dir]:
-            self._execute_command(f"mkdir -p {d}")
+        logger.info("Creating apps/jobs dirs if they don't already exist")
+        self._execute_command(f"mkdir -p {self.jobs_dir}")
+        self._execute_command(f"mkdir -p {self.apps_dir}")
 
 
     def _load_project_config(self, ini_file):
@@ -885,70 +880,38 @@ class TACCJobManager():
             logger.error(msg)
             raise e
 
-
-    def load_job_config(self, job_name):
-        """Load job config by job name
-        """
-        jobs = self.get_jobs()
-        if job_name not in jobs:
-            raise Exeception('Job not found.')
-        job_config = '/'.join([self.jobs_dir, job_name, 'job_config.json'])
-        sftp = self._client.open_sftp()
-        try:
-            with sftp.open(job_config, 'rb') as jc:
-                job_config = json.load(jc)
-        except FileNotFoundError:
-            msg = 'Job config for job ' + job_name + ' not found at ' + job_config
-            logger.error(msg)
-            raise FileNotFoundError
-        sftp.close()
-        
         return job_config
 
-    def load_local_job_config(self, local_job_dir='.', job_config_file='job.json',
-            proj_config_file="project.ini", **kwargs):
-        """Load job from local configuration files
 
-        Args:
-            local_job_dir (str) - local directory with job files to copy.
-                Defaults to the current working directory.
-            job_config_file (str) - JSON file with job configuration.
-            proj_config_file (str) - file wtih project configuration.
-            **kwargs - all extra keyword arguments will be interpreted as job config overrides.
+    def stage_job(self, job_id, **job_configs):
+        # New job config
+        job_config = {}
 
-        Returns:
-            job_config (dict) - a dictionary containing the job configuration.
-        """
+        # Check if job has been initialized yet
+        if job_id not in self.get_jobs():
+            # Passed in key word arguments are the base inputs
+            job_config = job_configs
 
-        # Load project configuration file
-        proj_config_path = os.path.join(local_job_dir, proj_config_file)
-        proj_config = self.load_project_config(proj_config_path)
+            # Create job directory in job manager's jobs folder
+            job_config['job_dir'] = f"{self.jobs_dir}/{job_id}"
+            ret = self._execute_command('mkdir ' + job_config['job_dir'])
 
-        # Load templated job configuration -> Default is job.json
-        job_config_path = os.path.join(local_job_dir, job_config_file)
-        job_config = self.load_templated_json_file(job_config_path,  proj_config)
-
-        # Treat kwargs as override parameters
-        for key, value in kwargs.items():
-            old_val = job_config.get(key)
-            # Often we might want to update just one parameter in a sub-dictionary
-            # Hence the need for this check
-            if type(old_val) is dict:
-                job_config[key].update(value)
-            else:
-                job_config[key] = value
-        
-        return job_config
-
-    def _make_submit_header(self, job_config):
-        """Create the header of an sbatch job submission script from the job config
-        """
+            # Copy app contents to job directory
+            cmnd = 'cp -r {apps_dir}/{app}/* {job_dir}/'.format(apps_dir=self.apps_dir,
+                    app=job_config['appId'], job_dir=job_config['job_dir'])
+            ret = self._execute_command(cmnd)
+        else:
+            # Pull current job config and update values with values in new dictionary
+            new_job_config = self.get_job(job_id)
+            new_job_config.update(job_configs)
+            job_config = new_job_config
 
         # Set (or overwrite) job id
         job_config['job_id'] = job_id
 
-        # Get app config
-        app_config = self.load_app_config(job_config['appId'])
+        # Get app config for job and wrapper script
+        app_config = self.get_app(job_config['appId'])
+        wrapper_script = app_config['wrapper_script']
 
         # Helper function get attributes for job from app defaults if not present in job config
         def _get_attr(j, a):
@@ -964,15 +927,13 @@ class TACCJobManager():
         job_config['processorsPerNode'] = _get_attr('processorsPerNode','defaultProcessorsPerNode')
         job_config['maxRunTime'] = _get_attr('maxRunTime','defaultMaxRunTime')
 
-        # The total number of MPI processes is the product of these two quantities
-        total_mpi_processes = job_config['nodeCount'] * job_config['processorsPerNode']
         # Format submit scripts with appropriate inputs for job
         submit_script = self.SUBMIT_SCRIPT_TEMPLATE.format(job_name=job_config['name'],
                 job_desc=job_config['desc'],
                 job_id=job_config['job_id'],
                 queue=job_config['queue'],
                 N=job_config['nodeCount'],
-                n=total_mpi_processes,
+                n=job_config['processorsPerNode'],
                 rt=job_config['maxRunTime'])
 
         # submit script - add slurm directives for email and allocation if specified for job
@@ -987,147 +948,75 @@ class TACCJobManager():
 
         # End slurm directives and cd into job dir
         submit_script += "\n#----------------------------------------------------\n"
+        submit_script += f"\ncd {job_config['job_dir']}\n"
 
-        return submit_script
+        # submit script - parse line to invoke wrapper.sh script that starts off application.
+        execute_line = f"\n{job_config['job_dir']}/{job_config['entry_script']}.sh "
 
-    def _setup_submit_script(self, job_config):
-        job_dir = job_config['job_dir']
-        # always pass total number of MPI processes
-        job_args = {"NP": job_config['nodeCount'] * job_config['processorsPerNode']}
+        # Add preamble to parse arguments to wrapper script
+        wrapper_preamble = "# Create start ts file\ntouch start_$(date +\"%FT%H%M%S\")\n"
+        wrapper_preamble += "\n# Parse arguments passed\nfor ARGUMENT in \"$@\"\ndo\n"
+        wrapper_preamble += "\n    KEY=$(echo $ARGUMENT | cut -f1 -d=)"
+        wrapper_preamble += "\n    VALUE=$(echo $ARGUMENT | cut -f2 -d=)\n"
+        wrapper_preamble += "\n    case \"$KEY\" in"
+
+        # NP, the number of mpi processes available to job, is always a variable passed
+        wrapper_preamble += "\n        NP)           NP=${VALUE} ;;"
+        execute_line += " NP=" + str(job_config['processorsPerNode'])
 
         # Transfer inputs to job directory
-        for arg, path in job_config['inputs'].items():
-            dest_path = '/'.join([job_dir, os.path.basename(path)])
+        for arg in job_config['inputs'].keys():
+            path = job_config['inputs'][arg]
+
+            dest_path = '/'.join([job_config['job_dir'], os.path.basename(path)])
             try:
                 self.send_data(path, dest_path)
             except Exception as e:
-                self._cleanup_job_low(job_config)
-                msg = f"Unable to send input file for arg {arg['name']} to dest {dest_path}"
-
+                msg = f"Unable to send input file {path} to dest {dest_path}"
                 logger.error(msg)
                 raise e
 
-            # Add input as argument to application
-            job_args[arg] = dest_path
+            # Pass in path to input file as argument to application
+            # pass name,value pair to application wrapper.sh
+            execute_line += f" {arg}={dest_path}"
+            wrapper_preamble += "\n        {arg})           {arg}=${{VALUE}} ;;".format(arg=arg)
 
         # Add on parameters passed to job
-        job_args.update(job_config['parameters'])
-        export_list = [""]
-        for arg, value in job_args.items():
-            value = str(value)
-            # wrap with single quotes if needed
-            if " " in value and not (value[0] == value[-1] == "'"):
-                value = f"'{value}'"
-            export_list.append(f"export {arg}={value}")
+        for arg in job_config['parameters'].keys():
+            value = job_config['parameters'][arg]
 
-        # make submit script
-        submit_script = (
-            self._make_submit_header(job_config) # set SBATCH params
-            + f"\ncd {job_dir}\n\n" # cd to job directory
-            + "\n".join(export_list) # set job params
-            + f"\n{job_dir}/wrapper.sh " # run main script
-        )
+            # pass name,value pair to application wrapper.sh
+            execute_line += f" {arg}={value}"
+            wrapper_preamble += f"\n        {arg})           {arg}=${{VALUE}} ;;"
 
-        wrapper_script = self._get_wrapper_script(job_config)
-        # Write modified submit and wrapper scripts to job directory
-        with self._client.open_sftp() as sftp:
-            submit_dest = job_dir + '/submit_script.sh'
-            wrapper_dest = '/'.join([job_dir, '/wrapper.sh'])
+        # Close off wrapper preamble
+        wrapper_preamble += "\n        *)\n    esac\n\ndone\n\n"
 
-            with sftp.open(submit_dest,  'w') as ss_file:
-                ss_file.write(submit_script)
-            with sftp.open(wrapper_dest, 'w') as ws_file:
-                ws_file.write(wrapper_script)
-
-        # chmod submit_scipt and wrapper script to make them executables
-        try:
-            self._execute_command('chmod +x ' + submit_dest)
-            self._execute_command('chmod +x ' + wrapper_dest)
-        except Exception as e:
-            self._cleanup_job_low(job_config)
-            msg = "Unable to chmod wrapper or submit scripts in job dir."
-            logger.error(msg)
-            raise e
-
-    def setup_job(self, job_config=None, **kwargs):
-        """Setup job directory on supercomputing resources.
-
-        Args:
-            job_config (dict): The job configuration. Defaults to None. If None, local job config files
-                must be specified in kwargs.
-
-        Returns:
-            job_config (dict): The modified job configuration corresponding to the setup job.
-        """
-
-        job_config = self.load_local_job_config(**kwargs)
-
-        # TACCJM stores ts of when it last did certain actions
-        job_config['ts'] = {'setup_ts': None,
-                            'submit_ts': None,
-                            'start_ts': None,
-                            'end_ts': None}
-
-        # Set timestamp when job was setup
-        job_config['ts']['setup_ts'] = datetime.datetime.fromtimestamp(
-                time.time()).strftime('%Y%m%d_%H%M%S')
-
-        # Create job directory in job manager's jobs folder
-        job_config['job_id'] = '{job_name}_{ts}'.format(job_name=job_config['name'],
-                ts=job_config['ts']['setup_ts'])
-        job_dir = job_config['job_dir'] = '{job_dir}/{job_id}'.format(job_dir=self.jobs_dir,
-                job_id=job_config['job_id'])
-
-        try:
-            ret = self._execute_command('mkdir ' + job_dir)
-        except Exception as e:
-            msg = "Unable to setup job dir for " + job_config['job_id']
-            logger.error(msg)
-            raise e            
-
-        # Copy app contents to job directory
-        cmnd = 'cp -r {apps_dir}/{app}/* {job_dir}/'.format(apps_dir=self.apps_dir,
-                app=job_config['appId'], job_dir=job_dir)
-        ret = self._execute_command(cmnd)
-
-        # chmod setup script and run - Remove this since tapisv2 doesn't do?
-        if 'setup.sh' in self.list_files(job_dir):
-            self._execute_command(f'chmod +x {job_dir}/setup.sh')
-            cmnd = f'{job_dir}/setup.sh {job_dir}'
-            ret = self._execute_command(cmnd)
-
-        self._setup_submit_script(job_config)
-
-        # Save current job config
-        try:
-            self.save_job(job_config)
-        except Exception as e:
-            self._cleanup_job_low(job_config)
-            msg = "Unable to save job config after setup."
-            logger.error(msg)
-            raise e
-
-        return job_config
-
-    def _get_wrapper_script(self, job_config):
-        """Get the wrapper script as a string
-        """
-        # Line to create start ts
-        wrapper_pre = "\n# Create start ts file\ntouch start_$(date +\"%FT%H%M%S\")\n"
+        # submit script - add execution line to wrapper.sh
+        submit_script += execute_line + '\n'
 
         # Line to create end ts
         wrapper_post = "\n# Create end ts file\ntouch end_$(date +\"%FT%H%M%S\")\n"
-        try:
-            wrapper_script = self.get_app_wrapper_script(job_config['appId'])
-            return wrapper_pre + wrapper_script + wrapper_post
-        except Exception as e:
-            self._cleanup_job_low(job_config)
-            msg = "Couldn't get wrapper script to setup job dir for " + job_config['job_id']
-            logger.error(msg)
-            raise e
 
-    def _cleanup_job_low(self, job_config):
-        return self._execute_command('rm -rf ' + job_config['job_dir'])
+        # Stage wrapper and submit scripts to job directory
+        with self._client.open_sftp() as sftp:
+            submit_dest = '/'.join([job_config['job_dir'], 'submit_script.sh'])
+            wrapper_dest = '/'.join([job_config['job_dir'], job_config['entry_script']])
+            with sftp.open(submit_dest,  'w') as ss_file:
+                ss_file.write(submit_script)
+            with sftp.open(wrapper_dest, 'w') as ws_file:
+                ws_file.write(wrapper_preamble + wrapper_script + wrapper_post)
+
+        # chmod submit_scipt and wrapper script to make them executables
+        self._execute_command('chmod +x ' + submit_dest)
+        self._execute_command('chmod +x ' + wrapper_dest)
+
+        # Save job config
+        jc_path = job_config['job_dir'] + '/job_config.json'
+        self.send_json(job_config, jc_path)
+
+        return job_config
+
 
     def setup_job(self, local_job_dir='.', job_config_file='job.json',
             proj_config_file="project.ini", stage=True):
@@ -1152,22 +1041,8 @@ class TACCJobManager():
                 job_dir = '/'.join([self.jobs_dir, job_id])
                 msg = f"Error staging job {job_id}. Cleaning up job directory {job_dir}."
                 logger.error(msg)
-                Exception(msg)
-            if 'slurm' not in job_config:
-                job_config['slurm'] = {}
-            job_config['slurm']['slurm_id'] = ret.split('\n')[-2].split(' ')[-1]
-            if job_config['slurm']['slurm_id'] == 'FAILED' or job_config['slurm']['slurm_id'] == '':
-                job_config['slurm']['sbatch_ret'] = ret
-                raise Exception('Failed to submit SLURM Job!')
-            _  = job_config['slurm'].pop('sbatch_ret', None)
-            job_config['ts']['submit_ts'] = datetime.datetime.fromtimestamp(
-                    time.time()).strftime('%Y%m%d_%H%M%S')
-            self.save_job(job_config)
-        else:
-            msg = 'Job has not been initialized or has already been submitted.'
-            logger.error(msg)
-            raise Exception(msg)
-
+                _ = self._execute_command(f"rm -rf {job_dir}")
+                raise e
 
         return job_config
 
@@ -1195,21 +1070,26 @@ class TACCJobManager():
         return job_config
 
 
-    def cleanup_job(self, job_config, check=True):
-        if job_config['ts']['setup_ts']!=None:
-            if check and job_config['ts']['submit_ts']!=None:
-                choice = input("Are you sure yo want to cancel the job? [yes/no]").lower()
-                if choice != 'yes':
-                    return
-                self.cancel_job(job_config)
-            if check:
-                choice = input("Are you sure yo want to delete job directory? [yes/no]").lower()
-                if choice != 'yes':
-                    return
+    def cancel_job(self, job_id):
+        # Load job config
+        job_config =  self.get_job(job_id)
 
-            # Remove job directory
-            self._cleanup_job_low(job_config)
-            job_config['job_dir'] = None
+        if 'slurm_id' in job_config.keys():
+            cmnd = f"scancel {job_config['slurm_id']}"
+
+            try:
+                self._execute_command(cmnd)
+            except Exception as e:
+                msg = f"Failed to cancel job {job_id}."
+                logger.error(msg)
+                raise e
+
+            # Remove slurm ID
+            _ = job_config.pop('slurm_id')
+
+            # Save job config
+            jc_path = job_config['job_dir'] + '/job_config.json'
+            self.send_json(job_config, jc_path)
         else:
             msg = f"Job {job_id} has not been submitted yet."
             logger.error(msg)
@@ -1293,60 +1173,3 @@ class TACCJobManager():
 
         return self.peak_file(path, head=head, tail=tail)
 
-    def deploy_script(self, script_name, local_file=None):
-        """Deploy a script to TACC
-
-        Args:
-            script_name (str) - The name of the script.
-                Will be used as the local filename unless local_file is passed.
-                If the filename ends in .py, it will be assumed to be a Python3 script.
-                Otherwise, it will be treated as a generic executable.
-            local_file (str) - The local filename of the script if not passed, will be inferred from script_name.
-        """
-
-        local_fname = local_file if local_file is not None else script_name
-        if not os.path.exists(local_fname):
-            raise ValueError(f"Could not find script file - {local_fname}!")
-
-        # Extract basename in case the script_name is a path
-        script_name = script_name.split("/")[-1]
-        if "." in script_name:
-            # Get the extension, and be robust to mulitple periods in the filename just in case.
-            parts = script_name.split(".")
-            script_name, ext = ".".join(parts[:-1]), parts[-1]
-
-        remote_path = self.scripts_dir+"/"+script_name
-        if ext == "py":
-            # assume Python3
-            python_path = self._execute_command("module load python3 > /dev/null; which python3")
-            print("Python Path:", python_path)
-            with open(local_fname, 'r') as fp:
-                script = fp.read()
-
-            with self._client.open_sftp() as sftp:
-                with sftp.open(remote_path, "w") as fp:
-                    fp.write("#!" + python_path + "\n" + script)
-        else:
-            self.send_file(local_fname, remote_path)
-         
-        self._execute_command(f"chmod +x {remote_path}")
-
-    def run_script(self, script_name, job_config=None, args=None):
-        """Run a pre-deployed script on TACC.
-
-        Args:
-            script_name (str) - The name of the script, without file extensions.
-            job_config (dict) - Config for a job to run the script on.
-                If passed, the job directory will be passed as the first argument to script.
-            args (list) - Extra commandline arguments to pass to the script.
-        Returns:
-            out (str) - The standard output of the script.
-        """
-
-        if args is None: args = []
-        if job_config is not None: args.insert(0, job_config['job_dir'])
-
-        return self._execute_command(f"{self.scripts_dir}/{script_name} {' '.join(args)}")
-
-    def list_scripts(self):
-        return self.list_files(self.scripts_dir)
