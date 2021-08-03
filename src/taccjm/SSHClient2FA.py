@@ -96,19 +96,10 @@ class SSHClient2FA(paramiko.SSHClient):
         global user, pw, mfa, user_p, pw_p, mfa_p
 
         #Get the username, password, and MFA token code from the user
-        if uid is None:
-            user = input(_user_p)
-        else:
-            user = uid
-        if pswd is None:
-            pw = getpass.getpass(pw_p) #
-        else:
-            pw = pswd
+        user = uid if uid is not None else input(user_p)
+        pw = pswd if pswd is not None else getpass.getpass(pw_p)
         if mfa_p is not None:
-            if mfa_pswd is None:
-                mfa = input(mfa_p)
-            else:
-                mfa = mfa_pswd
+            mfa = mfa_pswd if mfa_pswd is not None else input(mfa_p)
 
         #Create a socket and connect it to port 22 on the host
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -121,4 +112,6 @@ class SSHClient2FA(paramiko.SSHClient):
 
         #Begin authentication; note that the username and callback are passed
         t.auth_interactive(user, inter_handler)
+
+        return user
 
