@@ -9,8 +9,11 @@ References:
 
 """
 
+# TODO: Investigate how to handle closing of paramiko ssh client adequately
 
-import os                       # OS system utility functions
+
+import os                       # OS system utility functions -> for local system 
+import posixpath                # Path manipulation on remote system (assumed UNIX)
 import errno                    # For error messages
 import tarfile                  # For sending compressed directories
 import fnmatch                  # For unix-style filename pattern matching
@@ -23,58 +26,12 @@ import datetime                 # Date time functionality
 import configparser             # For reading configs
 from jinja2 import Template     # For templating input json files
 
-from taccjm.SSHClient2FA import SSHClient2FA  # Modified paramiko client
+# Modified paramiko ssh client and common paramiko exceptions
+from taccjm.SSHClient2FA import SSHClient2FA
 from paramiko import SSHException, AuthenticationException, BadHostKeyException
 
 
 logger = logging.getLogger(__name__)
-
-
-class TJMCommandError(Exception):
-    """
-    Custom exception to wrap around any failed commands executed on a TACC resource.
-    This exception gets thrown first by the _execute_command method of the
-    TACCJobManager class, upon any command executed that returns a non-zero return code.
-    The idea is to handle this exception gracefully and throw a more specific error
-    in other methods, or pass exception along up the stack with a better message/context
-    as to where it was thrown to diagnosis the core issue.
-
-    Attributes
-    ----------
-    system : str
-        TACC System on which command was executed.
-    user : str
-        User that is executing command.
-    command : str
-        Command that threw the error.
-    rc : str
-        Return code.
-    stdout : str
-        Output from stdout.
-    stderr : str
-        Output from stderr.
-    message : str
-        Explanation of the error.
-    """
-
-    def __init__(self, system, user, command, rc, stderr, stdout,
-            message="Non-zero return code."):
-        self.system = system
-        self.user = user
-        self.command = command
-        self.rc = rc
-        self.stderr = stderr.strip('\n')
-        self.stdout = stdout.strip('\n')
-        self.message = message
-        super().__init__(self.message)
-
-    def __str__(self):
-        msg =  f"\n{self.message}"
-        msg += f"\n{self.user}@{self.system}$ {self.command}"
-        msg += f"\nrc     : {self.rc}"
-        msg += f"\nstdout : {self.stdout}"
-        msg += f"\nstderr : {self.stderr}"
-        return msg
 
 
 class TJMCommandError(Exception):
@@ -115,6 +72,7 @@ class TJMCommandError(Exception):
         self.message = message
         super().__init__(self.message)
 
+
     def __str__(self):
         msg =  f"\n{self.message}"
         msg += f"\n{self.user}@{self.system}$ {self.command}"
@@ -126,7 +84,8 @@ class TJMCommandError(Exception):
 
 class TACCJobManager():
     """
-    Class defining an ssh connection to a TACC resource.
+    Class defining an ssh connection to a TACC resource. Note path's to resources are all
+    unix-stype paths and are relative to the job manager's base directory.
 
     Attributes
     ----------
@@ -136,9 +95,11 @@ class TACCJobManager():
     user : str
         Name of tacc user connecting via ssh to resource.
     jobs_dir : str
-        Directory where jobs for this job manager instance can be found.
+        Unix-stlye path to directory where jobs for job manager can be found.
     apps_dir : str
-        Directory where applications for this job manager instance can be found.
+        Unix-style path to directory where applications for job manager can be found.
+    scripts_dir : str
+        Unix-stye path to directory where scripts for job manager can be found.
 
     Methods
     -------
@@ -149,7 +110,7 @@ class TACCJobManager():
     TACC_USER_PROMPT = "Username:"
     TACC_PSW_PROMPT = "Password:"
     TACC_MFA_PROMPT ="TACC Token Code:"
-    TACCJM_DIR = "$SCRATCH"
+    SCRATCH_DIR = "$SCRATCH"
     SUBMIT_SCRIPT_TEMPLATE = """#!/bin/bash
 #----------------------------------------------------
 # {job_name}
@@ -165,10 +126,10 @@ class TACCJobManager():
 #SBATCH -t {rt}                                   # Run time (hh:mm:ss)"""
 
 
-    def __init__(self, system, user=None, psw=None, mfa=None, apps_dir='taccjm-apps', 
-            jobs_dir='taccjm-jobs', trash_dir='taccjm-trash', scripts_dir='taccjm-scripts'):
-        Create a new TACC Job Manager for jobs executed on TACC desired system
-        
+    def __init__(self, system, user=None, psw=None, mfa=None, working_dir='taccjm'):
+        """
+        Create a new TACC Job Manager instance for apps/jobs on given TACC system.
+
         Parameters
         ----------
         system : str
@@ -180,27 +141,25 @@ class TACCJobManager():
             Password for user connecting. If non provided input prompt will appear
         mfa : str , optional
             2-Factor Authenticaion token for user.. If non provided input prompt will appear
-        apps_dir : str , optional
-            Directory relative to TACCJM_DIR directory to place apps managed by this taccjm instance
-            (default is taccjm-apps)
-        jobs_dir : str , optional
-            Directory relative to TACCJM_DIR directory to place jobs managed by this taccjm instance
-            (default is taccjm-jobs)
-        scripts_dir : str, optional
-            The subdirectory where scripts will be stored. Scripts are meant for quick operations 
-            that can't be done as a job, such as copying results off of the execution system, or 
-            custom checks of job progress (default is taccjm-scripts).
+        working_dir: str , default='taccjm'
+            Unix-style path relative to user's SCRATCH directory to place all data related to this
+            job manager instance. This includes the apps, jobs, scripts, and trash directories.
         """
 
         if system not in self.TACC_SYSTEMS:
             msg = f"Unrecognized TACC system {system}. Must be one of {self.TACC_SYSTEMS}."
             logger.error(msg)
             raise ValueError(msg)
+        if any([working_dir.startswith('../'),
+                working_dir.endswith('/..'),
+                '/../' in working_dir ]):
+            msg = f"Inavlid working directory {working_dir}. Contains '..' which isn't allowed."
+            logger.error(msg)
+            raise ValueError(msg)
 
-        self.system= f"{system}.tacc.utexas.edu"
-
-        # Connect to server
+        # Connect to system
         logger.info(f"Connecting {user} to TACC system {system}...")
+        self.system= f"{system}.tacc.utexas.edu"
         self._client = SSHClient2FA(user_prompt=self.TACC_USER_PROMPT,
                 psw_prompt=self.TACC_PSW_PROMPT,
                 mfa_prompt=self.TACC_MFA_PROMPT)
@@ -208,78 +167,17 @@ class TACCJobManager():
         self.user = self._client.connect(self.system, uid=user, pswd=psw, mfa_pswd=mfa)
         logger.info(f"Succesfuly connected to {system}")
 
-        # Set and Create jobs and apps dirs if necessary
-        # TODO: Catch and handle TJMCommandErrors for common things
-        taccjm_path = self._execute_command(f"echo {self.TACCJM_DIR}").strip()
-        self.jobs_dir = '/'.join([taccjm_path, jobs_dir])
-        self.apps_dir = '/'.join([taccjm_path, apps_dir])
+        # Get taccjm working directory, relative to users scratch directory
+        logger.info("Resolving SCRATCH directory path ${self.SCRATCH_DIR} for user {self.user}")
+        scratch_dir = self._execute_command(f"echo {self.SCRATCH_DIR}").strip()
+        taccjm_dir = posixpath.join(scratch_dir, working_dir)
 
-        logger.info("Creating if apps/jobs dirs if they don't already exist")
-        for d in [self.jobs_dir, self.apps_dir, self.scripts_dir, self.trash_dir]:
-            self._execute_command(f"mkdir -p {d}")
-
-
-    def _load_project_config(self, ini_file):
-        """
-        Loads a local .ini file at a specified path.
-
-        Parameters
-        ----------
-        ini_file : str
-            Local path to .ini file.
-
-        Returns
-        -------
-        config : dict
-            json config from file templated appropriately.
-
-        Raises
-        ------
-        FileNotFoundError
-            if json file does not exist
-        """
-        # Check if it exists - If it doesn't config parser won't error
-        if not os.path.exists(project_config_file):
-            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), project_config_file)
-
-        # Read project config file
-        config_parse = configparser.ConfigParser()
-        config_parse.read(project_config_file)
-        config = config_parse._sections
-
-        # Return as dictionary
-        return config
-
-
-    def _load_templated_json_file(self, path, config):
-        """
-        Loads a local json config function at path and templates it
-        using jinja with the values found in config. For example, if
-        json file contains `{{ a.b }}`, and `config={'a':{'b':1}}`,
-        then `1` would be substituted in (note nesting).
-
-        Parameters
-        ----------
-        path : str
-            Local path to json file.
-        config : dict
-            Dictionary with values to substitute in for jinja templates
-            in json file.
-
-        Returns
-        -------
-        config : dict
-            json config from file templated appropriately.
-
-        Raises
-        ------
-        FileNotFoundError
-            if json file does not exist
-
-        """
-        with open(path) as file_:
-            config = json.loads(Template(file_.read()).render(config))
-            return config
+        # Initialze jobs, apps, scripts, and trash dirs
+        logger.info("Creating if jobs, apps, sripts, and trash dirs if they don't already exist")
+        for d in zip(['jobs_dir', 'apps_dir', 'scripts_dir', 'trash_dir'],
+                      ['jobs', 'apps', 'scripts', 'trash']):
+            setattr(self, d[0], posixpath.join(taccjm_dir,d[1]))
+            self._mkdir(getattr(self, d[0]), parents=True)
 
 
     def _execute_command(self, cmnd):
@@ -303,9 +201,9 @@ class TACCJobManager():
         """
         try:
             stdin, stdout, stderr = self._client.exec_command(cmnd)
-        except SSHException as ssh_eror:
+        except SSHException as ssh_error:
             # Will only occur if ssh connection is broken
-            mgs = "Unalbe to excecute command. TACCJM ssh connection error: {ssh_err.__str__()}"
+            msg = "Unalbe to excecute command. TACCJM ssh connection error: {ssh_error.__str__()}"
             logger.error(msg)
             raise ssh_error
 
@@ -318,11 +216,65 @@ class TACCJobManager():
             t = TJMCommandError(self.system, self.user, cmnd, rc, out, err)
 
             # Only log the actual TJMCommandError object once, here
-            logger.error(t.__str__)
+            logger.error(t.__str__())
 
             raise t
 
         return out
+
+
+    def _mkdir(self, path, parents=False):
+        """
+        Creates directory on remote system.
+
+        Parameters
+        ----------
+        path: str
+            Unix-stype path on remote system to create.
+
+        Returns
+        -------
+        err_code : int
+            An SFTP error code int like SFTP_OK (0).
+
+        """
+        cmnd = f"mkdir {path}" if not parents else f"mkdir -p {path}"
+
+        try:
+            ret = self._execute_command(cmnd)
+        except TJMCommandError as tjm_error:
+            tjm_error.message = "_mkdir - Could not create directory"
+            logger.error(tjm_error.message)
+            raise tjm_error
+
+
+    def _update_dic_keys(self, d, **kwargs):
+        """
+        Utility to update a dictionary, with only updating singular parameters in sub-dictionaries.
+        Used when updating and configuring/templating job configs.
+
+        Parameters
+        ----------
+        d : dict
+            Dictioanry to update
+        **kwargs : dict, optional
+            All extra keyword arguments will be interpreted as items to override in d.
+
+        Returns
+        -------
+        err_code : int
+            An SFTP error code int like SFTP_OK (0).
+
+        """
+        # Treat kwargs as override parameters
+        for key, value in kwargs.items():
+            old_val = d.get(key)
+            if type(old_val) is dict:
+                d[key].update(value)
+            else:
+                d[key] = value
+
+        return d
 
 
     def showq(self, user=None, prnt=False):
@@ -357,7 +309,7 @@ class TACCJobManager():
             ret = self._execute_command(cmnd)
         except TJMCommandError as tjm_error:
             tjm_error.message = "showq - TACC SLURM queue is not accessible."
-            logger.error(tjm_error.message))
+            logger.error(tjm_error.message)
             raise tjm_error
 
         # Parse squeue output - look for indices of header lines in table
@@ -366,6 +318,7 @@ class TACCJobManager():
             or 'COMPLETING' in x for x in lines]) if x]
 
         # Get active, waiting, and completed/errored job sections of table
+        jobs = []
         jobs.append([x.split() for x in lines[idxs[0]+3:idxs[1]-1]])
         jobs.append([x.split for x in lines[idxs[1]+3:idxs[2]-1]])
         if len(idxs)>2:
@@ -518,7 +471,7 @@ class TACCJobManager():
         return ret
 
 
-    def send_data(self, local, remote, file_filter='*'):
+    def upload(self, local, remote, file_filter='*'):
         """
         Sends file or folder from local path to remote path. If a file is
         specified, the remote path is the destination path of the file to be sent
@@ -618,7 +571,7 @@ class TACCJobManager():
             raise e
 
 
-    def get_data(self, remote, local, file_filter='*'):
+    def download(self, remote, local, file_filter='*'):
         """
         Downloads file or folder from remote path on TACC resoirce to local path. If a
         file is specified, the local path is the destination path of the file to be
@@ -680,11 +633,11 @@ class TACCJobManager():
                 is_dir = False
                 pass
             elif 'Permission denied' in t.stderr:
-                msg = f"get_data - Permission denied on {remote}"
+                msg = f"download - Permission denied on {remote}"
                 logger.error(msg)
                 raise PermissionError(errno.EACCES, msg, remote)
             else:
-                t.message = f"get_data - Error compressing data to download."
+                t.message = f"download - Error compressing data to download."
                 logger.error(t.message)
                 raise t
 
@@ -693,15 +646,15 @@ class TACCJobManager():
             with self._client.open_sftp() as sftp:
                 sftp.get(local, remote)
         except FileNotFoundError as f:
-            msg = f"get_data - No such file or folder {f.filename}."
+            msg = f"download - No such file or folder {f.filename}."
             logger.error(msg)
             raise FileNotFoundError(errno.ENOENT, msg, f.filename)
         except PermissionError as p:
-            msg = f"get_data - Permission denied on {p.filename}"
+            msg = f"download - Permission denied on {p.filename}"
             logger.error(msg)
             raise PermissionError(errno.EACCES, msg, p.filename)
         except Exception as e:
-            msg = f"get_data - Unknown error downloading data via sftp."
+            msg = f"download - Unknown error downloading data via sftp."
             logger.error(t.message)
             raise e
 
@@ -712,7 +665,7 @@ class TACCJobManager():
 
 
     # TODO: Implement sending pickled data?
-    def send_stream(self, data, path):
+    def send_data(self, data, path):
         """
         Send `data` directly to path via an sftp file stream. Supported data types are:
             1. dict -> json file
@@ -732,7 +685,7 @@ class TACCJobManager():
 
         """
         d_type = type(data)
-        if d_type not in [dict, str]
+        if d_type not in [dict, str]:
             raise ValueError(f"Data type {d_type} is not supported")
         try:
             with self._client.open_sftp() as sftp:
@@ -749,7 +702,7 @@ class TACCJobManager():
 
 
     # TODO: Implement getting pickled data?
-    def get_stream(self, path, data_type='text'):
+    def get_data(self, path, data_type='text'):
         """
         Get data of `data_type` in file `path` on remote TACC system directly
         via a file stream. Supported data types are:
@@ -760,75 +713,174 @@ class TACCJobManager():
         ----------
         path : str
             Unix-style path on TACC system containing desired data.
-        data_type : str, optional, Default = 'str'
+        data_type : str, optional, Default = 'text'
             Type of data to get from desired file. Currently only 'text'
             and 'json' data types are supported.
 
         Returns
         -------
-        None
+        data : str, dict
+            Either text or dictionary containing data stored on remote system.
+
+        Raises
+        -------
+        ValueError
+            If invalid data type specified.
 
         """
-        d_type = type(data)
-        if d_type not in [dict, str]
-            raise ValueError(f"Data type {d_type} is not supported")
+        if data_type not in ['json', 'text']:
+            raise ValueError(f"get_data - data type {data_type} is not supported")
         try:
             with self._client.open_sftp() as sftp:
-                with sftp.open(path, 'w') as jc:
-                    if d_type==dict:
-                        json.dump(data, jc)
+                with sftp.open(path, 'r') as fp:
+                    if data_type=='json':
+                        data = json.load(fp)
                     else:
-                        jc.write(data)
+                        data = jc.read(fp)
         # TODO: Handle other exceptions?
         except Exception as e:
-            msg = f"Unable to read {data_type} data from {path}."
+            msg = f"get_data - Unable to read {data_type} data from {path}."
             logger.error(msg)
             raise e
 
 
+    def load_templated_json_file(self, path, config_path, **kwargs):
+        """
+        Loads a local json config found at path and templates it using jinja with the values
+        found in config ini file found at config_path . For example, if json file contains
+        `{{ a.b }}`, and `config={'a':{'b':1}}`, then `1` would be substituted in (note nesting).
+        All extra keyword arguments will be interpreted as job config overrides.
+
+        Parameters
+        ----------
+        path : str
+            Local path to json file.
+        config : dict
+            Dictionary with values to substitute in for jinja templates
+            in json file.
+
+        Returns
+        -------
+        json_config : dict
+            json config from file templated appropriately.
+
+        Raises
+        ------
+        FileNotFoundError
+            if json or config file do not exist.
+
+        """
+        # Check if it exists - If it doesn't config parser won't error
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), ini_file)
+
+        # Read project config file
+        config_parse = configparser.ConfigParser()
+        config_parse.read(config_path)
+        config = config_parse._sections
+
+        with open(path) as file_:
+            json_config = json.loads(Template(file_.read()).render(config))
+
+        # Treat kwargs as override parameters
+        json_config = self._update_dic_keys(json_config, kwargs)
+
+        # Return json_config
+        return json_config
+
 
     def get_apps(self):
+        """
+        Get list of applications deployed by TACCJobManager instance.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        apps : list of str
+            List of applications contained in the apps_dir for this TACCJobManager instance.
+
+        """
         apps = self.list_files(path=self.apps_dir)
 
         return apps
 
 
     def get_app(self, app_id):
+        """
+        Get application config for app deployed at TACCJobManager.apps_dir.
+
+        Parameters
+        ----------
+        app_id : str
+            Name of application to pull config for. Must exist in TACCJobManager apps_dir.
+        ----------
+
+        Returns
+        -------
+        app_config : dict
+            Application config dictionary as stored in application directory.
+
+        Raises
+        ------
+        ValueError
+            If app_id does not exist in applications folder.
+
+        """
 
         # Get current apps already deployed
         cur_apps = self.get_apps()
         if appId not in cur_apps:
-            msg = f"Application {appId} does not exist."
+            msg = f"get_app - Application {appId} does not exist."
             logger.error(msg)
-            raise Exception(msg)
+            raise ValueError(msg)
 
         # Load application config
         app_config_path = '/'.join([self.apps_dir, appId, 'app.json'])
-        app_config = self.get_json(app_config_path)
-
-        # Get wrapper script
-        try:
-            wrapper_script = '/'.join([self.apps_dir, appId, app_config['templatePath']])
-            cmnd = f"cat {wrapper_script}"
-            app_config['wrapper_script'] = self._execute_command(cmnd)
-        except Exception as e:
-            msg = "App main entry point not found for app {appId}"
-            logger.error(msg)
-            raise FileNotFoundError
+        app_config = self.get_data(app_config_path, data_type='json')
 
         return app_config
 
 
     def deploy_app(self, local_app_dir='.', app_config_file="app.json",
-            proj_config_file="project.ini", overwrite=False):
+            proj_config_file="project.ini", overwrite=False, **kwargs):
+        """
+        Deploy local application to TACCJobManager.apps_dir. Values in project config file
+        are substituted in where needed in the app config file to form application config,
+        and then app contents in assets directory (relative to local_app_dir) are sent to
+        to the apps_dir along with the application config (as a json file).
 
-        # Load project configuration file
-        proj_config_path = os.path.join(local_app_dir, proj_config_file)
-        proj_config = self.load_project_config(proj_config_path)
+        Parameters
+        ----------
+        local_app_dir: str, default='.'
+            Directory containing application to deploy.
+        app_config_file: str, default='app.json'
+            Path relative to local_app_dir containing application config json file.
+        proj_config_file: str, default="project.ini"
+            Path relative to local_app_dir containing project .ini config file.
+        overwrite: bool, default=False
+            Whether to overwrite application if it already exists in application directory.
+        ----------
+
+        Returns
+        -------
+        app_config : dict
+            Application config dictionary as stored in application directory.
+
+        Raises
+        ------
+        ValueError
+            If app_config is missing a required field or application already exists but overwrite
+            is not set to True.
+
+        """
 
         # Load templated app configuration
         app_config_path = os.path.join(local_app_dir, app_config_file)
-        app_config = self.load_templated_json_file(app_config_path,  proj_config)
+        proj_config_path = os.path.join(local_app_dir, proj_config_file)
+        app_config = self.load_templated_json_file(app_config_path,  proj_config_path, **kwargs)
 
         # Get current apps already deployed
         cur_apps = self.get_apps()
@@ -839,29 +891,32 @@ class TACCJobManager():
                 'parameters', 'outputs']
         missing = set(required_args) - set(app_config.keys())
         if len(missing)>0:
-            msg = f"Missing required app configs {missing}"
+            msg = f"deploy_app - missing required app configs {missing}"
             logger.error(msg)
-            raise Exception(msg)
+            raise ValueError(msg)
 
         # Only overwrite previous version of app (a new revision) if overwrite is set.
         if (app_config['name'] in cur_apps) and (not overwrite):
-            msg = f"Unable to deploy app {app_config['name']} - already exists and overwite is not set."
+            msg = f"deploy_app - {app_config['name']} already exists and overwite is not set."
             logger.info(msg)
-            raise Exception(msg)
+            raise ValueError(msg)
 
         try:
             # Now try and send application data and config to system
             local_app_dir = os.path.join(local_app_dir, 'assets')
             remote_app_dir = '/'.join([self.apps_dir, app_config['name']])
-            self.send_data(local_app_dir, remote_app_dir)
+            self.upload(local_app_dir, remote_app_dir)
 
             # Put app config in deployed app folder
             app_config_path = '/'.join([remote_app_dir, 'app.json'])
-            with self._client.open_sftp() as sftp:
-                with sftp.open(app_config_path, 'w') as jc:
-                    json.dump(app_config, jc)
+            self.send_data(app_config, app_config_path)
+
+            # Make entry point script executable
+            wrapper_script_path = f"{remote_app_dir}/{app_config['templatePath']}"
+            self._execute_command(f"chmod +x {wrapper_script_path}")
+
         except Exception as e:
-            msg = f"Unable to stage appplication data to path {app_config_path}."
+            msg = f"deploy_app - Unable to stage appplication data to path {app_config_path}."
             logger.error(msg)
             raise e
 
@@ -869,89 +924,193 @@ class TACCJobManager():
 
 
     def get_jobs(self):
+        """
+        Get list of all jobs in TACCJobManager jobs directory.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        jobs : list of str
+            List of jobs contained in the jobs_dir for this TACCJobManager instance.
+
+        """
         jobs = self.list_files(path=self.jobs_dir)
 
         return jobs
 
 
-    def get_job(self, job_name):
+    # TODO: Catch errors -> Common one such as if job doesn't exist
+    def get_job(self, jobId):
+        """
+        Get job config for job in TACCJobManager jobs_dir.
+
+        Parameters
+        ----------
+        jobId: str
+            ID of job to get (should be same as name of job directory in jobs_dir).
+        ----------
+
+        Returns
+        -------
+        job_config: dict
+            Job config dictionary as stored in json file in job directory.
+
+        Raises
+        ------
+
+        """
         try:
-            job_config = '/'.join([self.jobs_dir, job_name, 'job_config.json'])
-            with self._client.open_sftp() as sftp:
-                with sftp.open(job_config, 'rb') as jc:
-                    job_config = json.load(jc)
+            job_config_path = '/'.join([self.jobs_dir, job_name, 'job.json'])
+            job_config = self.get_data(path, data_type='json')
         except Exception as e:
-            msg = f"Unable to load {job_name}"
+            msg = f"get_job - Unable to load {job_name}"
             logger.error(msg)
             raise e
 
 
-    def load_job_config(self, job_name):
-        """Load job config by job name
+    # TODO: Check for valide job config, document more
+    def parse_submit_script(self, job_config):
         """
-        jobs = self.get_jobs()
-        if job_name not in jobs:
-            raise Exeception('Job not found.')
-        job_config = '/'.join([self.jobs_dir, job_name, 'job_config.json'])
-        sftp = self._client.open_sftp()
-        try:
-            with sftp.open(job_config, 'rb') as jc:
-                job_config = json.load(jc)
-        except FileNotFoundError:
-            msg = 'Job config for job ' + job_name + ' not found at ' + job_config
-            logger.error(msg)
-            raise FileNotFoundError
-        sftp.close()
-        
-        return job_config
+        Parses text to write for a SLURM job submission script on TACC.
 
-    def load_local_job_config(self, local_job_dir='.', job_config_file='job.json',
-            proj_config_file="project.ini", **kwargs):
-        """Load job from local configuration files
+        Parameters
+        ----------
+        job_config: dict
+            Dictionary containing job configurations.
+        ----------
 
-        Args:
-            local_job_dir (str) - local directory with job files to copy.
-                Defaults to the current working directory.
-            job_config_file (str) - JSON file with job configuration.
-            proj_config_file (str) - file wtih project configuration.
-            **kwargs - all extra keyword arguments will be interpreted as job config overrides.
+        Returns
+        -------
+        submit_script: str
+            String containing text to write to submit script.
 
-        Returns:
-            job_config (dict) - a dictionary containing the job configuration.
+        Raises
+        ------
+
         """
 
-        # Load project configuration file
-        proj_config_path = os.path.join(local_job_dir, proj_config_file)
-        proj_config = self.load_project_config(proj_config_path)
+        # ---- HEADER ---- 
+        # The total number of MPI processes is the product of these two quantities
+        total_mpi_processes = job_config['nodeCount'] * job_config['processorsPerNode']
 
-        # Load templated job configuration -> Default is job.json
-        job_config_path = os.path.join(local_job_dir, job_config_file)
-        job_config = self.load_templated_json_file(job_config_path,  proj_config)
+        # Format submit scripts with appropriate inputs for job
+        submit_script_header = self.SUBMIT_SCRIPT_TEMPLATE.format(job_name=job_config['name'],
+                job_desc=job_config['desc'],
+                job_id=job_config['job_id'],
+                queue=job_config['queue'],
+                N=job_config['nodeCount'],
+                n=total_mpi_processes,
+                rt=job_config['maxRunTime'])
 
-        # Treat kwargs as override parameters
-        for key, value in kwargs.items():
-            old_val = job_config.get(key)
-            # Often we might want to update just one parameter in a sub-dictionary
-            # Hence the need for this check
-            if type(old_val) is dict:
-                job_config[key].update(value)
-            else:
-                job_config[key] = value
-        
-        return job_config
+        # submit script - add slurm directives for email and allocation if specified for job
+        if 'email' in job_config.keys():
+            submit_script_header += "\n#SBATCH --mail-user={email} # Email to send to".format(
+                    email=job_config['email'])
+            submit_script_header += "\n#SBATCH --mail-type=all     # Email to send to"
+        # TODO: Check if allocation is needed first - Throw error if it is
+        if 'allocation' in job_config.keys():
+            submit_script_header += "\n#SBATCH -A {allocation} # Allocation name ".format(
+                    allocation=job_config['allocation'])
 
-    def _make_submit_header(self, job_config):
-        """Create the header of an sbatch job submission script from the job config
+        # End slurm directives and cd into job dir
+        submit_script_header += "\n#----------------------------------------------------\n"
+
+        # ---- ARGS ---- 
+
+        # always pass total number of MPI processes
+        job_args = {"NP": job_config['nodeCount'] * job_config['processorsPerNode']}
+
+        # Add paths to job inputs as argument 
+        for arg, path in job_config['inputs'].items():
+            job_args[arg] = '/'.join([job_config['job_dir'], os.path.basename(path)])
+
+        # Add on parameters passed to job 
+        job_args.update(job_config['parameters'])
+
+        # Create list of arguments to pass as env variables to job
+        export_list = [""]
+        for arg, value in job_args.items():
+            value = str(value)
+            # wrap with single quotes if needed
+            if " " in value and not (value[0] == value[-1] == "'"):
+                value = f"'{value}'"
+            export_list.append(f"export {arg}={value}")
+
+        # Parse final submit script 
+        submit_script = (
+            submit_script_header                                            # set SBATCH params
+            + f"\ncd {job_config['job_dir']}\n\n"                           # cd to job directory
+            + "\n".join(export_list)                                        # set job params
+            + f"\n{job_config['job_dir']}/{job_config['entry_script']}.sh " # run main script
+        )
+
+        return submit_script
+
+
+    # TODO: Check for required job configurations. Document job_config fields
+    def setup_job(self, job_config=None, local_job_dir='.',
+            job_config_file='job.json', proj_config_file="project.ini", stage=False, **kwargs):
         """
+        Setup job directory on supercomputing resources. If job_config is not specified, then it is
+        parsed from the json file found at local_job_dir/job_config_file, with jinja templated
+        values from the local_job_dir/proj_config_file substituted in accordingly. In either case,
+        values found in dictionary or in parsed json file can be overrided by passing keyword
+        arguments. Note for dictionary values, only the specific keys in the dictionary value
+        specified will be overwritten in the existing dictionary value, not the whole dictionary.
 
-        # Set (or overwrite) job id
-        job_config['job_id'] = job_id
+        Parameters
+        ----------
+        job_config : dict, default=None
+            Dictionary containing job config. If None specified, then job config will be read from
+            file specified at local_job_dir/job_config_file.
+        local_job_dir : str, default='.'
+            Local directory containing job config file and project config file. Defaults to cwd.
+        job_config_file : str, default='job.json'
+            Path, relative to local_job_dir, to job config json file. File only read if job_config
+            dictionary not given.
+        proj_config_file : str, default='project.ini'
+            Path, relative to local_job_dir, to project config .ini file. Only used if job_config
+            not specified. If used, jinja is used to substitue values found in config file into
+            the job json file. Useful for templating jobs.
+        stage : bool, default=False
+            If set to True, stage job directory by creating it, moving application contents,
+            moving job inputs, and writing submit_script to remote system.
+        kwargs : dict, optional
+            All extra keyword arguments will be interpreted as job config overrides.
 
-        # Get app config
-        app_config = self.load_app_config(job_config['appId'])
 
-        # Helper function get attributes for job from app defaults if not present in job config
+        Returns
+        -------
+        job_config : dict
+            Dictionary containing info about job that was set-up. If stage was set to True,
+            then a successful completion of setup_job() indicates that the job directory was
+            prepared succesffuly and job is ready to be submit.
+
+        Raises
+        ------
+        """
+        # Load from json file if job conf dictionary isn't specified
+        # Overwrite job_config loaded with kwargs keyword arguments if specified
+        if job_config is None:
+            job_config_path = os.path.join(local_job_dir, job_config_file)
+            proj_config_path = os.path.join(local_job_dir, proj_config_file)
+            job_config = self.load_templated_json_file(job_config_path, proj_config_path, **kwargs)
+        else:
+            job_config = self._update_dic_keys(job_config, **kwargs)
+
+        # job_id is name of job folder in jobs_dir
+        job_config['job_id'] = '{job_name}_{ts}'.format(job_name=job_config['name'],
+                ts=datetime.datetime.fromtimestamp(time.time()).strftime('%Y%m%d_%H%M%S'))
+        job_config['job_dir'] = '{job_dir}/{job_id}'.format(job_dir=self.jobs_dir,
+                job_id=job_config['job_id'])
+
+        # Get default arguments from deployed application
+        app_config = self.get_app(job_config['app_id'])
         def _get_attr(j, a):
+            # Helper function get attributes for job from app defaults if not present in job config
             if j in job_config.keys():
                 return job_config[j]
             else:
@@ -964,305 +1123,228 @@ class TACCJobManager():
         job_config['processorsPerNode'] = _get_attr('processorsPerNode','defaultProcessorsPerNode')
         job_config['maxRunTime'] = _get_attr('maxRunTime','defaultMaxRunTime')
 
-        # The total number of MPI processes is the product of these two quantities
-        total_mpi_processes = job_config['nodeCount'] * job_config['processorsPerNode']
-        # Format submit scripts with appropriate inputs for job
-        submit_script = self.SUBMIT_SCRIPT_TEMPLATE.format(job_name=job_config['name'],
-                job_desc=job_config['desc'],
-                job_id=job_config['job_id'],
-                queue=job_config['queue'],
-                N=job_config['nodeCount'],
-                n=total_mpi_processes,
-                rt=job_config['maxRunTime'])
+        # TODO: check all necessary job arguments present?
 
-        # submit script - add slurm directives for email and allocation if specified for job
-        if 'email' in job_config.keys():
-            submit_script += "\n#SBATCH --mail-user={email} # Email to send to".format(
-                    email=job_config['email'])
-            submit_script += "\n#SBATCH --mail-type=all     # Email to send to"
-        # TODO: Check if allocation is needed first - Throw error if it is
-        if 'allocation' in job_config.keys():
-            submit_script += "\n#SBATCH -A {allocation} # Allocation name ".format(
-                    allocation=job_config['allocation'])
-
-        # End slurm directives and cd into job dir
-        submit_script += "\n#----------------------------------------------------\n"
-
-        return submit_script
-
-    def _setup_submit_script(self, job_config):
-        job_dir = job_config['job_dir']
-        # always pass total number of MPI processes
-        job_args = {"NP": job_config['nodeCount'] * job_config['processorsPerNode']}
-
-        # Transfer inputs to job directory
-        for arg, path in job_config['inputs'].items():
-            dest_path = '/'.join([job_dir, os.path.basename(path)])
+        if stage:
+            # Stage job inputs -> Actually transfer/write job data to remote system
             try:
-                self.send_data(path, dest_path)
-            except Exception as e:
-                self._cleanup_job_low(job_config)
-                msg = f"Unable to send input file for arg {arg['name']} to dest {dest_path}"
+                # Make job directory
+                sftp_ret = self._mkdir(job_config['job_dir'])
+                # TODO: Check return of mkdir?
 
-                logger.error(msg)
+                # Copy app contents to job directory
+                cmnd = 'cp -r {apps_dir}/{app}/* {job_dir}/'.format(apps_dir=self.apps_dir,
+                        app=job_config['appId'], job_dir=job_dir)
+                ret = self._execute_command(cmnd)
+
+                # Send job input data to job directory
+                for arg, path in job_config['inputs'].items():
+                    self.upload(path, '/'.join([job_config['job_dir'], os.path.basename(path)]))
+
+                # Parse and write submit_script to job_directory
+                submit_script = self.parse_submit_script(job_config)
+                submit_script_path = f"{job_config['job_dir']}/submit_script.sh"
+                self.send_data(submit_script, submit_script_path)
+
+                # chmod submit_scipt 
+                self._execute_command(f"chmod +x {submit_script_path}")
+
+                # Save job config
+                job_config_path = f"{job_config['job_dir']}/job.json"
+                self.send_data(job_config, job_config_path)
+
+            except Exception as e:
+                # If failed to stage job, remove contents that have been staged
+                self._execute_command('rm -rf ' + job_config['job_dir'])
+                message = f"stage_job - Error staging: {e}."
+                logger.error(message)
                 raise e
 
-            # Add input as argument to application
-            job_args[arg] = dest_path
-
-        # Add on parameters passed to job
-        job_args.update(job_config['parameters'])
-        export_list = [""]
-        for arg, value in job_args.items():
-            value = str(value)
-            # wrap with single quotes if needed
-            if " " in value and not (value[0] == value[-1] == "'"):
-                value = f"'{value}'"
-            export_list.append(f"export {arg}={value}")
-
-        # make submit script
-        submit_script = (
-            self._make_submit_header(job_config) # set SBATCH params
-            + f"\ncd {job_dir}\n\n" # cd to job directory
-            + "\n".join(export_list) # set job params
-            + f"\n{job_dir}/wrapper.sh " # run main script
-        )
-
-        wrapper_script = self._get_wrapper_script(job_config)
-        # Write modified submit and wrapper scripts to job directory
-        with self._client.open_sftp() as sftp:
-            submit_dest = job_dir + '/submit_script.sh'
-            wrapper_dest = '/'.join([job_dir, '/wrapper.sh'])
-
-            with sftp.open(submit_dest,  'w') as ss_file:
-                ss_file.write(submit_script)
-            with sftp.open(wrapper_dest, 'w') as ws_file:
-                ws_file.write(wrapper_script)
-
-        # chmod submit_scipt and wrapper script to make them executables
-        try:
-            self._execute_command('chmod +x ' + submit_dest)
-            self._execute_command('chmod +x ' + wrapper_dest)
-        except Exception as e:
-            self._cleanup_job_low(job_config)
-            msg = "Unable to chmod wrapper or submit scripts in job dir."
-            logger.error(msg)
-            raise e
-
-    def setup_job(self, job_config=None, **kwargs):
-        """Setup job directory on supercomputing resources.
-
-        Args:
-            job_config (dict): The job configuration. Defaults to None. If None, local job config files
-                must be specified in kwargs.
-
-        Returns:
-            job_config (dict): The modified job configuration corresponding to the setup job.
-        """
-
-        job_config = self.load_local_job_config(**kwargs)
-
-        # TACCJM stores ts of when it last did certain actions
-        job_config['ts'] = {'setup_ts': None,
-                            'submit_ts': None,
-                            'start_ts': None,
-                            'end_ts': None}
-
-        # Set timestamp when job was setup
-        job_config['ts']['setup_ts'] = datetime.datetime.fromtimestamp(
-                time.time()).strftime('%Y%m%d_%H%M%S')
-
-        # Create job directory in job manager's jobs folder
-        job_config['job_id'] = '{job_name}_{ts}'.format(job_name=job_config['name'],
-                ts=job_config['ts']['setup_ts'])
-        job_dir = job_config['job_dir'] = '{job_dir}/{job_id}'.format(job_dir=self.jobs_dir,
-                job_id=job_config['job_id'])
-
-        try:
-            ret = self._execute_command('mkdir ' + job_dir)
-        except Exception as e:
-            msg = "Unable to setup job dir for " + job_config['job_id']
-            logger.error(msg)
-            raise e            
-
-        # Copy app contents to job directory
-        cmnd = 'cp -r {apps_dir}/{app}/* {job_dir}/'.format(apps_dir=self.apps_dir,
-                app=job_config['appId'], job_dir=job_dir)
-        ret = self._execute_command(cmnd)
-
-        # chmod setup script and run - Remove this since tapisv2 doesn't do?
-        if 'setup.sh' in self.list_files(job_dir):
-            self._execute_command(f'chmod +x {job_dir}/setup.sh')
-            cmnd = f'{job_dir}/setup.sh {job_dir}'
-            ret = self._execute_command(cmnd)
-
-        self._setup_submit_script(job_config)
-
-        # Save current job config
-        try:
-            self.save_job(job_config)
-        except Exception as e:
-            self._cleanup_job_low(job_config)
-            msg = "Unable to save job config after setup."
-            logger.error(msg)
-            raise e
-
-        return job_config
-
-    def _get_wrapper_script(self, job_config):
-        """Get the wrapper script as a string
-        """
-        # Line to create start ts
-        wrapper_pre = "\n# Create start ts file\ntouch start_$(date +\"%FT%H%M%S\")\n"
-
-        # Line to create end ts
-        wrapper_post = "\n# Create end ts file\ntouch end_$(date +\"%FT%H%M%S\")\n"
-        try:
-            wrapper_script = self.get_app_wrapper_script(job_config['appId'])
-            return wrapper_pre + wrapper_script + wrapper_post
-        except Exception as e:
-            self._cleanup_job_low(job_config)
-            msg = "Couldn't get wrapper script to setup job dir for " + job_config['job_id']
-            logger.error(msg)
-            raise e
-
-    def _cleanup_job_low(self, job_config):
-        return self._execute_command('rm -rf ' + job_config['job_dir'])
-
-    def setup_job(self, local_job_dir='.', job_config_file='job.json',
-            proj_config_file="project.ini", stage=True):
-
-        # Load project configuration file
-        proj_config_path = os.path.join(local_job_dir, proj_config_file)
-        proj_config = self.load_project_config(proj_config_path)
-
-        # Load templated job configuration -> Default is job.json
-        job_config_path = os.path.join(local_job_dir, job_config_file)
-        job_config = self.load_templated_json_file(job_config_path,  proj_config)
-
-        # Add ts of setup to create job_id
-        job_id = '{job_name}_{ts}'.format(job_name=job_config['name'],
-                ts=datetime.datetime.fromtimestamp(time.time()).strftime('%Y%m%d_%H%M%S'))
-
-        # Now stage job inputs
-        if stage:
-            try:
-                job_config = self.stage_job(job_id, **job_config)
-            except Exception as e:
-                job_dir = '/'.join([self.jobs_dir, job_id])
-                msg = f"Error staging job {job_id}. Cleaning up job directory {job_dir}."
-                logger.error(msg)
-                Exception(msg)
-            if 'slurm' not in job_config:
-                job_config['slurm'] = {}
-            job_config['slurm']['slurm_id'] = ret.split('\n')[-2].split(' ')[-1]
-            if job_config['slurm']['slurm_id'] == 'FAILED' or job_config['slurm']['slurm_id'] == '':
-                job_config['slurm']['sbatch_ret'] = ret
-                raise Exception('Failed to submit SLURM Job!')
-            _  = job_config['slurm'].pop('sbatch_ret', None)
-            job_config['ts']['submit_ts'] = datetime.datetime.fromtimestamp(
-                    time.time()).strftime('%Y%m%d_%H%M%S')
-            self.save_job(job_config)
-        else:
-            msg = 'Job has not been initialized or has already been submitted.'
-            logger.error(msg)
-            raise Exception(msg)
-
 
         return job_config
 
 
-    def submit_job(self, job_id):
+    def submit_job(self, jobId):
+        """
+        Submit job to remote system job queue.
+
+        Parameters
+        ----------
+        jobId : str
+            ID of job to submit.
+
+        Returns
+        -------
+        job_config : dict
+            Dictionary containing information on job just submitted. The new field 'slurm_id'
+            should be added populated with id of job.
+
+        Raises
+        ------
+        """
         # Load job config
-        job_config =  self.get_job(job_id)
+        job_config =  self.get_job(jobId)
 
-        # Check it hasn't been submitted already
+        # TODO: Verify job is set-up properly? 
+
+        # Check if this job isn't currently in the queue
         if 'slurm_id' in job_config.keys():
-            raise Exception(f"{job_id} already submitted - job id = {job_config['slurm_id']}")
+            msg = f"submit_job - {jobId} exists in queue with id {job_config['slurm_id']}"
+            raise ValueError(msg)
 
-        # Submit to SLURM queue
-        cmnd = f"cd {job_config['job_dir']};sbatch submit_script.sh"
+        # Submit to SLURM queue -> Note we do this from the job_directory
+        cmnd = f"sbatch {job_config['job_dir']}/submit_script.sh"
         ret = self._execute_command(cmnd)
         slurm_ret = ret.split('\n')[-2]
-        if 'errror' in slurm_ret or 'FAILED' in slurm_ret:
+        if 'error' in slurm_ret or 'FAILED' in slurm_ret:
             raise Exception(f"Failed to submit job. SLURM returned error: {slurm_ret}")
         job_config['slurm_id'] = slurm_ret.split(' ')[-1]
 
         # Save job config
-        jc_path = job_config['job_dir'] + '/job_config.json'
-        self.send_json(job_config, jc_path)
+        job_config_path = job_config['job_dir'] + '/job.json'
+        self.send_data(job_config, job_config_path)
 
         return job_config
 
 
-    def cleanup_job(self, job_config, check=True):
-        if job_config['ts']['setup_ts']!=None:
-            if check and job_config['ts']['submit_ts']!=None:
-                choice = input("Are you sure yo want to cancel the job? [yes/no]").lower()
-                if choice != 'yes':
-                    return
-                self.cancel_job(job_config)
-            if check:
-                choice = input("Are you sure yo want to delete job directory? [yes/no]").lower()
-                if choice != 'yes':
-                    return
+    def cancel_job(self, jobId):
+        """
+        Cancel job on remote system job queue.
 
-            # Remove job directory
-            self._cleanup_job_low(job_config)
-            job_config['job_dir'] = None
+        Parameters
+        ----------
+        jobId : str
+            ID of job to submit.
+
+        Returns
+        -------
+        job_config : dict
+            Dictionary containing information on job just canceled. The field 'slurm_id' should
+            be removed from the job_config dictionary and the 'slurm_hist' field should be
+            populated with a list of previous slurm_id's with the latest one appended. Updated
+            job config is also updated in the jobs directory.
+        """
+        # Load job config
+        job_config =  self.get_job(jobId)
+
+        if 'slurm_id' in job_config.keys():
+            cmnd = f"scancel {job_config['slurm_id']}"
+            try:
+                self._execute_command(cmnd)
+            except Exception as e:
+                msg = f"Failed to cancel job {jobId}."
+                logger.error(msg)
+                raise e
+
+            # Remove slurm ID and store into job hist
+            old_slurm_id = job_config.pop('slurm_id')
+            job_config['slurm_hist'] = job_config.get('slurm_hist', []).append(old_slurm_id)
+
+            # Save updated job config
+            job_config_path = job_config['job_dir'] + '/job.json'
+            self.send_data(job_config, job_config_path)
         else:
-            msg = f"Job {job_id} has not been submitted yet."
+            msg = f"Job {jobId} has not been submitted yet."
             logger.error(msg)
             raise Exception(msg)
 
         return job_config
 
 
-    def cleanup_job(self, job_id):
+    def cleanup_job(self, jobId):
+        """
+        Cancels job if it has been submitted to the job queue and deletes the job's directory.
+
+        Parameters
+        ----------
+        jobId: str
+            Job ID of job to clean up.
+
+        Returns
+        -------
+        jobId: str
+            Job ID of job just canceled and removed.
+        """
         # Cancel job
         try:
-            self.cancel_job(job_id)
+            self.cancel_job(jobId)
         except:
             pass
 
         # Remove job directory
-        job_dir = '/'.join([self.jobs_dir, job_id])
-        cmnd = f"rm -r {job_dir}"
+        job_dir = '/'.join([self.jobs_dir, jobId])
+        cmnd = f"rm -rf {job_dir}"
         try:
             self._execute_command(cmnd)
         except:
             pass
 
-        return job_id
+        return jobId
 
 
-    def ls_job(self, job_id, path=''):
+    def ls_job(self, jobId, path=''):
+        """
+        List files in job directory with given ID.
+
+        Parameters
+        ----------
+        jobId: str
+            ID of job.
+        path: str, default=''
+            Directory, relative to the job directory jobs_dir/jobId, to to get files for.
+
+
+        Returns
+        -------
+        files : list of str
+            List of files in job directory.
+        """
         # Get files from particular directory in job
-        fpath ='/'.join([self.jobs_dir, job_id, path])
+        fpath ='/'.join([self.jobs_dir, jobId, path])
         files = self.list_files(path=fpath)
 
         return files
 
 
-    def get_job_file(self, job_id, fpath, dest_dir='.'):
+    def get_job_data(self, jobId, path, dest_dir='.'):
+        """
+        Download file/folder at path, relative to job directory, and place it in the specified local
+        destination directory.
+
+        Parameters
+        ----------
+        jobId : str
+            ID of job.
+        path : str
+            Path to file/folder, relative to the job directory jobs_dir/jobId, to download. If a
+            folder is specified, contents are compressed, sent, and then decompressed locally.
+        dest_dir :  str, default='.'
+            Local directory to download job data to. Defaults to current working directory.
+
+
+        Returns
+        -------
+        dest_path : str
+            Local path of file/folder downloaded.
+        """
         # Downlaod to local job dir
-        fpath = fpath[:-1] if fpath[-1]=='/' else fpath
-        fname = '/'.join(fpath.split('/')[-1:])
-        job_folder = '/'.join(fpath.split('/')[:-1])
+        path = path[:-1] if path[-1]=='/' else path
+        fname = '/'.join(path.split('/')[-1:])
+        job_folder = '/'.join(path.split('/')[:-1])
 
         # Make sure job file/folder exists
         files = self.ls_job(job_id, path=job_folder)
         if fname not in files:
-            msg = f"Unable to find job file {fpath} for job {job_id}."
+            msg = f"Unable to find job file {path} for job {job_id}."
             logger.error(msg)
-            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), fpath)
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), path)
 
         # Make local data directory if it doesn't exist already
         local_data_dir = os.path.join(dest_dir, job_id)
         os.makedirs(local_data_dir, exist_ok=True)
 
         # Get file
-        src_path = '/'.join([self.jobs_dir, job_id, fpath])
+        src_path = '/'.join([self.jobs_dir, job_id, path])
         dest_path = os.path.join(local_data_dir, fname)
         try:
             self.get_file(src_path, dest_path)
@@ -1273,7 +1355,7 @@ class TACCJobManager():
         return dest_path
 
 
-    def send_job_file(self, job_id, fpath, dest_dir='.'):
+    def send_job_data(self, job_id, fpath, dest_dir='.'):
         try:
             # Get destination directory in job path to send file to
             fname = os.path.basename(os.path.normpath(fpath))

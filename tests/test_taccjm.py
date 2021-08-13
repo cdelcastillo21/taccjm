@@ -11,10 +11,13 @@ References:
 import os
 import pdb
 import pytest
+import posixpath
 from dotenv import load_dotenv
 from unittest.mock import patch
 
-from taccjm.TACCJobManager import TACCJobManager
+from taccjm.TACCJobManager import TACCJobManager, TJMCommandError
+from taccjm.SSHClient2FA import SSHClient2FA
+from paramiko import SSHException, AuthenticationException, BadHostKeyException
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -40,31 +43,57 @@ def _check_init(mfa):
     global JM
     if JM is None:
         # Initialize taccjm that will be used for tests - use special tests dir
-        JM = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, apps_dir="test-taccjm-apps",
-                jobs_dir="test-taccjm-jobs", trash_dir="test-taccjm-trash")
+        JM = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="test-taccjm")
 
 
 def test_init(mfa):
-    """Testing initializing systems"""
+    """Testing initializing class and class helper functions"""
 
     global JM
     # Initialize taccjm that will be used for tests - use special tests dir
-    JM = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, apps_dir="test-taccjm-apps",
-            jobs_dir="test-taccjm-jobs")
+    JM = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="test-taccjm")
 
-    with pytest.raises(Exception):
+    # Invalid TACC system specified
+    with pytest.raises(ValueError):
         bad = TACCJobManager("foo", user=USER, psw=PW, mfa=mfa)
 
-    # Command that should work, also test printing to stdout the output 
-    assert JM._execute_command('echo test', prnt=True) == 'test\n'
+    # Invalid working directory specified, no tricky business allowed with ..
+    with pytest.raises(ValueError):
+        bad = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="../test-taccjm")
+    with pytest.raises(ValueError):
+        bad = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="test-taccjm/..")
+    with pytest.raises(ValueError):
+        bad = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="test-taccjm/../test")
 
-    # Tests command that fails
-    with pytest.raises(Exception):
-         JM._execute_command('foo')
+    # Command that should work, also test printing to stdout the output
+    assert JM._execute_command('echo test') == 'test\n'
 
-    # Test show queue and get allocation
-    assert f"SUMMARY OF JOBS FOR USER: <{USER}>" in JM.showq()
-    assert f"Project balances for user {USER}" in JM.get_allocations()
+     # Tests command that fails due to SSH error, which we mock from the paramiko client class.
+    with patch.object(SSHClient2FA, 'exec_command', side_effect=SSHException('Mock ssh exception')):
+        with pytest.raises(SSHException):
+             JM._execute_command('echo test')
+
+    # Test commands that fails because of non-zero return code
+    with pytest.raises(TJMCommandError):
+        JM._execute_command('foo')
+
+    # Test making directory (remove it first)
+    test_dir = posixpath.join(JM.trash_dir, 'test')
+    try:
+        JM._execute_command(f"rmdir {test_dir}")
+    except:
+        pass
+    JM._mkdir(test_dir)
+
+    # Test making directory that will fail
+    with pytest.raises(TJMCommandError):
+        JM._mkdir(posixpath.join(JM.trash_dir, 'test/will/fail'))
+
+    # Test Update dictionary keys utility
+    d = {'a': 1, 'b':{'a':1, 'b':2}}
+    new = JM._update_dic_keys(d, a=2, b={'b':3})
+    assert d['a']==2
+    assert d['b']['b']==3
 
 
 def test_files(mfa):
