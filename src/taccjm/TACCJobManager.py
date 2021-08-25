@@ -142,16 +142,7 @@ class TACCJobManager():
                 else:
                     tar.add(local, arcname=remote_fname)
 
-            # Send tar file
-            with self._client.open_sftp() as sftp:
-                sftp.put(local_tar_file, remote_tar_file)
-
-            # Remove local tar file if sent successfully
-            os.remove(local_tar_file)
-
-            # Now untar file in destination and remove remote tar file
-            untar_cmd = f"tar -xzvf {remote_tar_file} -C {remote_dir}; rm {remote_tar_file}"
-            self._execute_command(untar_cmd)
+            self._copy_tmp_tarfile(local_tar_file, remote_tar_file)
         else:
             with self._client.open_sftp() as sftp:
                 sftp.put(local, remote)
@@ -159,7 +150,33 @@ class TACCJobManager():
         # Return list of items in directory where file or directory sent should be
         return self.list_files(path=remote_dir)
 
+    def _copy_tmp_tarfile(self, local_tar_file, remote_tar_file):
+        # Send tar file
+        with self._client.open_sftp() as sftp:
+            sftp.put(local_tar_file, remote_tar_file)
 
+        # Remove local tar file if sent successfully
+        os.remove(local_tar_file)
+        remote_dir = os.path.dirname(remote_tar_file)
+
+        # Now untar file in destination and remove remote tar file
+        untar_cmd = f"tar -xzvf {remote_tar_file} -C {remote_dir}; rm {remote_tar_file}"
+        self._execute_command(untar_cmd)
+
+
+    def send_directory_contents(self, source_dir, remote_dir):
+        """Send every file in a local directory to a remote one - without copying the directory itself.
+        """
+
+        local_tar_file = f".tmp_taccjm.tar"
+        remote_tar_file = f"{remote_dir}/.tmp_taccjm.tar"
+        with tarfile.open(local_tar_file, "w:gz") as tar:
+            for fname in os.listdir(source_dir):
+                tar.add(source_dir+"/"+fname, arcname=fname,
+                    filter=lambda x: x if not os.path.basename(x.name).startswith(".") else None)
+
+        self._copy_tmp_tarfile(local_tar_file, remote_tar_file)
+            
     def peak_file(self, path, head=-1, tail=-1):
         if head>0:
             cmnd = f"head -{head} {path}"
@@ -442,6 +459,11 @@ class TACCJobManager():
         for arg, path in job_config['inputs'].items():
             dest_path = '/'.join([job_dir, os.path.basename(path)])
             try:
+                if os.path.isdir(path):
+                    # Just send all the files in the directory over - instead of
+                    # forcing the user to pasa a zip archive
+                    self.send_directory_contents(path, job_dir)
+                continue
                 self.send_file(path, dest_path)
             except Exception as e:
                 self._cleanup_job_low(job_config)
