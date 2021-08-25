@@ -1,11 +1,10 @@
 {
   "name": "{{ app.name }}-job-test",
   "appId": "{{ app.name }}--{{ app.version}}",
-  "archive": true,
   "nodeCount": 1,
   "processorsPerNode": 2,
   "memoryPerNode": "1",
   "maxRunTime": "00:01:00",
-  "inputs": {},
+  "inputs": {"target_file":"./tests/test_input_file"},
   "parameters": {"command": "ls", "opts": "-alth"}
 }
