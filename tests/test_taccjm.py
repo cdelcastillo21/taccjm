@@ -11,10 +11,13 @@ References:
 import os
 import pdb
 import pytest
+import posixpath
 from dotenv import load_dotenv
 from unittest.mock import patch
 
-from taccjm.TACCJobManager import TACCJobManager
+from taccjm.TACCJobManager import TACCJobManager, TJMCommandError
+from taccjm.SSHClient2FA import SSHClient2FA
+from paramiko import SSHException, AuthenticationException, BadHostKeyException
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -40,31 +43,57 @@ def _check_init(mfa):
     global JM
     if JM is None:
         # Initialize taccjm that will be used for tests - use special tests dir
-        JM = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, apps_dir="test-taccjm-apps",
-                jobs_dir="test-taccjm-jobs", trash_dir="test-taccjm-trash")
+        JM = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="test-taccjm")
 
 
 def test_init(mfa):
-    """Testing initializing systems"""
+    """Testing initializing class and class helper functions"""
 
     global JM
     # Initialize taccjm that will be used for tests - use special tests dir
-    JM = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, apps_dir="test-taccjm-apps",
-            jobs_dir="test-taccjm-jobs")
+    JM = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="test-taccjm")
 
-    with pytest.raises(Exception):
+    # Invalid TACC system specified
+    with pytest.raises(ValueError):
         bad = TACCJobManager("foo", user=USER, psw=PW, mfa=mfa)
 
-    # Command that should work, also test printing to stdout the output 
-    assert JM._execute_command('echo test', prnt=True) == 'test\n'
+    # Invalid working directory specified, no tricky business allowed with ..
+    with pytest.raises(ValueError):
+        bad = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="../test-taccjm")
+    with pytest.raises(ValueError):
+        bad = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="test-taccjm/..")
+    with pytest.raises(ValueError):
+        bad = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="test-taccjm/../test")
 
-    # Tests command that fails
-    with pytest.raises(Exception):
-         JM._execute_command('foo')
+    # Command that should work, also test printing to stdout the output
+    assert JM._execute_command('echo test') == 'test\n'
 
-    # Test show queue and get allocation
-    assert f"SUMMARY OF JOBS FOR USER: <{USER}>" in JM.showq()
-    assert f"Project balances for user {USER}" in JM.get_allocations()
+     # Tests command that fails due to SSH error, which we mock from the paramiko client class.
+    with patch.object(SSHClient2FA, 'exec_command', side_effect=SSHException('Mock ssh exception')):
+        with pytest.raises(SSHException):
+             JM._execute_command('echo test')
+
+    # Test commands that fails because of non-zero return code
+    with pytest.raises(TJMCommandError):
+        JM._execute_command('foo')
+
+    # Test making directory (remove it first)
+    test_dir = posixpath.join(JM.trash_dir, 'test')
+    try:
+        JM._execute_command(f"rmdir {test_dir}")
+    except:
+        pass
+    JM._mkdir(test_dir)
+
+    # Test making directory that will fail
+    with pytest.raises(TJMCommandError):
+        JM._mkdir(posixpath.join(JM.trash_dir, 'test/will/fail'))
+
+    # Test Update dictionary keys utility
+    d = {'a': 1, 'b':{'a':1, 'b':2}}
+    new = JM._update_dic_keys(d, a=2, b={'b':3})
+    assert d['a']==2
+    assert d['b']['b']==3
 
 
 def test_files(mfa):
@@ -74,14 +103,14 @@ def test_files(mfa):
     _check_init(mfa)
 
     # List files in path that exists and doesnt exist
-    assert 'test-taccjm-apps' in JM.list_files()
-    with pytest.raises(FileNotFoundError):
+    assert 'test-taccjm-apps' in JM.list_files(JM.scratch_dir)
+    with pytest.raises(TJMCommandError):
          JM.list_files('/bad/path')
 
     # Send file - Try sending test application script to apps directory
     test_file = '/'.join([JM.apps_dir, 'test_file'])
-    assert 'test_file' in JM.send_file('./tests/test_app/assets/run.sh',
-            test_file)
+    JM.upload('./tests/test_app/assets/run.sh', test_file)
+    assert 'test_file' in JM.list_files(JM.apps_dir)
 
     # Test peaking at a file just sent
     first = '#### BEGIN SCRIPT LOGIC'
@@ -96,24 +125,25 @@ def test_files(mfa):
          JM.peak_file('/bad/path')
 
     # Send directory - Now try sending whole assets directory
-    test_folder = '/'.join([JM.apps_dir, 'test_folder'])
-    assert 'test_folder' in JM.send_file('./tests/test_app/assets',
-            '/'.join([JM.apps_dir, 'test_folder']))
-    assert '.hidden_file' not in JM.list_files(path=test_folder)
+    test_folder = JM.apps_dir + '/test_folder'
+    JM.upload('./tests/test_app/assets', test_folder)
+    files = JM.list_files(JM.apps_dir)
+    assert 'test_folder' in files
+    assert '.hidden_file' not in files
 
     # Send directory - Now try sending whole assets directory, include hidden files
     test_folder_hidden = '/'.join([JM.apps_dir, 'test_folder_hidden'])
-    assert 'test_folder_hidden' in JM.send_file('./tests/test_app/assets',
-            '/'.join([JM.apps_dir, 'test_folder_hidden']), exclude_hidden=False)
-    assert '.hidden_file' in JM.list_files(path='/'.join([JM.apps_dir, 'test_folder_hidden']))
+    JM.upload('./tests/test_app/assets', test_folder_hidden)
+    assert 'test_folder_hidden' in JM.list_files(path=JM.apps_dir)
+    assert '.hidden_file' in JM.list_files(path=test_folder_hidden)
 
     # Get test file
-    JM.get_file(test_file, './tests/test_file')
+    JM.download(test_file, './tests/test_file')
     assert os.path.isfile('./tests/test_file')
     os.remove('./tests/test_file')
 
     # Get test folder
-    JM.get_file(test_folder, './tests/test_folder')
+    JM.download(test_folder, './tests/test_folder')
     assert os.path.isdir('./tests/test_folder')
     assert os.path.isfile('./tests/test_folder/run.sh')
     os.system('rm -rf ./tests/test_folder')
@@ -124,17 +154,11 @@ def test_templating(mfa):
     global JM
     _check_init(mfa)
 
-    proj_conf = JM.load_project_config('./tests/test_app/project.ini')
-    assert proj_conf['app']['name']=='test_app'
-    assert proj_conf['app']['version']=='1.0.0'
-    with pytest.raises(FileNotFoundError):
-        JM.load_project_config('./tests/test_app/does_not_exist.ini')
-
-    app_config = JM.load_templated_json_file('./tests/test_app/app.json', proj_conf)
+    proj_conf_path = './tests/test_app/project.ini'
+    app_config = JM.load_templated_json_file('./tests/test_app/app.json', proj_conf_path)
     assert app_config['name']=='test_app--1.0.0'
     with pytest.raises(FileNotFoundError):
-        JM.load_templated_json_file('./tests/test_app/not_found.json', proj_conf)
-
+        JM.load_templated_json_file('./tests/test_app/not_found.json', proj_conf_path)
 
 def test_deploy_app(mfa):
     """Test deploy applications """
