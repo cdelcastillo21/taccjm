@@ -713,6 +713,7 @@ class TACCJobManager():
                         data = json.load(fp)
                     else:
                         data = jc.read(fp)
+            return data
         # TODO: Handle other exceptions?
         except Exception as e:
             msg = f"get_data - Unable to read {data_type} data from {path}."
@@ -808,13 +809,13 @@ class TACCJobManager():
 
         # Get current apps already deployed
         cur_apps = self.get_apps()
-        if appId not in cur_apps:
-            msg = f"get_app - Application {appId} does not exist."
+        if app_id not in cur_apps:
+            msg = f"get_app - Application {app_id} does not exist."
             logger.error(msg)
             raise ValueError(msg)
 
         # Load application config
-        app_config_path = '/'.join([self.apps_dir, appId, 'app.json'])
+        app_config_path = '/'.join([self.apps_dir, app_id, 'app.json'])
         app_config = self.get_data(app_config_path, data_type='json')
 
         return app_config
@@ -939,10 +940,10 @@ class TACCJobManager():
 
         """
         try:
-            job_config_path = '/'.join([self.jobs_dir, job_name, 'job.json'])
-            job_config = self.get_data(path, data_type='json')
+            job_config_path = '/'.join([self.jobs_dir, jobId, 'job.json'])
+            return self.get_data(job_config_path, data_type='json')
         except Exception as e:
-            msg = f"get_job - Unable to load {job_name}"
+            msg = f"get_job - Unable to load {jobId}"
             logger.error(msg)
             raise e
 
@@ -1028,7 +1029,7 @@ class TACCJobManager():
 
     # TODO: Check for required job configurations. Document job_config fields
     def setup_job(self, job_config=None, local_job_dir='.',
-            job_config_file='job.json', proj_config_file="project.ini", stage=False, **kwargs):
+            job_config_file='job.json', proj_config_file="project.ini", stage=True, **kwargs):
         """
         Setup job directory on supercomputing resources. If job_config is not specified, then it is
         parsed from the json file found at local_job_dir/job_config_file, with jinja templated
@@ -1077,14 +1078,18 @@ class TACCJobManager():
         else:
             job_config = self._update_dic_keys(job_config, **kwargs)
 
-        # job_id is name of job folder in jobs_dir
-        job_config['job_id'] = '{job_name}_{ts}'.format(job_name=job_config['name'],
-                ts=datetime.datetime.fromtimestamp(time.time()).strftime('%Y%m%d_%H%M%S'))
-        job_config['job_dir'] = '{job_dir}/{job_id}'.format(job_dir=self.jobs_dir,
-                job_id=job_config['job_id'])
+        if job_config.get('job_id') is None or job_config.get('job_dir') is None:
+            # job_id is name of job folder in jobs_dir
+            job_config['job_id'] = '{job_name}_{ts}'.format(job_name=job_config['name'],
+                    ts=datetime.datetime.fromtimestamp(time.time()).strftime('%Y%m%d_%H%M%S'))
+            job_config['job_dir'] = '{job_dir}/{job_id}'.format(job_dir=self.jobs_dir,
+                    job_id=job_config['job_id'])
+            job_dir_exists = False
+        else:
+            job_dir_exists = True
 
         # Get default arguments from deployed application
-        app_config = self.get_app(job_config['app_id'])
+        app_config = self.get_app(job_config['appId'])
         def _get_attr(j, a):
             # Helper function get attributes for job from app defaults if not present in job config
             if j in job_config.keys():
@@ -1105,8 +1110,10 @@ class TACCJobManager():
             # Stage job inputs -> Actually transfer/write job data to remote system
             try:
                 # Make job directory
-                sftp_ret = self._mkdir(job_config['job_dir'])
-                # TODO: Check return of mkdir?
+                job_dir = job_config['job_dir']
+                if not job_dir_exists:
+                    sftp_ret = self._mkdir(job_dir)
+                    # TODO: Check return of mkdir?
 
                 # Copy app contents to job directory
                 cmnd = 'cp -r {apps_dir}/{app}/* {job_dir}/'.format(apps_dir=self.apps_dir,
@@ -1115,23 +1122,23 @@ class TACCJobManager():
 
                 # Send job input data to job directory
                 for arg, path in job_config['inputs'].items():
-                    self.upload(path, '/'.join([job_config['job_dir'], os.path.basename(path)]))
+                    self.upload(path, '/'.join([job_dir, os.path.basename(path)]))
 
                 # Parse and write submit_script to job_directory
                 submit_script = self.parse_submit_script(job_config)
-                submit_script_path = f"{job_config['job_dir']}/submit_script.sh"
+                submit_script_path = f"{job_dir}/submit_script.sh"
                 self.send_data(submit_script, submit_script_path)
 
                 # chmod submit_scipt 
                 self._execute_command(f"chmod +x {submit_script_path}")
 
                 # Save job config
-                job_config_path = f"{job_config['job_dir']}/job.json"
+                job_config_path = f"{job_dir}/job.json"
                 self.send_data(job_config, job_config_path)
 
             except Exception as e:
                 # If failed to stage job, remove contents that have been staged
-                self._execute_command('rm -rf ' + job_config['job_dir'])
+                self._execute_command('rm -rf ' + job_dir)
                 message = f"stage_job - Error staging: {e}."
                 logger.error(message)
                 raise e
@@ -1309,21 +1316,21 @@ class TACCJobManager():
         job_folder = '/'.join(path.split('/')[:-1])
 
         # Make sure job file/folder exists
-        files = self.ls_job(job_id, path=job_folder)
+        files = self.ls_job(jobId, path=job_folder)
         if fname not in files:
-            msg = f"Unable to find job file {path} for job {job_id}."
+            msg = f"Unable to find job file {path} for job {jobId}."
             logger.error(msg)
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), path)
 
         # Make local data directory if it doesn't exist already
-        local_data_dir = os.path.join(dest_dir, job_id)
+        local_data_dir = os.path.join(dest_dir, jobId)
         os.makedirs(local_data_dir, exist_ok=True)
 
         # Get file
-        src_path = '/'.join([self.jobs_dir, job_id, path])
+        src_path = '/'.join([self.jobs_dir, jobId, path])
         dest_path = os.path.join(local_data_dir, fname)
         try:
-            self.get_file(src_path, dest_path)
+            self.download(src_path, dest_path)
         except Exception as e:
             msg = f"Unable to download job file {src_path} to {dest_path}"
             logger.error(msg)
