@@ -1344,7 +1344,7 @@ class TACCJobManager():
             fname = os.path.basename(os.path.normpath(fpath))
             dest_path = '/'.join([self.jobs_dir, job_id, dest_dir, fname])
 
-            self.send_data(fpath, dest_path)
+            self.upload(fpath, dest_path)
         except Exception as e:
             msg = f"Unable to send file {fpath} to destination destination {dest_path}"
             logger.error(msg)
@@ -1384,7 +1384,6 @@ class TACCJobManager():
         if ext == "py":
             # assume Python3
             python_path = self._execute_command("module load python3 > /dev/null; which python3")
-            print("Python Path:", python_path)
             with open(local_fname, 'r') as fp:
                 script = fp.read()
 

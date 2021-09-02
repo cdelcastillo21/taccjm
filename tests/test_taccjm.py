@@ -260,11 +260,12 @@ def test_jobs(mfa):
     assert 'test_send_file' in job_files
 
     # Fail to send job file
-    #with pytest.raises(Exception) as e:
-    bad_send = JM.send_job_data(job_config['job_id'], './tests/bad_file', dest_dir='.')
+    with pytest.raises(Exception) as e:
+        bad_send = JM.send_job_data(job_config['job_id'], './tests/bad_file', dest_dir='.')
 
     # Peak at job we just sent
     input_file_text = JM.peak_job_file(job_config['job_id'], 'test_send_file')
+
     assert input_file_text=="hello\nagain\n"
 
     # Fail to submit job because SLURM error
