@@ -103,14 +103,14 @@ def test_files(mfa):
     _check_init(mfa)
 
     # List files in path that exists and doesnt exist
-    assert 'test-taccjm-apps' in JM.list_files()
-    with pytest.raises(FileNotFoundError):
+    assert 'test-taccjm-apps' in JM.list_files(JM.scratch_dir)
+    with pytest.raises(TJMCommandError):
          JM.list_files('/bad/path')
 
     # Send file - Try sending test application script to apps directory
     test_file = '/'.join([JM.apps_dir, 'test_file'])
-    assert 'test_file' in JM.send_file('./tests/test_app/assets/run.sh',
-            test_file)
+    JM.upload('./tests/test_app/assets/run.sh', test_file)
+    assert 'test_file' in JM.list_files(JM.apps_dir)
 
     # Test peaking at a file just sent
     first = '#### BEGIN SCRIPT LOGIC'
@@ -125,24 +125,25 @@ def test_files(mfa):
          JM.peak_file('/bad/path')
 
     # Send directory - Now try sending whole assets directory
-    test_folder = '/'.join([JM.apps_dir, 'test_folder'])
-    assert 'test_folder' in JM.send_file('./tests/test_app/assets',
-            '/'.join([JM.apps_dir, 'test_folder']))
-    assert '.hidden_file' not in JM.list_files(path=test_folder)
+    test_folder = JM.apps_dir + '/test_folder'
+    JM.upload('./tests/test_app/assets', test_folder)
+    files = JM.list_files(JM.apps_dir)
+    assert 'test_folder' in files
+    assert '.hidden_file' not in files
 
     # Send directory - Now try sending whole assets directory, include hidden files
     test_folder_hidden = '/'.join([JM.apps_dir, 'test_folder_hidden'])
-    assert 'test_folder_hidden' in JM.send_file('./tests/test_app/assets',
-            '/'.join([JM.apps_dir, 'test_folder_hidden']), exclude_hidden=False)
-    assert '.hidden_file' in JM.list_files(path='/'.join([JM.apps_dir, 'test_folder_hidden']))
+    JM.upload('./tests/test_app/assets', test_folder_hidden)
+    assert 'test_folder_hidden' in JM.list_files(path=JM.apps_dir)
+    assert '.hidden_file' in JM.list_files(path=test_folder_hidden)
 
     # Get test file
-    JM.get_file(test_file, './tests/test_file')
+    JM.download(test_file, './tests/test_file')
     assert os.path.isfile('./tests/test_file')
     os.remove('./tests/test_file')
 
     # Get test folder
-    JM.get_file(test_folder, './tests/test_folder')
+    JM.download(test_folder, './tests/test_folder')
     assert os.path.isdir('./tests/test_folder')
     assert os.path.isfile('./tests/test_folder/run.sh')
     os.system('rm -rf ./tests/test_folder')
@@ -153,17 +154,11 @@ def test_templating(mfa):
     global JM
     _check_init(mfa)
 
-    proj_conf = JM.load_project_config('./tests/test_app/project.ini')
-    assert proj_conf['app']['name']=='test_app'
-    assert proj_conf['app']['version']=='1.0.0'
-    with pytest.raises(FileNotFoundError):
-        JM.load_project_config('./tests/test_app/does_not_exist.ini')
-
-    app_config = JM.load_templated_json_file('./tests/test_app/app.json', proj_conf)
+    proj_conf_path = './tests/test_app/project.ini'
+    app_config = JM.load_templated_json_file('./tests/test_app/app.json', proj_conf_path)
     assert app_config['name']=='test_app--1.0.0'
     with pytest.raises(FileNotFoundError):
-        JM.load_templated_json_file('./tests/test_app/not_found.json', proj_conf)
-
+        JM.load_templated_json_file('./tests/test_app/not_found.json', proj_conf_path)
 
 def test_deploy_app(mfa):
     """Test deploy applications """
@@ -171,7 +166,7 @@ def test_deploy_app(mfa):
     _check_init(mfa)
 
     # Test deploying app when sending files to system is failing
-    with patch.object(TACCJobManager, 'send_file', side_effect=Exception('Mock file send error')):
+    with patch.object(TACCJobManager, 'upload', side_effect=Exception('Mock file send error')):
         with pytest.raises(Exception) as e:
             bad_deploy = JM.deploy_app(local_app_dir='./tests/test_app', overwrite=True)
     # Test deploying app with bad config (missing required config)
@@ -187,20 +182,6 @@ def test_deploy_app(mfa):
     with pytest.raises(Exception):
         test_app = JM.deploy_app(local_app_dir='./tests/test_app')
 
-    # Get the wrapper script
-    wrapper_script = JM.get_app_wrapper_script(test_app['name'])
-    assert "${command} ${command_opts} >>out.txt 2>&1" in wrapper_script
-
-    # Get wrapper script for bad app
-    with pytest.raises(FileNotFoundError) as e:
-        wrapper_script = JM.get_app_wrapper_script('bad_app')
-
-    # Load the app config, it should match
-    loaded_config = JM.load_app_config(test_app['name'])
-    assert loaded_config==test_app
-    with pytest.raises(Exception):
-        JM.load_app_config('does_not_exist')
-
 
 def test_jobs(mfa):
     """Test setting up a job."""
@@ -214,7 +195,8 @@ def test_jobs(mfa):
     test_config = JM.setup_job(local_job_dir='./tests/test_app',
             job_config_file='job.json', stage=False)
     assert test_config['appId']=='test_app--1.0.0'
-    assert 'job_id' not in test_config.keys()
+    # We didn't stage the inputs, so this should hold
+    assert test_config['job_id'] not in JM.get_jobs()
 
     # Now try setting up test job
     job_config = JM.setup_job(local_job_dir='./tests/test_app', job_config_file='job.json')
@@ -224,25 +206,20 @@ def test_jobs(mfa):
     jobs = JM.get_jobs()
     assert job_config['job_id'] in jobs
 
-    # Fail setting up job -> Mock stage_job to fail
-    with patch.object(TACCJobManager, 'stage_job',
-            side_effect=Exception('Mock stage_job error')):
-        with pytest.raises(Exception) as e:
-            job_config = JM.setup_job(local_job_dir='./tests/test_app', job_config_file='job.json')
     # Fail setting up job -> Sending input file fails
-    with patch.object(TACCJobManager, 'send_file',
-            side_effect=Exception('Mock send_file error')):
+    with patch.object(TACCJobManager, 'upload',
+            side_effect=Exception('Mock upload file error')):
         with pytest.raises(Exception) as e:
             job_config = JM.setup_job(local_job_dir='./tests/test_app', job_config_file='job.json')
 
     # Update job config to include email and allocation
-    job_config = JM.stage_job(job_config['job_id'],
+    job_config = JM.setup_job(job_config,
             email="test@test.com", allocation=ALLOCATION)
     assert job_config['email']=="test@test.com"
     assert job_config['allocation']==ALLOCATION
 
     # Get job config now, should be updated
-    new_job_config = JM.load_job(job_config['job_id'])
+    new_job_config = JM.get_job(job_config['job_id'])
     assert new_job_config['email']=="test@test.com"
     assert new_job_config['allocation']==ALLOCATION
 
@@ -254,40 +231,41 @@ def test_jobs(mfa):
 
     # Fail to load job config -> Example: bad job id
     with pytest.raises(Exception) as e:
-        bad_job = JM.load_job('bad_job')
+        bad_job = JM.get_job('bad_job')
 
     # Get input job file from job with input file
-    input_file_path = JM.get_job_file(job_config['job_id'], 'test_input_file',
+    input_file_path = JM.get_job_data(job_config['job_id'], 'test_input_file',
             dest_dir='./tests')
     with open(input_file_path, 'r') as f:
         assert f.read()=="hello\nworld\n"
 
     # Get job file that doesn't exist
     with pytest.raises(Exception) as e:
-        bad_file = JM.get_job_file(job_config['job_id'], 'bad_file')
+        bad_file = JM.get_job_data(job_config['job_id'], 'bad_file')
 
     # Fail to get job file (some download error maybe)
-    with patch.object(TACCJobManager, 'get_file',
-            side_effect=Exception('Mock get_file error')):
+    with patch.object(TACCJobManager, 'download',
+            side_effect=Exception('Mock download file error')):
         with pytest.raises(Exception) as e:
-            bad_file = JM.get_job_file(job_config['job_id'], 'test_input_file', dest_dir='./tests')
+            bad_file = JM.get_job_data(job_config['job_id'], 'test_input_file', dest_dir='./tests')
 
     # Cleanup files just downloaded
     os.remove(input_file_path)
     os.rmdir(os.path.join('.', 'tests', job_config['job_id']))
 
     # Send job file
-    sent_file_path = JM.send_job_file(job_config['job_id'],
+    sent_file_path = JM.send_job_data(job_config['job_id'],
             './tests/test_send_file', dest_dir='.')
     job_files = JM.ls_job(job_config['job_id'])
     assert 'test_send_file' in job_files
 
     # Fail to send job file
     with pytest.raises(Exception) as e:
-        bad_send = JM.send_job_file(job_config['job_id'], './tests/bad_file', dest_dir='.')
+        bad_send = JM.send_job_data(job_config['job_id'], './tests/bad_file', dest_dir='.')
 
     # Peak at job we just sent
     input_file_text = JM.peak_job_file(job_config['job_id'], 'test_send_file')
+
     assert input_file_text=="hello\nagain\n"
 
     # Fail to submit job because SLURM error

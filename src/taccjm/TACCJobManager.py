@@ -24,6 +24,7 @@ import time                     # Time functions
 import logging                  # Used to setup the Paramiko log file
 import datetime                 # Date time functionality
 import configparser             # For reading configs
+import stat                     # For determining if remote paths are directories
 from jinja2 import Template     # For templating input json files
 
 # Modified paramiko ssh client and common paramiko exceptions
@@ -169,7 +170,7 @@ class TACCJobManager():
 
         # Get taccjm working directory, relative to users scratch directory
         logger.info("Resolving SCRATCH directory path ${self.SCRATCH_DIR} for user {self.user}")
-        scratch_dir = self._execute_command(f"echo {self.SCRATCH_DIR}").strip()
+        self.scratch_dir = scratch_dir = self._execute_command(f"echo {self.SCRATCH_DIR}").strip()
         taccjm_dir = posixpath.join(scratch_dir, working_dir)
 
         # Initialze jobs, apps, scripts, and trash dirs
@@ -412,7 +413,6 @@ class TACCJobManager():
         files.sort()
         return files
 
-
     def peak_file(self, path, head=-1, tail=-1):
         """
         Performs head/tail on file at given path to "peak" at file.
@@ -455,7 +455,7 @@ class TACCJobManager():
             cmnd = f"head {path}"
         try:
             ret = self._execute_command(cmnd)
-        except TJMCommandErrror as t:
+        except TJMCommandError as t:
             if 'Permission denied' in t.stderr:
                 msg = f"peak_file - Dont have permission to access {path}"
                 raise PermissionError(errno.EACCES, msg, path)
@@ -515,8 +515,7 @@ class TACCJobManager():
 
         """
         # Unix paths -> Get file remote file name and directory
-        remote_fname = '/'.join(remote.strip('/').split('/')[-1:])
-        remote_dir = '/'.join(remote.strip('/').split('/')[:-1])
+        remote_dir, remote_fname = os.path.split(remote)
         remote_dir = '.' if remote_dir=='' else remote_dir
 
         try:
@@ -528,7 +527,7 @@ class TACCJobManager():
 
                 # Package tar file -> Recursive call
                 with tarfile.open(local_tar_file, "w:gz") as tar:
-                    f = lambda x : x if fnmatch.fnmatch(x, file_filter) else None
+                    f = lambda x : x if fnmatch.fnmatch(x.name, file_filter) else None
                     tar.add(local, arcname=remote_fname, filter=f)
 
                 # Send tar file
@@ -554,26 +553,26 @@ class TACCJobManager():
             else:
                 raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), local)
         except FileNotFoundError as f:
-            msg = f"send_file - No such file or folder {f.filename}."
+            msg = f"upload - No such file or folder {f.filename}."
             logger.error(msg)
             raise FileNotFoundError(errno.ENOENT, msg, f.filename)
         except PermissionError as p:
-            msg = f"send_file - Permission denied on {p.filename}"
+            msg = f"upload - Permission denied on {p.filename}"
             logger.error(msg)
             raise PermissionError(errno.EACCES, msg, p.filename)
-        except TJMCommandErrror as t:
-            t.message = f"send_file - Error unpacking tar file in remote directory"
+        except TJMCommandError as t:
+            t.message = f"upload - Error unpacking tar file in remote directory"
             logger.error(t.message)
             raise t
         except Exception as e:
-            msg = f"send_file - Unexepcted error {e.__str__()}"
+            msg = f"upload - Unexpected error {e.__str__()}"
             logger.error(msg)
             raise e
 
 
     def download(self, remote, local, file_filter='*'):
         """
-        Downloads file or folder from remote path on TACC resoirce to local path. If a
+        Downloads file or folder from remote path on TACC resource to local path. If a
         file is specified, the local path is the destination path of the file to be
         downloaded If a folder is specified, all folder contents (recursive) are
         compressed into a .tar.gz file before being downloaded and the contents are
@@ -614,37 +613,23 @@ class TACCJobManager():
 
         """
 
-        is_dir = True
         local = local.rstrip('/')
-        try:
-            # Below command is a way of checking if file is a directory, if it is,
-            # It will proceed with tar-ing the file. If not we should get an error
-            fname = os.path.basename(remote)
-            cmd = f"cd {remote}" + "/.. && { tar -czvf " + f"{fname}.tar.gz {fname}" +"; }"
-            self._execute_command(cmd)
-
-            # Transfering tar file instead
-            local_dir = os.path.abspath(os.path.join(local, os.pardir))
-            local = f"{local_dir}/{fname}.tar.gz"
-            remote = f"{remote}.tar.gz"
-        except TJMCommandErrror as t:
-            if 'Not a directory' in t.stderr:
-                # Could still be a file, continue
-                is_dir = False
-                pass
-            elif 'Permission denied' in t.stderr:
-                msg = f"download - Permission denied on {remote}"
-                logger.error(msg)
-                raise PermissionError(errno.EACCES, msg, remote)
-            else:
-                t.message = f"download - Error compressing data to download."
-                logger.error(t.message)
-                raise t
-
-        # Transfer the data
+        remote = remote.rstrip('/')
         try:
             with self._client.open_sftp() as sftp:
-                sftp.get(local, remote)
+                fileattr = sftp.stat(remote)
+                is_dir = stat.S_ISDIR(fileattr.st_mode)
+                if is_dir:
+                    dirname, fname = os.path.split(remote)
+                    self._execute_command(f"cd {dirname} && tar -czvf {fname}.tar.gz {fname}")
+                    local_dir = os.path.abspath(os.path.join(local, os.pardir))
+                    local = f"{local_dir}/{fname}.tar.gz"
+                    remote = f"{dirname}/{fname}.tar.gz"
+                sftp.get(remote, local)
+                if is_dir:
+                    with tarfile.open(local) as tar:
+                        tar.extractall(path=os.path.dirname(local))
+                    os.remove(local)
         except FileNotFoundError as f:
             msg = f"download - No such file or folder {f.filename}."
             logger.error(msg)
@@ -653,15 +638,6 @@ class TACCJobManager():
             msg = f"download - Permission denied on {p.filename}"
             logger.error(msg)
             raise PermissionError(errno.EACCES, msg, p.filename)
-        except Exception as e:
-            msg = f"download - Unknown error downloading data via sftp."
-            logger.error(t.message)
-            raise e
-
-        if is_dir:
-            with tarfile.open(local) as tar:
-                tar.extractall(path=local)
-            os.remove(local)
 
 
     # TODO: Implement sending pickled data?
@@ -737,6 +713,7 @@ class TACCJobManager():
                         data = json.load(fp)
                     else:
                         data = jc.read(fp)
+            return data
         # TODO: Handle other exceptions?
         except Exception as e:
             msg = f"get_data - Unable to read {data_type} data from {path}."
@@ -783,7 +760,7 @@ class TACCJobManager():
             json_config = json.loads(Template(file_.read()).render(config))
 
         # Treat kwargs as override parameters
-        json_config = self._update_dic_keys(json_config, kwargs)
+        json_config = self._update_dic_keys(json_config, **kwargs)
 
         # Return json_config
         return json_config
@@ -832,13 +809,13 @@ class TACCJobManager():
 
         # Get current apps already deployed
         cur_apps = self.get_apps()
-        if appId not in cur_apps:
-            msg = f"get_app - Application {appId} does not exist."
+        if app_id not in cur_apps:
+            msg = f"get_app - Application {app_id} does not exist."
             logger.error(msg)
             raise ValueError(msg)
 
         # Load application config
-        app_config_path = '/'.join([self.apps_dir, appId, 'app.json'])
+        app_config_path = '/'.join([self.apps_dir, app_id, 'app.json'])
         app_config = self.get_data(app_config_path, data_type='json')
 
         return app_config
@@ -963,10 +940,10 @@ class TACCJobManager():
 
         """
         try:
-            job_config_path = '/'.join([self.jobs_dir, job_name, 'job.json'])
-            job_config = self.get_data(path, data_type='json')
+            job_config_path = '/'.join([self.jobs_dir, jobId, 'job.json'])
+            return self.get_data(job_config_path, data_type='json')
         except Exception as e:
-            msg = f"get_job - Unable to load {job_name}"
+            msg = f"get_job - Unable to load {jobId}"
             logger.error(msg)
             raise e
 
@@ -1052,7 +1029,7 @@ class TACCJobManager():
 
     # TODO: Check for required job configurations. Document job_config fields
     def setup_job(self, job_config=None, local_job_dir='.',
-            job_config_file='job.json', proj_config_file="project.ini", stage=False, **kwargs):
+            job_config_file='job.json', proj_config_file="project.ini", stage=True, **kwargs):
         """
         Setup job directory on supercomputing resources. If job_config is not specified, then it is
         parsed from the json file found at local_job_dir/job_config_file, with jinja templated
@@ -1101,14 +1078,18 @@ class TACCJobManager():
         else:
             job_config = self._update_dic_keys(job_config, **kwargs)
 
-        # job_id is name of job folder in jobs_dir
-        job_config['job_id'] = '{job_name}_{ts}'.format(job_name=job_config['name'],
-                ts=datetime.datetime.fromtimestamp(time.time()).strftime('%Y%m%d_%H%M%S'))
-        job_config['job_dir'] = '{job_dir}/{job_id}'.format(job_dir=self.jobs_dir,
-                job_id=job_config['job_id'])
+        if job_config.get('job_id') is None or job_config.get('job_dir') is None:
+            # job_id is name of job folder in jobs_dir
+            job_config['job_id'] = '{job_name}_{ts}'.format(job_name=job_config['name'],
+                    ts=datetime.datetime.fromtimestamp(time.time()).strftime('%Y%m%d_%H%M%S'))
+            job_config['job_dir'] = '{job_dir}/{job_id}'.format(job_dir=self.jobs_dir,
+                    job_id=job_config['job_id'])
+            job_dir_exists = False
+        else:
+            job_dir_exists = True
 
         # Get default arguments from deployed application
-        app_config = self.get_app(job_config['app_id'])
+        app_config = self.get_app(job_config['appId'])
         def _get_attr(j, a):
             # Helper function get attributes for job from app defaults if not present in job config
             if j in job_config.keys():
@@ -1129,8 +1110,10 @@ class TACCJobManager():
             # Stage job inputs -> Actually transfer/write job data to remote system
             try:
                 # Make job directory
-                sftp_ret = self._mkdir(job_config['job_dir'])
-                # TODO: Check return of mkdir?
+                job_dir = job_config['job_dir']
+                if not job_dir_exists:
+                    sftp_ret = self._mkdir(job_dir)
+                    # TODO: Check return of mkdir?
 
                 # Copy app contents to job directory
                 cmnd = 'cp -r {apps_dir}/{app}/* {job_dir}/'.format(apps_dir=self.apps_dir,
@@ -1139,23 +1122,23 @@ class TACCJobManager():
 
                 # Send job input data to job directory
                 for arg, path in job_config['inputs'].items():
-                    self.upload(path, '/'.join([job_config['job_dir'], os.path.basename(path)]))
+                    self.upload(path, '/'.join([job_dir, os.path.basename(path)]))
 
                 # Parse and write submit_script to job_directory
                 submit_script = self.parse_submit_script(job_config)
-                submit_script_path = f"{job_config['job_dir']}/submit_script.sh"
+                submit_script_path = f"{job_dir}/submit_script.sh"
                 self.send_data(submit_script, submit_script_path)
 
                 # chmod submit_scipt 
                 self._execute_command(f"chmod +x {submit_script_path}")
 
                 # Save job config
-                job_config_path = f"{job_config['job_dir']}/job.json"
+                job_config_path = f"{job_dir}/job.json"
                 self.send_data(job_config, job_config_path)
 
             except Exception as e:
                 # If failed to stage job, remove contents that have been staged
-                self._execute_command('rm -rf ' + job_config['job_dir'])
+                self._execute_command('rm -rf ' + job_dir)
                 message = f"stage_job - Error staging: {e}."
                 logger.error(message)
                 raise e
@@ -1333,21 +1316,21 @@ class TACCJobManager():
         job_folder = '/'.join(path.split('/')[:-1])
 
         # Make sure job file/folder exists
-        files = self.ls_job(job_id, path=job_folder)
+        files = self.ls_job(jobId, path=job_folder)
         if fname not in files:
-            msg = f"Unable to find job file {path} for job {job_id}."
+            msg = f"Unable to find job file {path} for job {jobId}."
             logger.error(msg)
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), path)
 
         # Make local data directory if it doesn't exist already
-        local_data_dir = os.path.join(dest_dir, job_id)
+        local_data_dir = os.path.join(dest_dir, jobId)
         os.makedirs(local_data_dir, exist_ok=True)
 
         # Get file
-        src_path = '/'.join([self.jobs_dir, job_id, path])
+        src_path = '/'.join([self.jobs_dir, jobId, path])
         dest_path = os.path.join(local_data_dir, fname)
         try:
-            self.get_file(src_path, dest_path)
+            self.download(src_path, dest_path)
         except Exception as e:
             msg = f"Unable to download job file {src_path} to {dest_path}"
             logger.error(msg)
@@ -1361,7 +1344,7 @@ class TACCJobManager():
             fname = os.path.basename(os.path.normpath(fpath))
             dest_path = '/'.join([self.jobs_dir, job_id, dest_dir, fname])
 
-            self.send_data(fpath, dest_path)
+            self.upload(fpath, dest_path)
         except Exception as e:
             msg = f"Unable to send file {fpath} to destination destination {dest_path}"
             logger.error(msg)
@@ -1401,7 +1384,6 @@ class TACCJobManager():
         if ext == "py":
             # assume Python3
             python_path = self._execute_command("module load python3 > /dev/null; which python3")
-            print("Python Path:", python_path)
             with open(local_fname, 'r') as fp:
                 script = fp.read()
 
@@ -1409,7 +1391,7 @@ class TACCJobManager():
                 with sftp.open(remote_path, "w") as fp:
                     fp.write("#!" + python_path + "\n" + script)
         else:
-            self.send_file(local_fname, remote_path)
+            self.upload(local_fname, remote_path)
          
         self._execute_command(f"chmod +x {remote_path}")
 
