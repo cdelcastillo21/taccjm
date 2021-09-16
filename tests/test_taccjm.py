@@ -2,11 +2,6 @@
 Tests for TACC JobManager Class
 
 
-Note:
-
-
-References:
-
 """
 import os
 import pdb
@@ -234,34 +229,34 @@ def test_jobs(mfa):
         bad_job = JM.get_job('bad_job')
 
     # Get input job file from job with input file
-    input_file_path = JM.get_job_data(job_config['job_id'], 'test_input_file',
+    input_file_path = JM.download_job_data(job_config['job_id'], 'test_input_file',
             dest_dir='./tests')
     with open(input_file_path, 'r') as f:
         assert f.read()=="hello\nworld\n"
 
     # Get job file that doesn't exist
     with pytest.raises(Exception) as e:
-        bad_file = JM.get_job_data(job_config['job_id'], 'bad_file')
+        bad_file = JM.download_job_data(job_config['job_id'], 'bad_file')
 
     # Fail to get job file (some download error maybe)
     with patch.object(TACCJobManager, 'download',
             side_effect=Exception('Mock download file error')):
         with pytest.raises(Exception) as e:
-            bad_file = JM.get_job_data(job_config['job_id'], 'test_input_file', dest_dir='./tests')
+            bad_file = JM.download_job_data(job_config['job_id'], 'test_input_file', dest_dir='./tests')
 
     # Cleanup files just downloaded
     os.remove(input_file_path)
     os.rmdir(os.path.join('.', 'tests', job_config['job_id']))
 
     # Send job file
-    sent_file_path = JM.send_job_data(job_config['job_id'],
+    sent_file_path = JM.upload_job_data(job_config['job_id'],
             './tests/test_send_file', dest_dir='.')
     job_files = JM.ls_job(job_config['job_id'])
     assert 'test_send_file' in job_files
 
     # Fail to send job file
     with pytest.raises(Exception) as e:
-        bad_send = JM.send_job_data(job_config['job_id'], './tests/bad_file', dest_dir='.')
+        bad_send = JM.upload_job_data(job_config['job_id'], './tests/bad_file', dest_dir='.')
 
     # Peak at job we just sent
     input_file_text = JM.peak_job_file(job_config['job_id'], 'test_send_file')
