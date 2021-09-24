@@ -1,9 +1,7 @@
 """
-TACCJM Hug Client
+TACCJM Client
 
 Client for managing TACCJM servers and accessing TACCJM API end points.
-
-
 """
 import os
 import pdb
@@ -47,7 +45,7 @@ def kill_server():
     global TACCJM_HOST, TACCJM_PORT
 
     # Search for server process
-    server_start_cmd = f"hug -ho {TACCJM_HOST} -p {TACJM_PORT} -f taccjm_server.py"
+    server_start_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f taccjm_server.py"
     server_proc = search_for_proc(server_start_cmd)
     if server_proc!=None:
         # kill server
@@ -74,7 +72,7 @@ def check_start_server():
     heartbeat_log = os.path.join(TACCJM_DIR, f"taccjm_heartbeat_{TACCJM_HOST}_{TACCJM_PORT}.log")
 
     # Search for server process
-    server_start_cmd = f"hug -ho {TACCJM_HOST} -p {TACJM_PORT} -f taccjm_server.py"
+    server_start_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f taccjm_server.py"
     server_proc = search_for_proc(server_start_cmd)
     if server_proc==None:
         # Start server
@@ -347,6 +345,6 @@ def list_jm():
 #   return res['res']
 # 
 
-logger = logging.getLogger()
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+# logging.basicConfig(level=logging.INFO)
 set_host()

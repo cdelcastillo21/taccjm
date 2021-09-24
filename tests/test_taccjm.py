@@ -233,6 +233,7 @@ def test_jobs(mfa):
             dest_dir='./tests')
     with open(input_file_path, 'r') as f:
         assert f.read()=="hello\nworld\n"
+    os.remove('./tests/test_input_file')
 
     # Get job file that doesn't exist
     with pytest.raises(Exception) as e:
@@ -248,20 +249,20 @@ def test_jobs(mfa):
     os.remove(input_file_path)
     os.rmdir(os.path.join('.', 'tests', job_config['job_id']))
 
-    # Send job file
+    # Send file - Try sending this script to job directory
     sent_file_path = JM.upload_job_data(job_config['job_id'],
-            './tests/test_send_file', dest_dir='.')
+        './tests/test_taccjm.py', dest_dir='.')
     job_files = JM.ls_job(job_config['job_id'])
-    assert 'test_send_file' in job_files
+    assert 'test_taccjm.py' in job_files
 
     # Fail to send job file
     with pytest.raises(Exception) as e:
         bad_send = JM.upload_job_data(job_config['job_id'], './tests/bad_file', dest_dir='.')
 
-    # Peak at job we just sent
-    input_file_text = JM.peak_job_file(job_config['job_id'], 'test_send_file')
+    # Peak at job we just sent (this script, should start with a comment line)
+    input_file_text = JM.peak_job_file(job_config['job_id'], 'test_taccjm.py')
+    assert input_file_text.startswith('"""')
 
-    assert input_file_text=="hello\nagain\n"
 
     # Fail to submit job because SLURM error
     with patch.object(TACCJobManager, '_execute_command',
