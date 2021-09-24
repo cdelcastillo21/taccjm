@@ -644,7 +644,81 @@ class TACCJobManager():
             raise PermissionError(errno.EACCES, msg, p.filename)
 
 
-    # TODO: Implement sending pickled data?
+    def remove(self, remote_path):
+        """
+        'Removes' a file/folder by moving it to the trash directory. Trash should be emptied
+        out preiodically with `empty_trash()` method. Can also restore file `restore(path)` method.
+
+
+        Parameters
+        ----------
+        remote_path : str
+            Unix-style path for the file/folder to send to trash. Relative to home directory
+            for user on TACC system if not an absolute path.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        FileNotFoundError
+            If local file/folder does not exist, or remote destination path
+            is invalid does not exist.
+        PermissionError
+            If user does not have permission to modify specified remote path
+        TJMCommandError
+            If a directory is being sent, this error is thrown if there are any
+            issues unpacking the sent .tar.gz file in the destination directory.
+
+        """
+        # Unix paths -> Get file remote file name and directory
+        file_name = remote_path.replace('/','___')
+        trash_path = f"{self.trash_dir}/{file_name}"
+        abs_remote_path = '~/' + remote_path if remote_path[0]!='/' else remote_path
+
+        cmnd = f"mv {abs_remote_path} {trash_path}"
+        try:
+            ret = self._execute_command(cmnd)
+        except TJMCommandError as tjm_error:
+            tjm_error.message = f"remove - Unable to remove {remote_path}"
+            logger.error(tjm_error.message)
+            raise tjm_error
+
+
+    def restore(self, remote_path):
+        """
+        Restores a file/folder from the trash directory by moving it back to its original path.
+
+        Parameters
+        ----------
+        remote_path : str
+            Unix-style path of the file/folder that should not exist anymore to restore.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        FileNotFoundError
+            If the `remote_path` to restore does not exist in trash directory anymore, or loacation:
+            where remote_path needs to be restored to does not exist anymore.
+        """
+        # Unix paths -> Get file remote file name and directory
+        file_name = remote_path.replace('/','___')
+        trash_path = f"{self.trash_dir}/{file_name}"
+        abs_remote_path = '~/' + remote_path if remote_path[0]!='/' else remote_path
+
+        cmnd = f"mv {trash_path} {abs_remote_path}"
+        try:
+            ret = self._execute_command(cmnd)
+        except TJMCommandError as tjm_error:
+            tjm_error.message = f"remove - Unable to restore {remote_path}"
+            logger.error(tjm_error.message)
+            raise tjm_error
+
+
     def send_data(self, data, path):
         """
         Send `data` directly to path via an sftp file stream. Supported data types are:
@@ -674,14 +748,20 @@ class TACCJobManager():
                         json.dump(data, jc)
                     else:
                         jc.write(data)
-        # TODO: Handle other exceptions?
+        except FileNotFoundError as f:
+            msg = f"send_data - No such file or folder {f.filename}."
+            logger.error(msg)
+            raise FileNotFoundError(errno.ENOENT, msg, f.filename)
+        except PermissionError as p:
+            msg = f"send_data - Permission denied on {p.filename}"
+            logger.error(msg)
+            raise PermissionError(errno.EACCES, msg, p.filename)
         except Exception as e:
-            msg = f"Unable to write {d_type} data to {path}"
+            msg = f"sed_data - Unknown error when trying to write {d_type} data to {path}: {e}"
             logger.error(msg)
             raise e
 
 
-    # TODO: Implement getting pickled data?
     def get_data(self, path, data_type='text'):
         """
         Get data of `data_type` in file `path` on remote TACC system directly
@@ -716,11 +796,18 @@ class TACCJobManager():
                     if data_type=='json':
                         data = json.load(fp)
                     else:
-                        data = jc.read(fp)
+                        data = fp.read().decode('UTF-8')
             return data
-        # TODO: Handle other exceptions?
+        except FileNotFoundError as f:
+            msg = f"get_data - No such file or folder {f.filename}."
+            logger.error(msg)
+            raise FileNotFoundError(errno.ENOENT, msg, f.filename)
+        except PermissionError as p:
+            msg = f"get_data - Permission denied on {p.filename}"
+            logger.error(msg)
+            raise PermissionError(errno.EACCES, msg, p.filename)
         except Exception as e:
-            msg = f"get_data - Unable to read {data_type} data from {path}."
+            msg = f"get_data - Unknown error when trying to get {data_type} data from {path}: {e}"
             logger.error(msg)
             raise e
 

@@ -143,6 +143,75 @@ def test_files(mfa):
     assert os.path.isfile('./tests/test_folder/run.sh')
     os.system('rm -rf ./tests/test_folder')
 
+    # Remove file - Remove file initially sent (test application script in apps directory)
+    test_file = '/'.join([JM.apps_dir, 'test_file'])
+    trash_file = test_file.replace('/','___')
+    JM.remove(test_file)
+    assert 'test_file' not in JM.list_files(JM.apps_dir)
+    assert trash_file in JM.list_files(JM.trash_dir)
+
+    # Restore file removed
+    test_file = '/'.join([JM.apps_dir, 'test_file'])
+    JM.restore(test_file)
+    assert 'test_file' in JM.list_files(JM.apps_dir)
+
+    # Now try to remove files that don't exist and don't have permission to. Should throw errors
+    with pytest.raises(Exception):
+         JM.remove('/does/not/exist')
+    with pytest.raises(Exception):
+         JM.remove('/tmp')
+
+
+def test_data(mfa):
+    """Test sending and receiving data."""
+    global JM
+
+    _check_init(mfa)
+
+    # Send text and json data
+    JM.send_data('foo','test_text_data')
+    JM.send_data({'foo':'bar'},'test_json_data')
+    files = JM.list_files()
+    assert 'test_text_data' in files and 'test_json_data' in files
+
+    # Read text and json data
+    text_data = JM.get_data('test_text_data', 'text')
+    json_data = JM.get_data('test_json_data', 'json')
+    assert text_data=='foo'
+    assert json_data=={'foo':'bar'}
+
+    # Send bad data type, and data to non-existant path, or path where we have no permission
+    with pytest.raises(ValueError):
+        JM.send_data(['foo'],'foo')
+    with patch.object(SSHClient2FA, 'open_sftp',
+            side_effect=FileNotFoundError('Mock file not found')):
+        with pytest.raises(FileNotFoundError):
+            JM.send_data('foo', '/does/not/exist')
+    with patch.object(SSHClient2FA, 'open_sftp',
+            side_effect=PermissionError('Mock file permission')):
+        with pytest.raises(PermissionError):
+            JM.send_data('foo', '/canthere')
+    with patch.object(SSHClient2FA, 'open_sftp',
+            side_effect=Exception('Mock other error')):
+        with pytest.raises(Exception):
+            JM.send_data('foo', '/other')
+
+    # Get data from non-existant path, or path where we have no permission
+    with pytest.raises(ValueError):
+        JM.send_data('foo', data_type='bad-type')
+    with patch.object(SSHClient2FA, 'open_sftp',
+            side_effect=FileNotFoundError('Mock file not found')):
+        with pytest.raises(FileNotFoundError):
+            JM.get_data('/does/not/exist')
+    with patch.object(SSHClient2FA, 'open_sftp',
+            side_effect=PermissionError('Mock file permission')):
+        with pytest.raises(PermissionError):
+            JM.get_data('/canthere')
+    with patch.object(SSHClient2FA, 'open_sftp',
+            side_effect=Exception('Mock other error')):
+        with pytest.raises(Exception):
+            JM.get_data('/other')
+
 
 def test_templating(mfa):
     """Test loading project configuration files and templating json files"""
