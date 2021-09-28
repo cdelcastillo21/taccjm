@@ -1,7 +1,7 @@
 """
 TACCJM Client
 
-Client for managing TACCJM servers and accessing TACCJM API end points.
+Client for managing TACCJM hug servers and accessing TACCJM API end points.
 """
 import os
 import pdb

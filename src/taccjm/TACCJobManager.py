@@ -19,9 +19,8 @@ import json                     # For saving and loading job configs to disk
 import time                     # Time functions
 import logging                  # Used to setup the Paramiko log file
 import datetime                 # Date time functionality
-import configparser             # For reading configs
 import stat                     # For determining if remote paths are directories
-from jinja2 import Template     # For templating input json files
+from taccjm.utils import *      # TACCJM Util functions for config files/dicts
 
 # Modified paramiko ssh client and common paramiko exceptions
 from taccjm.SSHClient2FA import SSHClient2FA
@@ -247,35 +246,6 @@ class TACCJobManager():
             tjm_error.message = "_mkdir - Could not create directory"
             logger.error(tjm_error.message)
             raise tjm_error
-
-
-    def _update_dic_keys(self, d, **kwargs):
-        """
-        Utility to update a dictionary, with only updating singular parameters in sub-dictionaries.
-        Used when updating and configuring/templating job configs.
-
-        Parameters
-        ----------
-        d : dict
-            Dictioanry to update
-        **kwargs : dict, optional
-            All extra keyword arguments will be interpreted as items to override in d.
-
-        Returns
-        -------
-        err_code : int
-            An SFTP error code int like SFTP_OK (0).
-
-        """
-        # Treat kwargs as override parameters
-        for key, value in kwargs.items():
-            old_val = d.get(key)
-            if type(old_val) is dict:
-                d[key].update(value)
-            else:
-                d[key] = value
-
-        return d
 
 
     def showq(self, user=None, prnt=False):
@@ -812,51 +782,6 @@ class TACCJobManager():
             raise e
 
 
-    def load_templated_json_file(self, path, config_path, **kwargs):
-        """
-        Loads a local json config found at path and templates it using jinja with the values
-        found in config ini file found at config_path . For example, if json file contains
-        `{{ a.b }}`, and `config={'a':{'b':1}}`, then `1` would be substituted in (note nesting).
-        All extra keyword arguments will be interpreted as job config overrides.
-
-        Parameters
-        ----------
-        path : str
-            Local path to json file.
-        config : dict
-            Dictionary with values to substitute in for jinja templates
-            in json file.
-
-        Returns
-        -------
-        json_config : dict
-            json config from file templated appropriately.
-
-        Raises
-        ------
-        FileNotFoundError
-            if json or config file do not exist.
-
-        """
-        # Check if it exists - If it doesn't config parser won't error
-        if not os.path.exists(config_path):
-            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), ini_file)
-
-        # Read project config file
-        config_parse = configparser.ConfigParser()
-        config_parse.read(config_path)
-        config = config_parse._sections
-
-        with open(path) as file_:
-            json_config = json.loads(Template(file_.read()).render(config))
-
-        # Treat kwargs as override parameters
-        json_config = self._update_dic_keys(json_config, **kwargs)
-
-        # Return json_config
-        return json_config
-
-
     def get_apps(self):
         """
         Get list of applications deployed by TACCJobManager instance.
@@ -912,8 +837,9 @@ class TACCJobManager():
         return app_config
 
 
-    def deploy_app(self, local_app_dir='.', app_config_file="app.json",
-            proj_config_file="project.ini", overwrite=False, **kwargs):
+    def deploy_app(self, app_config=None, local_app_dir='.',
+            app_config_file="app.json", proj_config_file="project.ini",
+            overwrite=False, **kwargs):
         """
         Deploy local application to TACCJobManager.apps_dir. Values in project config file
         are substituted in where needed in the app config file to form application config,
@@ -922,6 +848,10 @@ class TACCJobManager():
 
         Parameters
         ----------
+        app_config : dict, default=None
+            Dictionary containing app config. If None specified, then app config will be read from
+            file specified at local_app_dir/app_config_file, with templated arguments filled in
+            from the project config file at local_app_dir/proj_config_file
         local_app_dir: str, default='.'
             Directory containing application to deploy.
         app_config_file: str, default='app.json'
@@ -930,6 +860,9 @@ class TACCJobManager():
             Path relative to local_app_dir containing project .ini config file.
         overwrite: bool, default=False
             Whether to overwrite application if it already exists in application directory.
+        **kwargs : dict, optional
+            All extra keyword arguments will be interpreted as items to
+            override in app config found in json file.
         ----------
 
         Returns
@@ -946,9 +879,11 @@ class TACCJobManager():
         """
 
         # Load templated app configuration
-        app_config_path = os.path.join(local_app_dir, app_config_file)
-        proj_config_path = os.path.join(local_app_dir, proj_config_file)
-        app_config = self.load_templated_json_file(app_config_path,  proj_config_path, **kwargs)
+        if app_config is None:
+            app_config_path = os.path.join(local_app_dir, app_config_file)
+            proj_config_path = os.path.join(local_app_dir, proj_config_file)
+            app_config = load_templated_json_file(app_config_path,
+                    proj_config_path, **kwargs)
 
         # Get current apps already deployed
         cur_apps = self.get_apps()
@@ -984,7 +919,7 @@ class TACCJobManager():
             self._execute_command(f"chmod +x {wrapper_script_path}")
 
         except Exception as e:
-            msg = f"deploy_app - Unable to stage appplication data to path {app_config_path}."
+            msg = f"deploy_app - Unable to stage appplication data."
             logger.error(msg)
             raise e
 
@@ -1039,7 +974,7 @@ class TACCJobManager():
             raise e
 
 
-    # TODO: Check for valide job config, document more
+    # TODO: Check for valid job config, document more
     def parse_submit_script(self, job_config):
         """
         Parses text to write for a SLURM job submission script on TACC.
@@ -1165,9 +1100,9 @@ class TACCJobManager():
         if job_config is None:
             job_config_path = os.path.join(local_job_dir, job_config_file)
             proj_config_path = os.path.join(local_job_dir, proj_config_file)
-            job_config = self.load_templated_json_file(job_config_path, proj_config_path, **kwargs)
+            job_config = load_templated_json_file(job_config_path, proj_config_path, **kwargs)
         else:
-            job_config = self._update_dic_keys(job_config, **kwargs)
+            job_config = update_dic_keys(job_config, **kwargs)
 
         if job_config.get('job_id') is None or job_config.get('job_dir') is None:
             # job_id is name of job folder in jobs_dir
@@ -1342,14 +1277,8 @@ class TACCJobManager():
         # Cancel job
         try:
             self.cancel_job(jobId)
-        except:
-            pass
-
-        # Remove job directory
-        job_dir = '/'.join([self.jobs_dir, jobId])
-        cmnd = f"rm -rf {job_dir}"
-        try:
-            self._execute_command(cmnd)
+            job_dir = '/'.join(self.jobs_dir, jobId)
+            self.remove(job_dir)
         except:
             pass
 
@@ -1575,14 +1504,21 @@ class TACCJobManager():
 
 
     def deploy_script(self, script_name, local_file=None):
-        """Deploy a script to TACC
+        """
+        Deploy a script to TACC
 
-        Args:
-            script_name (str) - The name of the script.
-                Will be used as the local filename unless local_file is passed.
-                If the filename ends in .py, it will be assumed to be a Python3 script.
-                Otherwise, it will be treated as a generic executable.
-            local_file (str) - The local filename of the script if not passed, will be inferred from script_name.
+        Parameters
+        ----------
+        script_name : str
+            The name of the script. Will be used as the local filename unless
+            local_file is passed. If the filename ends in .py, it will be
+            assumed to be a Python3 script. Otherwise, it will be treated as a
+            generic executable.
+        local_file : str
+            The local filename of the script if not passed, will be inferred
+            from script_name.
+        Returns
+        -------
         """
 
         local_fname = local_file if local_file is not None else script_name
@@ -1612,22 +1548,40 @@ class TACCJobManager():
         self._execute_command(f"chmod +x {remote_path}")
 
 
-    def run_script(self, script_name, job_config=None, args=None):
-        """Run a pre-deployed script on TACC.
-
-        Args:
-            script_name (str) - The name of the script, without file extensions.
-            job_config (dict) - Config for a job to run the script on.
-                If passed, the job directory will be passed as the first argument to script.
-            args (list) - Extra commandline arguments to pass to the script.
-        Returns:
-            out (str) - The standard output of the script.
+    def run_script(self, script_name, job_id=None, args=None):
         """
+        Run a pre-deployed script on TACC.
 
+        Parameters
+        ----------
+        script_name : str
+            The name of the script, without file extensions.
+        job_id : str
+            Job Id of job to run the script on.  If passed, the job
+            directory will be passed as the first argument to script.
+        args : list of str
+            Extra commandline arguments to pass to the script.
+
+        Returns
+        -------
+            out : str
+                The standard output of the script.
+        """
         if args is None: args = []
-        if job_config is not None: args.insert(0, job_config['job_dir'])
+        if job_id is not None: args.insert(0, '/'.join([self.jobs_dir, job_id]))
 
         return self._execute_command(f"{self.scripts_dir}/{script_name} {' '.join(args)}")
 
     def list_scripts(self):
+        """
+        List scripts deployed in this TACCJobManager Instance
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+        scripts : list of str
+            List of scripts in TACC Job Manager's scripts directory.
+        """
         return self.list_files(self.scripts_dir)

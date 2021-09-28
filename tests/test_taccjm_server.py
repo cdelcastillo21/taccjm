@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from unittest.mock import patch
 
 from taccjm import taccjm_server, TACCJobManager
+from taccjm.utils import *
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -187,9 +188,156 @@ def test_data(mfa):
         assert response.status == '500 Internal Server Error'
 
 
+def test_apps(mfa):
+    """Test app operations"""
+
+    _init(mfa)
+
+    # Deploy an app
+    app_config = load_templated_json_file('tests/test_app/app.json',
+            'tests/test_app/project.ini')
+    response = hug.test.post(taccjm_server, f"{test_jm}/apps/deploy",
+            {'app_config':app_config, 'local_app_dir':'./tests/test_app',
+                'overwrite':True})
+    assert response.status == '200 OK'
+    app_id = response.data['name']
+
+    # Assert App just deployed exists in list of apps
+    response = hug.test.get(taccjm_server, f"{test_jm}/apps/list")
+    assert response.status == '200 OK'
+    assert app_id in response.data
+
+    # Get App Config back
+    response = hug.test.get(taccjm_server, f"{test_jm}/apps/{app_id}")
+    assert response.status == '200 OK'
+    assert response.data['name']==app_id
+
+    # Mock deploy errors
+    with patch.object(TACCJobManager, 'deploy_app',
+            side_effect=FileNotFoundError('Mock file error.')):
+        response = hug.test.post(taccjm_server, f"{test_jm}/apps/deploy",
+            {'app_config':app_config})
+        assert response.status == '404 Not Found'
+    with patch.object(TACCJobManager, 'deploy_app',
+            side_effect=ValueError('Mock value error.')):
+        response = hug.test.post(taccjm_server, f"{test_jm}/apps/deploy",
+            {'app_config':app_config})
+        assert response.status == '400 Bad Request'
+    with patch.object(TACCJobManager, 'deploy_app',
+            side_effect=Exception('Mock unexpected error.')):
+        response = hug.test.post(taccjm_server, f"{test_jm}/apps/deploy",
+            {'app_config':app_config})
+        assert response.status == '500 Internal Server Error'
+
+    # Mock get errors
+    with patch.object(TACCJobManager, 'get_app',
+            side_effect=ValueError('Mock value error.')):
+        response = hug.test.get(taccjm_server, f"{test_jm}/apps/test_app",
+            {'app_config':app_config})
+        assert response.status == '404 Not Found'
+    with patch.object(TACCJobManager, 'get_app',
+            side_effect=Exception('Mock unexpected error.')):
+        response = hug.test.get(taccjm_server, f"{test_jm}/apps/test_app",
+            {'app_config':app_config})
+        assert response.status == '500 Internal Server Error'
 
 
+def test_jobs(mfa):
+    """Test job operations"""
+
+    _init(mfa)
+
+    # Deploy test app
+    app_config = load_templated_json_file('tests/test_app/app.json',
+            'tests/test_app/project.ini')
+    response = hug.test.post(taccjm_server, f"{test_jm}/apps/deploy",
+            {'app_config':app_config, 'local_app_dir':'./tests/test_app',
+                'overwrite':True})
+    assert response.status == '200 OK'
+    app_id = response.data['name']
+
+    # Set-up test job using app
+    job_config = load_templated_json_file('tests/test_app/job.json',
+            'tests/test_app/project.ini')
+    response = hug.test.post(taccjm_server, f"{test_jm}/jobs/deploy",
+            {'job_config':job_config})
+    assert response.status == '200 OK'
+    job_id = response.data['job_id']
+
+    # Check for job in list of jobs
+    response = hug.test.get(taccjm_server, f"{test_jm}/jobs/list",{})
+    assert response.status == '200 OK'
+    assert job_id in response.data
+
+    # Submit job
+    response = hug.test.put(taccjm_server,
+            f"{test_jm}/jobs/{job_id}/submit",{})
+    assert response.status == '200 OK'
+    assert slurm_id in response.data.keys()
+
+    # Cancel job
+    response = hug.test.put(taccjm_server,
+            f"{test_jm}/jobs/{job_id}/cancel",{})
+    assert response.status == '200 OK'
+    assert slurm_id not in response.data.keys()
+    assert slurm_id in response.data['slurm_hist']
+
+    # Cleanup job
+    response = hug.test.delete(taccjm_server,
+            f"{test_jm}/jobs/{job_id}/remove",{})
+    assert response.status == '200 OK'
+    response = hug.test.get(taccjm_server, f"{test_jm}/jobs/list",{})
+    assert response.status == '200 OK'
+    assert job_id not in response.data
+
+    # Mock get_job errors
+    with patch.object(TACCJobManager, 'get_job',
+            side_effect=ValueError('Mock value error.')):
+        response = hug.test.get(taccjm_server, f"{test_jm}/jobs/list",{})
+        assert response.status == '404 Not Found'
+    with patch.object(TACCJobManager, 'get_job',
+            side_effect=Exception('Mock unexpected error.')):
+        response = hug.test.get(taccjm_server, f"{test_jm}/apps/list",{})
+        assert response.status == '500 Internal Server Error'
+
+    # Mock deploy_job errors
+    with patch.object(TACCJobManager, 'deploy_job',
+            side_effect=ValueError('Mock value error.')):
+        response = hug.test.get(taccjm_server, f"{test_jm}/jobs/test_job",{})
+        assert response.status == '400 Bad Request'
+    with patch.object(TACCJobManager, 'deploy_job',
+            side_effect=Exception('Mock unexpected error.')):
+        response = hug.test.get(taccjm_server, f"{test_jm}/jobs/test_job",{})
+        assert response.status == '500 Internal Server Error'
+
+    # Mock submit_job errors
+    with patch.object(TACCJobManager, 'submit_job',
+            side_effect=ValueError('Mock value error.')):
+        response = hug.test.get(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/submit",{})
+        assert response.status == '400 Bad Request'
+    with patch.object(TACCJobManager, 'submit_job',
+            side_effect=Exception('Mock unexpected error.')):
+        response = hug.test.get(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/submit",{})
+        assert response.status == '500 Internal Server Error'
+
+    # Mock cancel job errors
+    with patch.object(TACCJobManager, 'cancel_job',
+            side_effect=ValueError('Mock value error.')):
+        response = hug.test.get(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/cancel",{})
+        assert response.status == '400 Bad Request'
+    with patch.object(TACCJobManager, 'cancel_job',
+            side_effect=Exception('Mock unexpected error.')):
+        response = hug.test.get(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/cancel",{})
+        assert response.status == '500 Internal Server Error'
 
 
+def test_scripts(mfa):
+    """Test script operations"""
 
+    _init(mfa)
 
+    # Send local data to a file
