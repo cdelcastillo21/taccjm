@@ -273,19 +273,29 @@ def receive_data(jm_id:str, remote_path:str, data_type:str='text'):
         raise falcon.HTTPError(falcon.HTTP_500, "data", str(e))
 
 
-# @hug.get('/apps')
-# def apps(head:hug.types.number=-1):
-#     """Gets all apps."""
-#     check_init()
-#     return JM.get_apps(head=head)
-# 
-# 
-# @hug.get('/apps/load')
-# def get_app_wrapper_script(app:str):
-#     check_init()
-#     return JM.get_app_wrapper_script(app=app)
-# 
-# 
+@hug.get('/{jm_id}/apps/list')
+def list_apps(head:hug.types.number=-1):
+    """Gets all apps."""
+    check_init()
+
+    return JM.get_apps()
+
+
+@hug.get('/apps/{app_id}')
+def get_app(appId:str):
+    """Get configuration for a deploy HPC Application."""
+    check_init()
+
+    try:
+        return JM.get_app(app=appId)
+    except ValueError as v:
+        # Raise 404 not found error if couldn't find app
+        raise falcon.HTTPError(falcon.HTTP_404, "apps", str(v))
+    except Exception as e:
+        # Unknown Error
+        raise falcon.HTTPError(falcon.HTTP_500, "apps", str(e))
+
+
 # @hug.get('/jobs')
 # def jobs(head:hug.types.number=-1):
 #     """Gets all jobs."""
