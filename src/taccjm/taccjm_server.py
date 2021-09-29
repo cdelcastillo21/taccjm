@@ -385,6 +385,7 @@ def submit_job(jm_id:str, job_id:str):
     Submit a job to the Slurm Job Queue on given TACC system
 
     """
+    _check_init(jm_id)
 
     try:
         return JM[jm_id].submit_job(job_id)
@@ -395,7 +396,7 @@ def submit_job(jm_id:str, job_id:str):
         # Raise Internal Server error if another error submitting job.
         raise falcon.HTTPError(falcon.HTTP_500, "jobs", str(e))
 
-hug.put('/{jm_id}/jobs/{job_id}/cancel')
+@hug.put('/{jm_id}/jobs/{job_id}/cancel')
 def cancel_job(jm_id:str, job_id:str):
     """Cancel Job
 
@@ -403,6 +404,7 @@ def cancel_job(jm_id:str, job_id:str):
     TACC system
 
     """
+    _check_init(jm_id)
 
     try:
         return JM[jm_id].cancel_job(job_id)
@@ -422,7 +424,7 @@ def cleanup_job(jm_id:str, job_id:str):
 
     """
 
-    return JM[jm_id].remove(job_id)
+    return JM[jm_id].cleanup_job(job_id)
 
 
 
@@ -503,9 +505,9 @@ def upload_job_file(jm_id:str, job_id:str, path:str, dest_dir:str='.',
 
 @hug.put('/{jm_id}/jobs/{job_id}/files/write')
 def write_job_file(jm_id:str, job_id:str, data:Union[str, dict], path:str):
-    """Read Job file
+    """Write Job file
 
-    Read a job text or json file and return contents directly.
+    Write text or json data to a file in a job directory directly.
 
     """
     _check_init(jm_id)

@@ -1030,7 +1030,7 @@ class TACCJobManager():
         for arg, path in job_config['inputs'].items():
             job_args[arg] = '/'.join([job_config['job_dir'], os.path.basename(path)])
 
-        # Add on parameters passed to job 
+        # Add on parameters passed to job
         job_args.update(job_config['parameters'])
 
         # Create list of arguments to pass as env variables to job
@@ -1042,12 +1042,12 @@ class TACCJobManager():
                 value = f"'{value}'"
             export_list.append(f"export {arg}={value}")
 
-        # Parse final submit script 
+        # Parse final submit script
         submit_script = (
-            submit_script_header                                            # set SBATCH params
-            + f"\ncd {job_config['job_dir']}\n\n"                           # cd to job directory
-            + "\n".join(export_list)                                        # set job params
-            + f"\n{job_config['job_dir']}/{job_config['entry_script']}.sh " # run main script
+            submit_script_header                                        # set SBATCH params
+            + f"\ncd {job_config['job_dir']}\n\n"                       # cd to job directory
+            + "\n".join(export_list)                                    # set job params
+            + f"\n{job_config['job_dir']}/{job_config['entry_script']}" # run main script
         )
 
         return submit_script
@@ -1194,7 +1194,7 @@ class TACCJobManager():
         # Load job config
         job_config =  self.get_job(jobId)
 
-        # TODO: Verify job is set-up properly? 
+        # TODO: Verify job is set-up properly?
 
         # Check if this job isn't currently in the queue
         if 'slurm_id' in job_config.keys():
@@ -1202,7 +1202,8 @@ class TACCJobManager():
             raise ValueError(msg)
 
         # Submit to SLURM queue -> Note we do this from the job_directory
-        cmnd = f"sbatch {job_config['job_dir']}/submit_script.sh"
+        cmnd = f"cd {job_config['job_dir']}; "
+        cmnd += f"sbatch {job_config['job_dir']}/submit_script.sh"
         ret = self._execute_command(cmnd)
         slurm_ret = ret.split('\n')[-2]
         if 'error' in slurm_ret or 'FAILED' in slurm_ret:
@@ -1241,13 +1242,13 @@ class TACCJobManager():
             try:
                 self._execute_command(cmnd)
             except Exception as e:
-                msg = f"Failed to cancel job {jobId}."
+                msg = f"cancel_job - Failed to cancel job {jobId}."
                 logger.error(msg)
                 raise e
 
             # Remove slurm ID and store into job hist
-            old_slurm_id = job_config.pop('slurm_id')
-            job_config['slurm_hist'] = job_config.get('slurm_hist', []).append(old_slurm_id)
+            job_config['slurm_hist'] = job_config.get('slurm_hist',[])
+            job_config['slurm_hist'].append(job_config.pop('slurm_id'))
 
             # Save updated job config
             job_config_path = job_config['job_dir'] + '/job.json'

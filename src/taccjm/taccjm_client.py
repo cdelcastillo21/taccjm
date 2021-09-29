@@ -42,8 +42,6 @@ def search_for_proc(cmdline_string):
 
 
 def kill_server():
-    global TACCJM_HOST, TACCJM_PORT
-
     # Search for server process
     server_start_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f taccjm_server.py"
     server_proc = search_for_proc(server_start_cmd)
@@ -66,8 +64,6 @@ def kill_server():
 
 
 def check_start_server():
-    global TACCJM_HOST, TACCJM_PORT
-
     server_log = os.path.join(TACCJM_DIR, f"taccjm_server_{TACCJM_HOST}_{TACCJM_PORT}.log")
     heartbeat_log = os.path.join(TACCJM_DIR, f"taccjm_heartbeat_{TACCJM_HOST}_{TACCJM_PORT}.log")
 
@@ -103,7 +99,6 @@ def pretty_print_POST(req):
 
 
 def api_call(http_method, end_point, data):
-    global TACCJM_HOST, TACCJM_PORT
     base_url = 'http://{host}:{port}'.format(host=TACCJM_HOST, port=TACCJM_PORT)
 
     req = requests.Request(http_method, base_url + '/' + end_point , data=data)
