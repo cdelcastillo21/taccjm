@@ -11,7 +11,6 @@ import os
 import hug
 import falcon
 import logging
-from typing import Union
 from taccjm.TACCJobManager import TACCJobManager, TJMCommandError
 
 
@@ -22,7 +21,7 @@ __license__ = "MIT"
 
 # For storing logs and state
 TJM_DIR = os.environ.get("TACCJM_DIR")
-TJM_DIR = "~/.taccjm" if TJM_DIR is None else TJM_DIR
+TJM_DIR = os.path.join(os.path.expanduser("~"),'.taccjm')
 if not os.path.exists(TJM_DIR):
     os.makedirs(TJM_DIR)
 
@@ -504,7 +503,7 @@ def upload_job_file(jm_id:str, job_id:str, path:str, dest_dir:str='.',
 
 
 @hug.put('/{jm_id}/jobs/{job_id}/files/write')
-def write_job_file(jm_id:str, job_id:str, data:Union[str, dict], path:str):
+def write_job_file(jm_id:str, job_id:str, data, path:str):
     """Write Job file
 
     Write text or json data to a file in a job directory directly.
@@ -544,21 +543,21 @@ def peak_job_file(jm_id:str, job_id:str, path:str, head:int=-1, tail:int=-1):
 
 
 @hug.get('/{jm_id}/scripts/list')
-def deploy_script(jm_id:str):
-    """Deploy Script
+def list_scripts(jm_id:str):
+    """List Scripts
 
     """
     _check_init(jm_id)
 
     try:
-        JM[jm_id].list_scripts()
+        return JM[jm_id].list_scripts()
     except Exception as e:
         # Raise 500 if any error deploying script
         raise falcon.HTTPError(falcon.HTTP_500, "scripts", str(e))
 
 
-@hug.put('/{jm_id}/scripts/deploy')
-def deploy_script(jm_id:str, ):
+@hug.post('/{jm_id}/scripts/deploy')
+def deploy_script(jm_id:str, script_name:str, local_file:str=None):
     """Deploy Script
 
     """
@@ -572,14 +571,14 @@ def deploy_script(jm_id:str, ):
 
 
 @hug.put('/{jm_id}/scripts/run')
-def run_script(jm_id:str, job_id:str=None, args:[str]=None):
+def run_script(jm_id:str, script_name:str, job_id:str=None, args:[str]=None):
     """Run Script
 
     """
     _check_init(jm_id)
 
     try:
-        JM[jm_id].run_script(script_name, job_id=job_id, args=args)
+        return JM[jm_id].run_script(script_name, job_id=job_id, args=args)
     except Exception as e:
         # Raise 500 if any error running script
         raise falcon.HTTPError(falcon.HTTP_500, "scripts", str(e))

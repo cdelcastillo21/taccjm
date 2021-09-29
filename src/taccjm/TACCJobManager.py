@@ -1275,10 +1275,15 @@ class TACCJobManager():
         jobId: str
             Job ID of job just canceled and removed.
         """
-        # Cancel job
+        # Cancel job, if needed.
         try:
             self.cancel_job(jobId)
-            job_dir = '/'.join(self.jobs_dir, jobId)
+        except:
+            pass
+
+        # Remove job directory, if it still exists
+        job_dir = '/'.join([self.jobs_dir, jobId])
+        try:
             self.remove(job_dir)
         except:
             pass

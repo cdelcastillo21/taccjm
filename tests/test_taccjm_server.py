@@ -18,27 +18,33 @@ __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
-# Note: .env file in tests directory must contain TACC_USER and TACC_PW variables defined
+# Note: .env file in tests directory must contain
+#   - TACC_USER
+#   - TACC_PW 
+#   - TACC_SYSTEM
+#   - TACC_ALLOCATION
 load_dotenv()
 
 # Globals loaded from .env config file in tests directory
+# Used for connecting to TACC system for integration tests
 global SYSTEM, USER, PW, SYSTEM, ALLOCATION
 USER = os.environ.get("TACCJM_USER")
 PW = os.environ.get("TACCJM_PW")
 SYSTEM = os.environ.get("TACCJM_SYSTEM")
 ALLOCATION = os.environ.get("TACCJM_ALLOCATION")
 
-# JM we will use for testing
+# JM we will use for testing, only initailize once
 test_jm = f"test_{SYSTEM}"
 
-print(os.getcwd())
-
-# Initialized Flag
+# Global Initialized Flag - Marks if JM has been initailized for any test
 initialized = False
+
+
 def _init(mfa):
     global initialized
     if not initialized:
-        init_args = {'jm_id': test_jm, 'system': SYSTEM, 'user': USER, 'psw': PW, 'mfa':mfa}
+        init_args = {'jm_id': test_jm, 'system': SYSTEM,
+                     'user': USER, 'psw': PW, 'mfa':mfa}
         response = hug.test.post(taccjm_server, 'init', init_args)
         initialized = True
 
@@ -47,6 +53,8 @@ def test_jms(mfa):
     """
     Test managing JM instances and errors
     """
+    global intiailized
+
     init_args = {'jm_id': test_jm, 'system': SYSTEM, 'user': USER, 'psw': PW, 'mfa':mfa}
 
     # List JMs - There should be none
@@ -65,6 +73,7 @@ def test_jms(mfa):
     assert response.data['jm_id'] == f"test_{SYSTEM}"
     assert response.data['sys'] == f"{SYSTEM}.tacc.utexas.edu"
     assert response.data['user'] == USER
+    initialized=True
 
     # Try initializing JM with same jm_id -> Should give error
     response = hug.test.post(taccjm_server, 'init', init_args)
@@ -78,13 +87,11 @@ def test_jms(mfa):
     bad_init_args = {'jm_id': 'bad_jm', 'system': SYSTEM, 'user': 'foo', 'psw': PW, 'mfa':mfa}
     response = hug.test.post(taccjm_server, 'init', bad_init_args)
     assert response.status == '401 Unauthorized'
-    assert response.data['errors']['jm_error'].startswith('Unable to initialize TACCJM')
 
     # Initialize JM again, but with bad system, should get Not Found error
     bad_init_args = {'jm_id': 'bad_jm', 'system': 'foo', 'user': USER, 'psw': PW, 'mfa':mfa}
     response = hug.test.post(taccjm_server, 'init', bad_init_args)
     assert response.status == '404 Not Found'
-    assert response.data['errors']['jm_error'].startswith('Unable to initialize TACCJM')
 
     # Test getting queue on initialized JM
     response = hug.test.get(taccjm_server, f"{test_jm}/queue", {'user': 'all'})
@@ -93,6 +100,7 @@ def test_jms(mfa):
     # Test getting allocations on initialized JM
     response = hug.test.get(taccjm_server, f"{test_jm}/allocations", None)
     assert response.status == '200 OK'
+
 
 def test_files(mfa):
     """Test file operations"""
@@ -271,19 +279,50 @@ def test_jobs(mfa):
     assert job_id in response.data
 
     # Write some data to a job file
-    response = hug.test.put(taccjm_server, f"{test_jm}/jobs/files/write",
-            {'data':'hello world\n', path:'hello.txt'})
-    assert response.status = '200 OK'
+    response = hug.test.put(taccjm_server,
+            f"{test_jm}/jobs/{job_id}/files/write",
+            {'data':'hello world\n', 'path':'hello.txt'})
+    assert response.status == '200 OK'
 
     # Read data from file just written
-    response = hug.test.get(taccjm_server, f"{test_jm}/jobs/files/read",
-            {'path':'hello.txt', data_type:'text'})
+    response = hug.test.get(taccjm_server,
+            f"{test_jm}/jobs/{job_id}/files/read",
+            {'path':'hello.txt', 'data_type':'text'})
     assert response.status == '200 OK'
     assert response.data == 'hello world\n'
 
     # Download file just written
+    response = hug.test.get(taccjm_server,
+            f"{test_jm}/jobs/{job_id}/files/download",
+            {'path':'hello.txt'})
+    assert response.status == '200 OK'
+    with open(os.path.join(job_id,'hello.txt'), 'r') as f:
+        assert f.read() == 'hello world\n'
 
-    # Upload it back to job directory
+    # Rename it and Upload it back to job directory
+    with open(os.path.join(job_id,'goodbye.txt'), 'w') as f:
+        f.write('goodby world\n')
+    response = hug.test.put(taccjm_server,
+            f"{test_jm}/jobs/{job_id}/files/upload",
+            {'path':os.path.join(job_id,'goodbye.txt')})
+    assert response.status == '200 OK'
+
+    # Check file uploaded is in job directory
+    response = hug.test.get(taccjm_server,
+            f"{test_jm}/jobs/{job_id}/files/list",
+            {})
+    assert response.status == '200 OK'
+    assert 'goodbye.txt' in response.data
+
+    # Peak at file just uploaded
+    response = hug.test.get(taccjm_server,
+            f"{test_jm}/jobs/{job_id}/files/peak",
+            {'path':'goodbye.txt'})
+    assert response.status == '200 OK'
+    assert response.data == 'goodby world\n'
+
+    # Cleanup files sent/received
+    os.system(f"rm -rf {job_id}")
 
     # Submit job
     response = hug.test.put(taccjm_server,
@@ -321,6 +360,82 @@ def test_jobs(mfa):
                 {'job_config':job_config})
         assert response.status == '500 Internal Server Error'
 
+    # Mock write job dadta errors
+    with patch.object(TACCJobManager, 'send_job_data',
+            side_effect=ValueError('Mock value error.')):
+        response = hug.test.put(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/files/write",
+                {'path':'test.txt', 'data':'foo'})
+        assert response.status == '400 Bad Request'
+    with patch.object(TACCJobManager, 'send_job_data',
+            side_effect=FileNotFoundError('Mock file error.')):
+        response = hug.test.put(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/files/write",
+                {'path':'test.txt', 'data':'foo'})
+        assert response.status == '404 Not Found'
+    with patch.object(TACCJobManager, 'send_job_data',
+            side_effect=Exception('Mock unexpected error.')):
+        response = hug.test.put(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/files/write",
+                {'path':'test.txt', 'data':'foo'})
+        assert response.status == '500 Internal Server Error'
+
+    # Mock read job dadta errors
+    with patch.object(TACCJobManager, 'get_job_data',
+            side_effect=FileNotFoundError('Mock file error.')):
+        response = hug.test.get(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/files/read",
+                {'path':'test.txt', 'data_type':'text'})
+        assert response.status == '404 Not Found'
+    with patch.object(TACCJobManager, 'get_job_data',
+            side_effect=Exception('Mock unexpected error.')):
+        response = hug.test.get(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/files/read",
+                {'path':'test.txt', 'data_type':'text'})
+        assert response.status == '500 Internal Server Error'
+
+    # Mock download job data errors
+    with patch.object(TACCJobManager, 'download_job_data',
+            side_effect=FileNotFoundError('Mock file error.')):
+        response = hug.test.get(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/files/download",
+                {'path':'test.txt'})
+        assert response.status == '404 Not Found'
+    with patch.object(TACCJobManager, 'download_job_data',
+            side_effect=Exception('Mock unexpected error.')):
+        response = hug.test.get(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/files/download",
+                {'path':'test.txt'})
+        assert response.status == '500 Internal Server Error'
+
+    # Mock upload job data errors
+    with patch.object(TACCJobManager, 'upload_job_data',
+            side_effect=FileNotFoundError('Mock file error.')):
+        response = hug.test.put(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/files/upload",
+                {'path':'test.txt'})
+        assert response.status == '404 Not Found'
+    with patch.object(TACCJobManager, 'upload_job_data',
+            side_effect=Exception('Mock unexpected error.')):
+        response = hug.test.put(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/files/upload",
+                {'path':'test.txt'})
+        assert response.status == '500 Internal Server Error'
+
+    # Mock peak job file errors
+    with patch.object(TACCJobManager, 'peak_job_file',
+            side_effect=FileNotFoundError('Mock file error.')):
+        response = hug.test.get(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/files/peak",
+                {'path':'test.txt'})
+        assert response.status == '404 Not Found'
+    with patch.object(TACCJobManager, 'peak_job_file',
+            side_effect=Exception('Mock unexpected error.')):
+        response = hug.test.get(taccjm_server,
+                f"{test_jm}/jobs/{job_id}/files/peak",
+                {'path':'test.txt'})
+        assert response.status == '500 Internal Server Error'
+
     # Mock submit_job errors
     with patch.object(TACCJobManager, 'submit_job',
             side_effect=ValueError('Mock value error.')):
@@ -354,10 +469,53 @@ def test_jobs(mfa):
     assert job_id not in response.data
 
 
-
 def test_scripts(mfa):
     """Test script operations"""
 
     _init(mfa)
 
-    # Send local data to a file
+    # Send script to taccjm
+    with open('tests/test_script.sh', 'w') as f:
+        f.write('echo foo\n')
+    response = hug.test.post(taccjm_server,
+            f"{test_jm}/scripts/deploy",
+            {'script_name': 'tests/test_script.sh'})
+    assert response.status == '200 OK'
+
+    # Check script exists
+    response = hug.test.get(taccjm_server,
+            f"{test_jm}/scripts/list",{})
+    assert response.status == '200 OK'
+    assert 'test_script' in response.data
+
+    # Run script
+    response = hug.test.put(taccjm_server,
+            f"{test_jm}/scripts/run",
+            {'script_name': 'test_script'})
+    assert response.status == '200 OK'
+    assert response.data == 'foo\n'
+
+    # Mock deploy script errors
+    with patch.object(TACCJobManager, 'deploy_script',
+            side_effect=Exception('Mock any error.')):
+        response = hug.test.post(taccjm_server,
+                f"{test_jm}/scripts/deploy",
+                {'script_name': 'tests/test_script.sh'})
+        assert response.status == '500 Internal Server Error'
+
+    # Mock list script errors
+    with patch.object(TACCJobManager, 'list_scripts',
+            side_effect=Exception('Mock any error.')):
+        response = hug.test.get(taccjm_server,
+                f"{test_jm}/scripts/list",{})
+        assert response.status == '500 Internal Server Error'
+
+    # Mock run script errors
+    with patch.object(TACCJobManager, 'run_script',
+            side_effect=Exception('Mock any error.')):
+        response = hug.test.put(taccjm_server,
+                f"{test_jm}/scripts/run",
+                {'script_name': 'test_script'})
+        assert response.status == '500 Internal Server Error'
+
+

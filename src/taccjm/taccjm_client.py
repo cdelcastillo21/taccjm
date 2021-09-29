@@ -27,97 +27,187 @@ TACCJM_DEFAULT_PORT=8221
 
 
 def set_host(host='localhost', port=TACCJM_DEFAULT_PORT):
+    """
+    Set Host
+
+    Set where to look for a TACCJM server to be running.
+
+    Parameters
+    ----------
+    host : str, default='localhost'
+        Host where taccjm server is running.
+    PORT : int, default=8221
+        Port on host which taccjm server is listening for requests.
+
+    Returns
+    -------
+
+    Warnings
+    --------
+    This method will not kill any existing taccjm servers running on previously
+    set host/port.
+
+    """
     global TACCJM_HOST, TACCJM_PORT
     TACCJM_HOST = host
     TACCJM_PORT = port
     logger.info(f"Switched host {TACCJM_HOST} and port {TACCJM_PORT}")
 
 
-def search_for_proc(cmdline_string):
+def find_tjm_processes():
+    """
+    Find TACC Job Manager Processes
+
+    Looks for local processes that correspond to taccjm server and hearbeat.
+
+    Parameters
+    ----------
+
+    Returns
+    -------
+    processes : dict
+        Dictionary with keys `server` and/or `heartbeat' containing psutil
+        process objects corresponding to TACC Job Manager processes found.
+
+    """
+    processes_found = {}
+
+    # Strings defining commands
+    server_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f taccjm_server.py"
+    hb_cmd = f"python taccjm_server_heartbeat.py "
+    hb_cmd += f"--host={TACCJM_HOST} --port={TACCJM_PORT}"
+
     for proc in psutil.process_iter(['name', 'pid', 'cmdline']):
         if proc.info['cmdline']!=None:
-            if cmdline_string in ' '.join(proc.info['cmdline']):
-                return proc
-    return None
+            cmd = ' '.join(proc.info['cmdline'])
+            if server_cmd in cmd:
+                processes_found['server'] = proc
+            if hb_cmd in cmd:
+                processes_found['hb'] = proc
+
+    return processes_found
 
 
 def kill_server():
+    """
+    Kill Server
+
+    Looks for and kills local processes that correspond to taccjm
+    server and hearbeat.
+
+    Parameters
+    ----------
+
+    Returns
+    -------
+
+    """
     # Search for server process
-    server_start_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f taccjm_server.py"
-    server_proc = search_for_proc(server_start_cmd)
-    if server_proc!=None:
+    p = find_tjm_processes()
+    if 'server' in p.keys():
         # kill server
-        logger.info(f"Killing server process with pid {server_proc.info['pid']}")
-        server_proc.terminate()
+        msg = f"Killing server process with pid {p['server'].info['pid']}"
+        logger.info(msg)
+        p['server'].terminate()
     else:
         logger.info('Did not find server process to kill')
 
-    # Search for heartbeat process
-    hb_start_cmd = f"python taccjm_server_heartbeat.py --host={TACCJM_HOST} --port={TACCJM_PORT}"
-    heartbeat_proc = search_for_proc(hb_start_cmd)
-    if heartbeat_proc!=None:
-        # kill heartbeat
-        logger.info(f"Killing heartbeat process with pid {heartbeat_proc.info['pid']}")
-        heartbeat_proc.terminate()
+    if 'hb' in p.keys():
+        # kill server
+        msg = f"Killing heartbeat process with pid {p['hb'].info['pid']}"
+        logger.info(msg)
+        p['hb'].terminate()
     else:
-        logger.info('Did not find server process to kill')
+        logger.info('Did not find heartbeat process to kill')
 
 
 def check_start_server():
-    server_log = os.path.join(TACCJM_DIR, f"taccjm_server_{TACCJM_HOST}_{TACCJM_PORT}.log")
-    heartbeat_log = os.path.join(TACCJM_DIR, f"taccjm_heartbeat_{TACCJM_HOST}_{TACCJM_PORT}.log")
+    """
+    Check and Start Server
+
+    Looks for taccjm server and heartbeat processes and starts them if
+    they are not running.
+
+    Parameters
+    ----------
+
+    Returns
+    -------
+    p : dict
+        Dictionary containing server and heartbeat processes found or started.
+    """
+    # Commands to start hug server and heartbeat process
+    server_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f taccjm_server.py"
+    hb_cmd = f"python taccjm_server_heartbeat.py "
+    hb_cmd += f"--host={TACCJM_HOST} --port={TACCJM_PORT}"
+
+    server_log = os.path.join(TACCJM_DIR,
+            f"taccjm_server_{TACCJM_HOST}_{TACCJM_PORT}.log")
+    heartbeat_log = os.path.join(TACCJM_DIR,
+            f"taccjm_heartbeat_{TACCJM_HOST}_{TACCJM_PORT}.log")
 
     # Search for server process
-    server_start_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f taccjm_server.py"
-    server_proc = search_for_proc(server_start_cmd)
-    if server_proc==None:
+    p = find_tjm_processes()
+    if 'server' not in p.keys():
         # Start server
         with open(server_log, 'w') as log:
-            srv_proc = subprocess.Popen(server_start_cmd.split(' '), stdout=log,
+            p['server'] = subprocess.Popen(server_cmd.split(' '), stdout=log,
                     stderr=subprocess.STDOUT)
-            logger.info(f"Started server process with pid {srv_proc.pid}")
+            logger.info(f"Started server process with pid {p['server'].pid}")
     else:
-        logger.info('Found server process at ' + str(server_proc.info['pid']))
+        logger.info('Found server process at ' + str(p['server'].info['pid']))
 
     # Search for heartbeat process
-    hb_start_cmd = f"python taccjm_server_heartbeat.py --host={TACCJM_HOST} --port={TACCJM_PORT}"
-    heartbeat_proc = search_for_proc(hb_start_cmd)
-    if heartbeat_proc==None:
+    if 'hb' not in p.keys():
         # Start heartbeat
         with open(heartbeat_log, 'w') as log:
-            heartbeat_proc = subprocess.Popen(heartbeat_start_cmd.split(' '),
+            p['hb'] = subprocess.Popen(heartbeat_start_cmd.split(' '),
                     stdout=log, stderr=subprocess.STDOUT)
-            logger.info(f"Started heartbeat process with pid {heartbeat_proc.pid}")
+            logger.info(f"Started heartbeat process with pid {p['hb'].pid}")
     else:
-        logger.info(f"Found heartbeat process at {heartbeat_proc.info['pid']}")
+        logger.info(f"Found heartbeat process at {p['hb'].info['pid']}")
 
-
-def pretty_print_POST(req):
-    logger.info('{}\n{}\r\n{}\r\n\r\n{}'.format('-----------START-----------',
-        req.method + ' ' + req.url,
-        '\r\n'.join('{}: {}'.format(k, v) for k, v in req.headers.items()), req.body,))
+    return p
 
 
 def api_call(http_method, end_point, data):
+    """
+    API Call
+
+    Wrapper for general http call to taccjm server.
+
+    Parameters
+    ----------
+
+    Returns
+    -------
+    p : dict
+        Dictionary containing server and heartbeat processes found or started.
+    """
     base_url = 'http://{host}:{port}'.format(host=TACCJM_HOST, port=TACCJM_PORT)
 
     req = requests.Request(http_method, base_url + '/' + end_point , data=data)
     prepared = req.prepare()
-    pretty_print_POST(prepared)
+    logger.info('{}\n{}\r\n{}\r\n\r\n{}'.format(
+        '-----------START-----------',
+        req.method + ' ' + req.url,
+        '\r\n'.join('{}: {}'.format(k, v) for k,
+            v in req.headers.items()), req.body,))
 
     s = requests.Session()
     res = s.send(prepared)
     status = res.status_code
-    pdb.set_trace()
 
-    if status==200:
-        res_val = json.loads(res.text)
-        if type(res_val)==dict:
-            if 'error' in res_val.keys():
-                return {'status': 0, 'res':res_val}
-        return {'status': 1, 'res':res_val}
-    else:
-        return {'status': 0, 'res':{'err': f'TACCJM Error - {res.text}'}}
+    return res
+
+    # if status==200:
+    #     res_val = json.loads(res.text)
+    #     if type(res_val)==dict:
+    #         if 'error' in res_val.keys():
+    #             return {'status': 0, 'res':res_val}
+    #     return {'status': 1, 'res':res_val}
+    # else:
+    #     return {'status': 0, 'res':{'err': f'TACCJM Error - {res.text}'}}
 
 
 def init_jm(jm_id:str, system:str, user:str="", psw:str="", mfa:str="", restart=False):
