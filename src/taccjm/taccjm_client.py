@@ -18,6 +18,49 @@ __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
 
+class TACCJMError(Exception):
+    """
+    Custom exception to wrap around API calls to TACCJM server.
+
+    Attributes
+    ----------
+    system : str
+        TACC System on which command was executed.
+    user : str
+        User that is executing command.
+    command : str
+        Command that threw the error.
+    rc : str
+        Return code.
+    stdout : str
+        Output from stdout.
+    stderr : str
+        Output from stderr.
+    message : str
+        Explanation of the error.
+    """
+
+    def __init__(self, system, user, command, rc, stderr, stdout,
+            message="Non-zero return code."):
+        self.system = system
+        self.user = user
+        self.command = command
+        self.rc = rc
+        self.stderr = stderr.strip('\n')
+        self.stdout = stdout.strip('\n')
+        self.message = message
+        super().__init__(self.message)
+
+
+    def __str__(self):
+        msg =  f"{self.message}"
+        msg += f"\n{self.user}@{self.system}$ {self.command}"
+        msg += f"\nrc     : {self.rc}"
+        msg += f"\nstdout : {self.stdout}"
+        msg += f"\nstderr : {self.stderr}"
+        return msg
+
+
 def set_host(host=TACCJM_HOST, port=TACCJM_PORT):
     """
     Set Host
@@ -131,8 +174,7 @@ def check_start_server():
     """
     # Commands to start hug server and heartbeat process
     server_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f "
-    server_cmd += os.path.join(os.path.dirname(taccjm.__file__),
-            'taccjm_server.py')
+    server_cmd += os.path.join(TACCJM_SOURCE, 'taccjm_server.py')
     hb_cmd = "python "+os.path.join(TACCJM_SOURCE, 'taccjm_server_heartbeat.py')
     hb_cmd += f" --host={TACCJM_HOST} --port={TACCJM_PORT}"
 
@@ -140,6 +182,9 @@ def check_start_server():
             f"taccjm_server_{TACCJM_HOST}_{TACCJM_PORT}.log")
     heartbeat_log = os.path.join(TACCJM_DIR,
             f"taccjm_heartbeat_{TACCJM_HOST}_{TACCJM_PORT}.log")
+
+    # Make taccjm log dirs if they need to be made
+    make_taccjm_dir()
 
     # Search for server process
     p = find_tjm_processes()
@@ -183,23 +228,22 @@ def api_call(http_method, end_point, data=None):
 
     req = requests.Request(http_method, base_url + '/' + end_point , data=data)
     prepared = req.prepare()
-    logger.info('{}\n{}\r\n{}\r\n\r\n{}'.format(
-        '-----------START-----------',
-        req.method + ' ' + req.url,
-        '\r\n'.join('{}: {}'.format(k, v) for k,
-            v in req.headers.items()), req.body,))
+    # logger.info('{}\n{}\r\n{}\r\n\r\n{}'.format(
+    #     '-----------START-----------',
+    #     req.method + ' ' + req.url,
+    #     '\r\n'.join('{}: {}'.format(k, v) for k,
+    #         v in req.headers.items()), req.body,))
 
     s = requests.Session()
     res = s.send(prepared)
-    status = res.status_code
 
-    if status==200:
-        return json.loads(res.text)
+    if res.status_code==200:
+        return res.json()
     else:
-        pdb.set_trace()
-        # TODO: Clean this up, create appropriate exception
-        logger.info('API Call Failed')
-        raise Exception('API Call Failed')
+        msg = f"HTTP Error {res.status_code} ({res.reason}) : "
+        msg += ','.join([f"{x} - {y}" for x,y in res.json()['errors'].items()])
+        logger.error(msg)
+        raise Exception(msg)
 
 
 def init_jm(jm_id:str, system:str,
