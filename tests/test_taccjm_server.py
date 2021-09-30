@@ -6,8 +6,6 @@ Integration tests for taccjm_server
 import os
 import pdb
 import hug
-import pytest
-import posixpath
 from dotenv import load_dotenv
 from unittest.mock import patch
 

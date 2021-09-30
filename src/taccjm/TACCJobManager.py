@@ -6,8 +6,6 @@ TACCJobManager Class
 
 # TODO: Investigate how to handle closing of paramiko ssh client adequately
 
-from taccjm import __version__  # Version of this library
-
 import os                       # OS system utility functions -> for local system
 import posixpath                # Path manipulation on remote system (assumed UNIX)
 import errno                    # For error messages

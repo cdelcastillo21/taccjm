@@ -11,22 +11,14 @@ import getpass
 import logging
 import requests
 import subprocess
+from taccjm.constants import *
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
-global TACCJM_DIR, TACCJM_HOST, TACCJM_PORT
 
-
-# For storing logs and state
-TACCJM_DIR = os.environ.get("TACCJM_DIR")
-TACCJM_DIR = "~/.taccjm" if TACCJM_DIR is None else TACCJM_DIR
-
-TACCJM_DEFAULT_PORT=8221
-
-
-def set_host(host='localhost', port=TACCJM_DEFAULT_PORT):
+def set_host(host=TACCJM_HOST, port=TACCJM_PORT):
     """
     Set Host
 
@@ -34,9 +26,9 @@ def set_host(host='localhost', port=TACCJM_DEFAULT_PORT):
 
     Parameters
     ----------
-    host : str, default='localhost'
+    host : str, default=`TACCJM_PORT`
         Host where taccjm server is running.
-    PORT : int, default=8221
+    PORT : int, default=`TACCJM_HOST`
         Port on host which taccjm server is listening for requests.
 
     Returns
@@ -73,9 +65,10 @@ def find_tjm_processes():
     processes_found = {}
 
     # Strings defining commands
-    server_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f taccjm_server.py"
-    hb_cmd = f"python taccjm_server_heartbeat.py "
-    hb_cmd += f"--host={TACCJM_HOST} --port={TACCJM_PORT}"
+    server_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f "
+    server_cmd += os.path.join(TACCJM_SOURCE, 'taccjm_server.py')
+    hb_cmd = "python "+os.path.join(TACCJM_SOURCE, 'taccjm_server_heartbeat.py')
+    hb_cmd += f" --host={TACCJM_HOST} --port={TACCJM_PORT}"
 
     for proc in psutil.process_iter(['name', 'pid', 'cmdline']):
         if proc.info['cmdline']!=None:
@@ -137,9 +130,11 @@ def check_start_server():
         Dictionary containing server and heartbeat processes found or started.
     """
     # Commands to start hug server and heartbeat process
-    server_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f taccjm_server.py"
-    hb_cmd = f"python taccjm_server_heartbeat.py "
-    hb_cmd += f"--host={TACCJM_HOST} --port={TACCJM_PORT}"
+    server_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f "
+    server_cmd += os.path.join(os.path.dirname(taccjm.__file__),
+            'taccjm_server.py')
+    hb_cmd = "python "+os.path.join(TACCJM_SOURCE, 'taccjm_server_heartbeat.py')
+    hb_cmd += f" --host={TACCJM_HOST} --port={TACCJM_PORT}"
 
     server_log = os.path.join(TACCJM_DIR,
             f"taccjm_server_{TACCJM_HOST}_{TACCJM_PORT}.log")
@@ -161,7 +156,7 @@ def check_start_server():
     if 'hb' not in p.keys():
         # Start heartbeat
         with open(heartbeat_log, 'w') as log:
-            p['hb'] = subprocess.Popen(heartbeat_start_cmd.split(' '),
+            p['hb'] = subprocess.Popen(hb_cmd.split(' '),
                     stdout=log, stderr=subprocess.STDOUT)
             logger.info(f"Started heartbeat process with pid {p['hb'].pid}")
     else:
@@ -170,7 +165,7 @@ def check_start_server():
     return p
 
 
-def api_call(http_method, end_point, data):
+def api_call(http_method, end_point, data=None):
     """
     API Call
 
@@ -198,19 +193,49 @@ def api_call(http_method, end_point, data):
     res = s.send(prepared)
     status = res.status_code
 
-    return res
-
-    # if status==200:
-    #     res_val = json.loads(res.text)
-    #     if type(res_val)==dict:
-    #         if 'error' in res_val.keys():
-    #             return {'status': 0, 'res':res_val}
-    #     return {'status': 1, 'res':res_val}
-    # else:
-    #     return {'status': 0, 'res':{'err': f'TACCJM Error - {res.text}'}}
+    if status==200:
+        return json.loads(res.text)
+    else:
+        pdb.set_trace()
+        # TODO: Clean this up, create appropriate exception
+        logger.info('API Call Failed')
+        raise Exception('API Call Failed')
 
 
-def init_jm(jm_id:str, system:str, user:str="", psw:str="", mfa:str="", restart=False):
+def init_jm(jm_id:str, system:str,
+        user:str=None, psw:str=None, mfa:str=None, restart=False):
+    """
+    Init JM
+
+    Initialize a JM instance on TACCJM server. If no TACCJM server is found
+    to connect to, then starts the server.
+
+    Parameters
+    ----------
+    jm_id : str
+        ID to give to Job Manager instance on TACCJM server. Must be unique and
+        not exist already in TACCJM when executing `list_jms()`.
+    system : str
+        Name of tacc system to connect to. Must be one of stampede2, ls5,
+        frontera, or maverick2.
+    user : str, optional
+        TACC user name. If non given, an input prompt will be provided.
+    psw : str, optional
+        TACC psw for user. if non given, a secure prompt will be provided.
+    mfa : str, optional
+        2-factor authentication code required to connect to TACC system. If
+        non is provided, a prompt will be provided. Note, since code is on
+        timer, give the server ample time to connect to TACC by copying the
+        code when the timer just starts
+    restart : bool, default=False
+        If set to True, then any server found on the given host/prot combination
+        will be killed and restarted first before initailizign new JM.
+
+    Returns
+    -------
+    p : dict
+        Dictionary containing server and heartbeat processes found or started.
+    """
 
     # Kill any active server at currently set host/port if restart set
     if restart==True:
@@ -227,15 +252,15 @@ def init_jm(jm_id:str, system:str, user:str="", psw:str="", mfa:str="", restart=
         data = {'user': user,
                         'psw': psw,
                         'mfa':mfa}
-        if data['user']=="":
+        if data['user'] is None:
             data['user'] = input("Username: ")
-        if data['psw']=="":
+        if data['psw'] is None:
             data['psw'] = getpass.getpass("Password: ")
-        if data['mfa']=="":
+        if data['mfa'] is None:
             data['mfa'] = input("TACC Token Code: ")
 
         # Make API call
-        res = api_call('POST', 'jm/init', data)
+        res = api_call('POST', 'init', data)
 
         # Check if successfully logged in
         if not res['status']:
@@ -247,17 +272,28 @@ def init_jm(jm_id:str, system:str, user:str="", psw:str="", mfa:str="", restart=
 
 
 def list_jm():
+    """
+    List JMs
 
-    data = {}
+    List available job managers managed by job manager server.
 
-    res = api_call('GET', 'jm/list', data)
+    Parameters
+    ----------
 
-    if not res['status']:
-        msg = f"TACCJM - list_jm error - {res}"
+    Returns
+    -------
+    jms : list of str
+        List of job managers avaiable.
+    """
+
+    try:
+        res = api_call('GET', 'list')
+    except Exception as e:
+        msg = f"list_jm - {e}"
         logger.error(msg)
-        raise Exception(msg)
+        raise e
 
-    return res['res']
+    return res
 
 #
 #
@@ -430,6 +466,6 @@ def list_jm():
 #   return res['res']
 # 
 
+# Start server upon loading library
 logger = logging.getLogger(__name__)
-# logging.basicConfig(level=logging.INFO)
-set_host()
+logging.basicConfig(level=logging.INFO)

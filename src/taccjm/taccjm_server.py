@@ -4,7 +4,7 @@ TACCJM Hug Server
 Server for managing instances of TACCJobManager classes via http endpoints
 using the hug framework.
 
-TODO: Add logging
+TODO: Add more extensive logging
 """
 import pdb
 import os
@@ -13,19 +13,11 @@ import falcon
 import logging
 from taccjm.TACCJobManager import TACCJobManager, TJMCommandError
 
-
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
-
-# For storing logs and state
-TJM_DIR = os.environ.get("TACCJM_DIR")
-TJM_DIR = os.path.join(os.path.expanduser("~"),'.taccjm')
-if not os.path.exists(TJM_DIR):
-    os.makedirs(TJM_DIR)
-
-# Initialize server
+# Initialize server logger
 logger = logging.getLogger()
 logging.basicConfig(level=logging.DEBUG)
 

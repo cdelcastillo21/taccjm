@@ -11,16 +11,9 @@ References:
     - https://pip.pypa.io/en/stable/reference/pip_install
 """
 
-
-
-from taccjm import __version__  # Version of this library
-from taccjm.taccjm_client import *
-
 import argparse
 import logging
 import sys
-
-from taccjm import __version__
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -77,7 +70,7 @@ def parse_args(args):
         version="taccjm {ver}".format(ver=__version__),
     )
     parser.add_argument(dest="op", help="TACC Job Manger CLI operation to perform",
-            type=str, metavar="STR", choices['init'])
+            type=str, metavar="STR", choices=['init'])
     parser.add_argument(
         "-v",
         "--verbose",
