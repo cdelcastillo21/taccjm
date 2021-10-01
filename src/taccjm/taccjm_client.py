@@ -205,7 +205,6 @@ def api_call(http_method, end_point, data=None):
         logger.info(f"Unknown error when trying to connect to server - {e}")
 
 
-
 def list_jms():
     """
     List JMs
@@ -220,7 +219,6 @@ def list_jms():
     jms : list of str
         List of job managers avaiable.
     """
-
     try:
         res = api_call('GET', 'list')
     except TACCJMError as e:
