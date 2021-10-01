@@ -7,18 +7,64 @@ import os
 import pdb
 import json
 import psutil
-import getpass
 import logging
 import requests
 import subprocess
+from time import sleep
+from getpass import getpass
 from taccjm.constants import *
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
+class TACCJMError(Exception):
+    """
+    Custom TACCJM exception for errors encountered when interacting with
+    commands sent to TACCJM server via HTTP endpoints.
 
-def set_host(host=TACCJM_HOST, port=TACCJM_PORT):
+    Attributes
+    ----------
+    jm_id : str
+        TACC Job Manager which command was sent to.
+    user : str
+        User that sent API call.
+    res : requests.models.Response
+        Response object containing info on API call that failed.
+    message : str
+        Str message explaining error.
+    """
+
+    def __init__(self, res, message="API Error"):
+        self.res = res
+        self.message = message
+        super().__init__(self.message)
+
+
+    def __str__(self):
+        # Get response object
+        res = self.res
+
+        # Format errors
+        m =  f"{self.message} - {res.status_code} {res.reason}:\n"
+        m += '\n'.join([f"{k} : {v}" for k,v in res.json()['errors'].items()])
+
+        # Format HTTP request
+        m += "-----------START-----------\n"
+        m += f"{res.request.method} {res.request.url}\r\n"
+        m += '\r\n'.join('{}: {}'.format(k, v) for k,
+                v in res.request.headers.items())
+        if res.request.body is not None:
+            # Fix body to remove psw if exists, don't want in logs
+            body = [s.split('=') for s in res.request.body.split('&')]
+            body = [x if x[0]!='psw' else (x[0], '') for x in body]
+            body = '&'.join(['='.join(x) for x in body])
+            m += body
+
+        return m
+
+
+def set_host(host:str=TACCJM_HOST, port:int=TACCJM_PORT):
     """
     Set Host
 
@@ -42,11 +88,11 @@ def set_host(host=TACCJM_HOST, port=TACCJM_PORT):
     """
     global TACCJM_HOST, TACCJM_PORT
     TACCJM_HOST = host
-    TACCJM_PORT = port
+    TACCJM_PORT = int(port)
     logger.info(f"Switched host {TACCJM_HOST} and port {TACCJM_PORT}")
 
 
-def find_tjm_processes():
+def find_tjm_processes(start=False, kill=False):
     """
     Find TACC Job Manager Processes
 
@@ -54,115 +100,66 @@ def find_tjm_processes():
 
     Parameters
     ----------
+    start : bool, default=False
+        Whether to start either server or heartbeat processes if they are not
+        found. Note that if both start and kill are True then each processes
+        will effectively restart if it exists.
+    kill : bool, default=False
+        Whether to kill the processes if they are found.
 
     Returns
     -------
     processes : dict
-        Dictionary with keys `server` and/or `heartbeat' containing psutil
-        process objects corresponding to TACC Job Manager processes found.
+        Dictionary with keys `server` and/or `heartbeat' containing Process
+        objects of processes corresponding to TACC Job Manager processes
+        found/started. Note if kill is True but start is False, then this
+        dictionary will always empty.
 
     """
     processes_found = {}
 
     # Strings defining commands
-    server_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f "
-    server_cmd += os.path.join(TACCJM_SOURCE, 'taccjm_server.py')
+    srv_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f "
+    srv_cmd += os.path.join(TACCJM_SOURCE, 'taccjm_server.py')
     hb_cmd = "python "+os.path.join(TACCJM_SOURCE, 'taccjm_server_heartbeat.py')
     hb_cmd += f" --host={TACCJM_HOST} --port={TACCJM_PORT}"
 
     for proc in psutil.process_iter(['name', 'pid', 'cmdline']):
         if proc.info['cmdline']!=None:
             cmd = ' '.join(proc.info['cmdline'])
-            if server_cmd in cmd:
+            if srv_cmd in cmd:
+                logger.info(f"Found server process at {proc.info['pid']}")
                 processes_found['server'] = proc
             if hb_cmd in cmd:
+                logger.info(f"Found heartbeat process at {proc.info['pid']}")
                 processes_found['hb'] = proc
 
+    if kill:
+        # Kill processes found and return empty dictionary
+        for key,val in processes_found.items():
+            msg = f"Killing {key} process with pid {val.info['pid']}"
+            logger.info(msg)
+            val.terminate()
+        processes_found = {}
+
+    if start:
+        srv_log = os.path.join(TACCJM_DIR,
+                f"taccjm_server_{TACCJM_HOST}_{TACCJM_PORT}.log")
+        hb_log = os.path.join(TACCJM_DIR,
+                f"taccjm_heartbeat_{TACCJM_HOST}_{TACCJM_PORT}.log")
+        for p in [('server', srv_cmd, srv_log), ('hb', hb_cmd, hb_log)]:
+            if p[0] not in processes_found.keys():
+                # Start server/hb if not found
+                with open(p[2], 'w') as log:
+                    processes_found[p[0]] = subprocess.Popen(
+                            p[1].split(' '),
+                            stdout=log,
+                            stderr=subprocess.STDOUT)
+                    pid = processes_found[p[0]].pid
+                    logger.info(f"Started {p[0]} process with pid {pid}")
+
+    # Return processes found/started
     return processes_found
-
-
-def kill_server():
-    """
-    Kill Server
-
-    Looks for and kills local processes that correspond to taccjm
-    server and hearbeat.
-
-    Parameters
-    ----------
-
-    Returns
-    -------
-
-    """
-    # Search for server process
-    p = find_tjm_processes()
-    if 'server' in p.keys():
-        # kill server
-        msg = f"Killing server process with pid {p['server'].info['pid']}"
-        logger.info(msg)
-        p['server'].terminate()
-    else:
-        logger.info('Did not find server process to kill')
-
-    if 'hb' in p.keys():
-        # kill server
-        msg = f"Killing heartbeat process with pid {p['hb'].info['pid']}"
-        logger.info(msg)
-        p['hb'].terminate()
-    else:
-        logger.info('Did not find heartbeat process to kill')
-
-
-def check_start_server():
-    """
-    Check and Start Server
-
-    Looks for taccjm server and heartbeat processes and starts them if
-    they are not running.
-
-    Parameters
-    ----------
-
-    Returns
-    -------
-    p : dict
-        Dictionary containing server and heartbeat processes found or started.
-    """
-    # Commands to start hug server and heartbeat process
-    server_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f "
-    server_cmd += os.path.join(os.path.dirname(taccjm.__file__),
-            'taccjm_server.py')
-    hb_cmd = "python "+os.path.join(TACCJM_SOURCE, 'taccjm_server_heartbeat.py')
-    hb_cmd += f" --host={TACCJM_HOST} --port={TACCJM_PORT}"
-
-    server_log = os.path.join(TACCJM_DIR,
-            f"taccjm_server_{TACCJM_HOST}_{TACCJM_PORT}.log")
-    heartbeat_log = os.path.join(TACCJM_DIR,
-            f"taccjm_heartbeat_{TACCJM_HOST}_{TACCJM_PORT}.log")
-
-    # Search for server process
-    p = find_tjm_processes()
-    if 'server' not in p.keys():
-        # Start server
-        with open(server_log, 'w') as log:
-            p['server'] = subprocess.Popen(server_cmd.split(' '), stdout=log,
-                    stderr=subprocess.STDOUT)
-            logger.info(f"Started server process with pid {p['server'].pid}")
-    else:
-        logger.info('Found server process at ' + str(p['server'].info['pid']))
-
-    # Search for heartbeat process
-    if 'hb' not in p.keys():
-        # Start heartbeat
-        with open(heartbeat_log, 'w') as log:
-            p['hb'] = subprocess.Popen(hb_cmd.split(' '),
-                    stdout=log, stderr=subprocess.STDOUT)
-            logger.info(f"Started heartbeat process with pid {p['hb'].pid}")
-    else:
-        logger.info(f"Found heartbeat process at {p['hb'].info['pid']}")
-
-    return p
 
 
 def api_call(http_method, end_point, data=None):
@@ -179,31 +176,63 @@ def api_call(http_method, end_point, data=None):
     p : dict
         Dictionary containing server and heartbeat processes found or started.
     """
-    base_url = 'http://{host}:{port}'.format(host=TACCJM_HOST, port=TACCJM_PORT)
 
+    # Build http request
+    base_url = 'http://{host}:{port}'.format(host=TACCJM_HOST, port=TACCJM_PORT)
     req = requests.Request(http_method, base_url + '/' + end_point , data=data)
     prepared = req.prepare()
-    logger.info('{}\n{}\r\n{}\r\n\r\n{}'.format(
-        '-----------START-----------',
-        req.method + ' ' + req.url,
-        '\r\n'.join('{}: {}'.format(k, v) for k,
-            v in req.headers.items()), req.body,))
 
+    # Initialize connection and send http request
     s = requests.Session()
-    res = s.send(prepared)
-    status = res.status_code
 
-    if status==200:
-        return json.loads(res.text)
-    else:
-        pdb.set_trace()
-        # TODO: Clean this up, create appropriate exception
-        logger.info('API Call Failed')
-        raise Exception('API Call Failed')
+    try:
+        try:
+            res = s.send(prepared)
+        except requests.exceptions.ConnectionError as c:
+            logger.info('Cannot connect to server. Restarting and waiting 5s.')
+            _ = find_tjm_processes(start=True)
+            sleep(5)
+            res = s.send(prepared)
+
+        # Return content if success, else raise error
+        if res.status_code == 200:
+            return json.loads(res.text)
+        else:
+            raise TACCJMError(res)
+    except TACCJMError as t:
+        raise t
+    except Exception as e:
+        logger.info(f"Unknown error when trying to connect to server - {e}")
+
+
+
+def list_jms():
+    """
+    List JMs
+
+    List available job managers managed by job manager server.
+
+    Parameters
+    ----------
+
+    Returns
+    -------
+    jms : list of str
+        List of job managers avaiable.
+    """
+
+    try:
+        res = api_call('GET', 'list')
+    except TACCJMError as e:
+        e.message = "list_jm error"
+        logger.error(e.message)
+        raise e
+
+    return res
 
 
 def init_jm(jm_id:str, system:str,
-        user:str=None, psw:str=None, mfa:str=None, restart=False):
+        user:str=None, psw:str=None, mfa:str=None):
     """
     Init JM
 
@@ -227,74 +256,89 @@ def init_jm(jm_id:str, system:str,
         non is provided, a prompt will be provided. Note, since code is on
         timer, give the server ample time to connect to TACC by copying the
         code when the timer just starts
-    restart : bool, default=False
-        If set to True, then any server found on the given host/prot combination
-        will be killed and restarted first before initailizign new JM.
 
     Returns
     -------
-    p : dict
-        Dictionary containing server and heartbeat processes found or started.
+    jm : dict
+        Dictionary containing info about job manager instance just initialized.
     """
+    if jm_id in [j['jm_id'] for j in list_jms()]:
+        raise ValueError(f"{jm_id} already exists.")
 
-    # Kill any active server at currently set host/port if restart set
-    if restart==True:
-        kill_server()
+    # Get user credentials/psw/mfa if not provided
+    user = input("Username: ") if user is None else user
+    psw = getpass("psw: ") if psw is None else psw
+    mfa = input("mfa: ") if mfa is None else mfa
+    data = {'jm_id':jm_id, 'system': system,
+            'user': user, 'psw': psw, 'mfa':mfa}
 
-    # Start server and heartbeat process if necessary
-    check_start_server()
-
-    # Try first to get allocations. If connected already this should work
+    # Make API call
     try:
-        allocations = get_allocations()
-    except:
-        # Get user credentials/psw/mfa if not provided
-        data = {'user': user,
-                        'psw': psw,
-                        'mfa':mfa}
-        if data['user'] is None:
-            data['user'] = input("Username: ")
-        if data['psw'] is None:
-            data['psw'] = getpass.getpass("Password: ")
-        if data['mfa'] is None:
-            data['mfa'] = input("TACC Token Code: ")
-
-        # Make API call
         res = api_call('POST', 'init', data)
-
-        # Check if successfully logged in
-        if not res['status']:
-            msg = f"TACCJM - init error - {res}"
-            logger.error(msg)
-            raise Exception(msg)
-
-    return res['res']
-
-
-def list_jm():
-    """
-    List JMs
-
-    List available job managers managed by job manager server.
-
-    Parameters
-    ----------
-
-    Returns
-    -------
-    jms : list of str
-        List of job managers avaiable.
-    """
-
-    try:
-        res = api_call('GET', 'list')
-    except Exception as e:
-        msg = f"list_jm - {e}"
-        logger.error(msg)
+    except TACCJMError as e:
+        e.message = "init_jm error"
+        logger.error(e.message)
         raise e
 
     return res
 
+
+def get_jm(jm_id:str):
+    """
+    Get JM
+
+    Get info about a Job Manager initialized on server.
+
+    Parameters
+    ----------
+    jm_id : str
+        ID of Job Manager instance.
+
+    Returns
+    -------
+    jm : dictionary
+        Dictionary containing job manager info.
+    """
+
+    try:
+        res = api_call('GET', jm_id)
+    except TACCJMError as e:
+        e.message = f"get_jm error"
+        logger.error(e.message)
+        raise e
+
+    return res
+
+
+def get_queue(jm_id:str, user:str=None):
+    """
+    Get Queue
+
+    Get job queue info for system job manager is connected to.
+
+    Parameters
+    ----------
+    jm_id : str
+        ID of Job Manager instance.
+    user : str, optional
+        User to get job queue info about. Will by default get for user
+        who initialized connection to job manager. Pass `all` as the user to
+        get the whole job queue.
+
+    Returns
+    -------
+    queue : dictionary
+        Dictionary containing job manager info.
+    """
+
+    try:
+        queue = api_call('GET', f"{jm_id}/queue")
+    except TACCJMError as e:
+        e.message = f"get_jm error"
+        logger.error(e.message)
+        raise e
+
+    return queue
 #
 #
 # def load_app(app):
