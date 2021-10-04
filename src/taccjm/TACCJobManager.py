@@ -592,6 +592,8 @@ class TACCJobManager():
                 fileattr = sftp.stat(remote)
                 is_dir = stat.S_ISDIR(fileattr.st_mode)
                 if is_dir:
+                    # TODO: Implement file_filter with find command:
+                    # find . -name '*.php' -print0 | tar -cvjf my.tar.bz2 --null --files-from -
                     dirname, fname = os.path.split(remote)
                     self._execute_command(f"cd {dirname} && tar -czvf {fname}.tar.gz {fname}")
                     local_dir = os.path.abspath(os.path.join(local, os.pardir))

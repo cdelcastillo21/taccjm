@@ -219,12 +219,11 @@ def restore(jm_id:str, remote_path:str):
         raise falcon.HTTPError(falcon.HTTP_500, "files", str(e))
 
 
-@hug.put('/{jm_id}/data/send')
-def send_data(jm_id:str, data, remote_path:str):
-    """Send data
+@hug.put('/{jm_id}/files/write')
+def write(jm_id:str, data, remote_path:str):
+    """Write file
 
-    Send text or json data directly to a path on JM's TACC system.
-
+    Write text or json data directly to a file path on JM's remote system.
     """
     _check_init(jm_id)
 
@@ -232,24 +231,24 @@ def send_data(jm_id:str, data, remote_path:str):
         JM[jm_id].send_data(data, remote_path)
     except ValueError as v:
         # Raise 400 Bad Request if invalid data type passed
-        raise falcon.HTTPError(falcon.HTTP_400, "data", str(v))
+        raise falcon.HTTPError(falcon.HTTP_400, "files", str(v))
     except FileNotFoundError as f:
         # Raise 404 if remote_path does not exist
-        raise falcon.HTTPError(falcon.HTTP_404, "data", str(f))
+        raise falcon.HTTPError(falcon.HTTP_404, "files", str(f))
     except PermissionError as p:
         # Raise 403 forbidden if dont have permissions to remote_path
-        raise falcon.HTTPError(falcon.HTTP_403, "data", str(p))
+        raise falcon.HTTPError(falcon.HTTP_403, "files", str(p))
     except Exception as e:
         # Unknown Error
-        raise falcon.HTTPError(falcon.HTTP_500, "data", str(e))
+        raise falcon.HTTPError(falcon.HTTP_500, "files", str(e))
 
 
-@hug.get('/{jm_id}/data/receive')
-def receive_data(jm_id:str, remote_path:str, data_type:str='text'):
-    """File Download
+@hug.get('/{jm_id}/files/read')
+def read(jm_id:str, remote_path:str, data_type:str='text'):
+    """Read file
 
-    Download file or folder to TACC system for given job manager to local path
-
+    Read text or json file directly from path on remote system managed by by
+    job manager instance.
     """
     _check_init(jm_id)
 
@@ -257,16 +256,16 @@ def receive_data(jm_id:str, remote_path:str, data_type:str='text'):
         return JM[jm_id].get_data(remote_path, data_type=data_type)
     except ValueError as v:
         # Raise bad request if data_type is not text or json
-        raise falcon.HTTPError(falcon.HTTP_400, "data", str(v))
+        raise falcon.HTTPError(falcon.HTTP_400, "files", str(v))
     except FileNotFoundError as f:
         # Raise 404 not found error if local or remoate path don't exist
-        raise falcon.HTTPError(falcon.HTTP_404, "data", str(f))
+        raise falcon.HTTPError(falcon.HTTP_404, "files", str(f))
     except PermissionError as p:
         # Raise 403 forbidden if dont have permissions to access either paath
-        raise falcon.HTTPError(falcon.HTTP_403, "data", str(p))
+        raise falcon.HTTPError(falcon.HTTP_403, "files", str(p))
     except Exception as e:
         # Unknown Error
-        raise falcon.HTTPError(falcon.HTTP_500, "data", str(e))
+        raise falcon.HTTPError(falcon.HTTP_500, "files", str(e))
 
 
 @hug.get('/{jm_id}/apps/list')
@@ -416,7 +415,6 @@ def cleanup_job(jm_id:str, job_id:str):
     """
 
     return JM[jm_id].cleanup_job(job_id)
-
 
 
 @hug.get('/{jm_id}/jobs/{job_id}/files/list')

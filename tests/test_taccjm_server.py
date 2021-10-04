@@ -139,57 +139,57 @@ def test_files(mfa):
     os.remove('tests/test_download')
 
 
-def test_data(mfa):
-    """Test file operations"""
+def test_read_write(mfa):
+    """Test read and write file operations"""
 
     _init(mfa)
 
     # Send local data to a file
-    response = hug.test.put(taccjm_server, f"{test_jm}/data/send",
+    response = hug.test.put(taccjm_server, f"{test_jm}/files/write",
             {'data':'foo', 'remote_path':'test_data'})
     assert response.status == '200 OK'
     response = hug.test.get(taccjm_server, f"{test_jm}/files/list")
     assert 'test_data' in response.data
 
     # Send data errors
-    response = hug.test.put(taccjm_server, f"{test_jm}/data/send",
+    response = hug.test.put(taccjm_server, f"{test_jm}/files/write",
             {'data':['foo'], 'remote_path':'test_data'})
     assert response.status == '400 Bad Request'
-    response = hug.test.put(taccjm_server, f"{test_jm}/data/send",
+    response = hug.test.put(taccjm_server, f"{test_jm}/files/write",
             {'data':'foo', 'remote_path':'foo/bar/test_data'})
     assert response.status == '404 Not Found'
     with patch.object(TACCJobManager, 'send_data',
             side_effect=PermissionError('Mock unexpected error.')):
-        response = hug.test.put(taccjm_server, f"{test_jm}/data/send",
+        response = hug.test.put(taccjm_server, f"{test_jm}/files/write",
                 {'data':'foo', 'remote_path':'/test_data'})
         assert response.status == '403 Forbidden'
     with patch.object(TACCJobManager, 'send_data',
             side_effect=Exception('Mock unexpected error.')):
-        response = hug.test.put(taccjm_server, f"{test_jm}/data/send",
+        response = hug.test.put(taccjm_server, f"{test_jm}/files/write",
             {'data':'foo', 'remote_path':'test'})
         assert response.status == '500 Internal Server Error'
 
     # Get data we just sent
-    response = hug.test.get(taccjm_server, f"{test_jm}/data/receive",
+    response = hug.test.get(taccjm_server, f"{test_jm}/files/read",
             {'remote_path':'test_data', 'data_type':'text'})
     assert response.status == '200 OK'
     assert response.data=='foo'
 
     # Receive data errors
-    response = hug.test.get(taccjm_server, f"{test_jm}/data/receive",
+    response = hug.test.get(taccjm_server, f"{test_jm}/files/read",
         {'remote_path':'test_data', 'data_type':'bad-type'})
     assert response.status == '400 Bad Request'
-    response = hug.test.get(taccjm_server, f"{test_jm}/data/receive",
+    response = hug.test.get(taccjm_server, f"{test_jm}/files/read",
         {'remote_path':'foo/bar/test_data', 'data_type':'text'})
     assert response.status == '404 Not Found'
     with patch.object(TACCJobManager, 'get_data',
             side_effect=PermissionError('Mock permission error.')):
-        response = hug.test.get(taccjm_server, f"{test_jm}/data/receive",
+        response = hug.test.get(taccjm_server, f"{test_jm}/files/read",
             {'remote_path':'/test_data', 'data_type':'text'})
         assert response.status == '403 Forbidden'
     with patch.object(TACCJobManager, 'get_data',
             side_effect=Exception('Mock unexpected error.')):
-        response = hug.test.get(taccjm_server, f"{test_jm}/data/receive",
+        response = hug.test.get(taccjm_server, f"{test_jm}/files/read",
             {'remote_path':'test_data', 'data_type':'text'})
         assert response.status == '500 Internal Server Error'
 

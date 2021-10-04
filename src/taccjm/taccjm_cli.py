@@ -1,19 +1,21 @@
 """
-TACCJM Console Script Entry Point
+TACCJM CLI
 
-Skeleton file only, need to update with entrypoints for taccjm CLI
+Command line interface wrapper around main functions in taccjm_client.
 
 Note:
-
 
 References:
     - https://setuptools.readthedocs.io/en/latest/userguide/entry_point.html
     - https://pip.pypa.io/en/stable/reference/pip_install
 """
 
-import argparse
-import logging
 import sys
+import logging
+import argparse
+
+from taccjm import __version__
+from taccjm import taccjm_client as tc
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -22,35 +24,43 @@ __license__ = "MIT"
 _logger = logging.getLogger(__name__)
 
 
-# ---- Python API ----
-# The functions defined in this section can be imported by users in their
-# Python scripts/interactive interpreter, e.g. via
-# `from taccjm.taccjm import init`,
-# when using this Python module as a library.
-
-
-def init(n):
-    """Initialize a Job Manager instance.
-
-    Args:
-      jm_id (str): integer
-      system (str): integer
-
-    Returns:
-      List of job manager 
-    """
-def tacc_juinit(jm_id:str, system:str, user:str="", psw:str="", mfa:str="", restart=False):
-    assert n > 0
-    a, b = 1, 1
-    for i in range(n - 1):
-        a, b = b, a + b
-    return a
-
-
 # ---- CLI ----
 # The functions defined in this section are wrappers around the main Python
 # API allowing them to be called directly from the terminal as a CLI
 # executable/script.
+
+# List of CLI entry-points
+cli_ops = ("jm list",
+           "jm init",
+           "jm get",
+           "jm queue",
+           "jm allocation",
+           "files list",
+           "files peak",
+           "files upload",
+           "files download",
+           "files read",
+           "files write",
+           "files remove",
+           "files restore",
+           "apps list",
+           "apps get",
+           "apps deploy",
+           "jobs list",
+           "jobs get",
+           "jobs deploy",
+           "jobs submit",
+           "jobs cancel",
+           "jobs cleanup",
+           "jobs files list",
+           "jobs files peak",
+           "jobs files upload",
+           "jobs files download",
+           "jobs files read",
+           "jobs files write",
+           "scripts list",
+           "scripts deploy",
+           "scripts run")
 
 
 def parse_args(args):
@@ -69,8 +79,9 @@ def parse_args(args):
         action="version",
         version="taccjm {ver}".format(ver=__version__),
     )
-    parser.add_argument(dest="op", help="TACC Job Manger CLI operation to perform",
-            type=str, metavar="STR", choices=['init'])
+    parser.add_argument(dest="op",
+            help="TACC Job Manger CLI operation to perform",
+            type=str, nargs='+', metavar="STR", choices=['init'])
     parser.add_argument(
         "-v",
         "--verbose",
