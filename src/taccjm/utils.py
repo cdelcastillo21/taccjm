@@ -6,6 +6,7 @@ TACCJobManager Utility Function
 
 import os                       # OS system utility functions
 import json                     # For reading/writing dictionary<->json
+import errno                    # For error messages
 import configparser             # For reading configs
 from jinja2 import Template     # For templating input json files
 
@@ -15,15 +16,16 @@ __license__ = "MIT"
 
 def update_dic_keys(d, **kwargs):
     """
-    Utility to update a dictionary, with only updating singular parameters in sub-dictionaries.
-    Used when updating and configuring/templating job configs.
+    Utility to update a dictionary, with only updating singular parameters in
+    sub-dictionaries. Used when updating and configuring/templating job configs.
 
     Parameters
     ----------
     d : dict
         Dictioanry to update
     **kwargs : dict, optional
-        All extra keyword arguments will be interpreted as items to override in d.
+        All extra keyword arguments will be interpreted as items to override in
+        d.
 
     Returns
     -------
@@ -44,10 +46,11 @@ def update_dic_keys(d, **kwargs):
 
 def load_templated_json_file(path, config_path, **kwargs):
     """
-    Loads a local json config found at path and templates it using jinja with the values
-    found in config ini file found at config_path . For example, if json file contains
-    `{{ a.b }}`, and `config={'a':{'b':1}}`, then `1` would be substituted in (note nesting).
-    All extra keyword arguments will be interpreted as job config overrides.
+    Loads a local json config found at path and templates it using jinja with
+    the values found in config ini file found at config_path . For example, if
+    json file contains `{{ a.b }}`, and `config={'a':{'b':1}}`, then `1` would
+    be substituted in (note nesting). All extra keyword arguments will be
+    interpreted as job config overrides.
 
     Parameters
     ----------
@@ -70,7 +73,8 @@ def load_templated_json_file(path, config_path, **kwargs):
     """
     # Check if it exists - If it doesn't config parser won't error
     if not os.path.exists(config_path):
-        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), ini_file)
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT),
+                config_path)
 
     # Read project config file
     config_parse = configparser.ConfigParser()
