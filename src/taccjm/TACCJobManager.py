@@ -6,8 +6,8 @@ TACCJobManager Class
 
 # TODO: Investigate how to handle closing of paramiko ssh client adequately
 
-import os                       # OS system utility functions -> for local system
-import posixpath                # Path manipulation on remote system (assumed UNIX)
+import os                       # OS system utility functions for local system
+import posixpath                # Paths on remote system (assumed UNIX)
 import errno                    # For error messages
 import tarfile                  # For sending compressed directories
 import fnmatch                  # For unix-style filename pattern matching
@@ -17,7 +17,7 @@ import json                     # For saving and loading job configs to disk
 import time                     # Time functions
 import logging                  # Used to setup the Paramiko log file
 import datetime                 # Date time functionality
-import stat                     # For determining if remote paths are directories
+import stat                     # For reading file stat codes
 from taccjm.utils import *      # TACCJM Util functions for config files/dicts
 
 # Modified paramiko ssh client and common paramiko exceptions
@@ -34,12 +34,11 @@ logger = logging.getLogger(__name__)
 
 class TJMCommandError(Exception):
     """
-    Custom exception to wrap around executions of any commands sent to TACC resource.
-    This exception gets thrown first by the _execute_command method of the
-    TACCJobManager class, upon any command executing returning a non-zero return code.
-    The idea is to handle this exception gracefully and throw a more specific error
-    in other methods, with the last case being just being passing thus exception along
-    up the stack with context as to where it was thrown to diagnosis the core issue.
+    Custom exception to wrap around executions of any commands sent to TACC
+    resource. This exception gets thrown first by the _execute_command method
+    of the TACCJobManager class, upon any command executing returning a
+    non-zero return code. The idea is to handle this exception gracefully and
+    throw a more specific error in other methods.
 
     Attributes
     ----------
@@ -82,32 +81,34 @@ class TJMCommandError(Exception):
 
 class TACCJobManager():
     """
-    Class defining an ssh connection to a TACC resource. Note path's to resources are all
-    unix-stype paths and are relative to the job manager's base directory.
+    Class defining an ssh connection to a remote system .
 
     Attributes
     ----------
     system : str
-        Name of tacc system to connect to. Supported systems:
-        stampede2, ls5, frontera, maverick2
+        Name of remote system to connect to. Supported systems: stampede2,
+        ls5, frontera, maverick2
     user : str
         Name of tacc user connecting via ssh to resource.
     jobs_dir : str
-        Unix-stlye path to directory where jobs for job manager can be found.
+        Unix-stlye path to directory to store jobs.
     apps_dir : str
-        Unix-style path to directory where applications for job manager can be found.
+        Unix-style path to directory to store applications.
     scripts_dir : str
         Unix-stye path to directory where scripts for job manager can be found.
+    trash_dir : str
+        Unix-stye path to directory where unwanted files/folders go.
 
     Methods
     -------
 
     """
 
-    TACC_SYSTEMS = ['stampede2', 'ls5', 'frontera', 'maverick2']
-    TACC_USER_PROMPT = "Username:"
-    TACC_PSW_PROMPT = "Password:"
-    TACC_MFA_PROMPT ="TACC Token Code:"
+    ROOT = 'tacc.utexas.edu'
+    SYSTEMS = ['stampede2', 'ls5', 'frontera', 'maverick2']
+    USER_PROMPT = "Username:"
+    PSW_PROMPT = "Password:"
+    MFA_PROMPT ="TACC Token Code:"
     SCRATCH_DIR = "$SCRATCH"
     SUBMIT_SCRIPT_TEMPLATE = """#!/bin/bash
 #----------------------------------------------------
@@ -122,45 +123,53 @@ class TACCJobManager():
 #SBATCH -N {N}                                    # Total # of nodes
 #SBATCH -n {n}                                    # Total # of mpi tasks
 #SBATCH -t {rt}                                   # Run time (hh:mm:ss)"""
+    APP_CONFIGS =  ['name', 'shortDescription', 'defaultQueue',
+                    'defaultNodeCount', 'defaultProcessorsPerNode',
+                    'defaultMaxRunTime', 'templatePath', 'inputs',
+                    'parameters', 'outputs']
 
 
-    def __init__(self, system, user=None, psw=None, mfa=None, working_dir='taccjm'):
+    def __init__(self, system, user=None,
+            psw=None, mfa=None, working_dir='taccjm'):
         """
-        Create a new TACC Job Manager instance for apps/jobs on given TACC system.
+        Initialize Job Manager connection and directories.
 
         Parameters
         ----------
         system : str
-            Name of tacc system to connect to via ssh. Supported systems:
+            Name of system to connect to via ssh. Supported systems:
             stampede2, ls5, frontera, maverick2
         user : str , optional
-            Name of tacc user connecting. If non provided input prompt will appear
+            Name of user connecting. If non provided input prompt will appear.
         psw : str , optional
-            Password for user connecting. If non provided input prompt will appear
+            Password for user connecting. Secure prompt will appear if no
+            password is provided.
         mfa : str , optional
-            2-Factor Authenticaion token for user.. If non provided input prompt will appear
+            2-Factor Authenticaion token for user.. If non provided
+            input prompt will appear
         working_dir: str , default='taccjm'
-            Unix-style path relative to user's SCRATCH directory to place all data related to this
-            job manager instance. This includes the apps, jobs, scripts, and trash directories.
+            Unix-style path relative to user's SCRATCH directory to place all
+            data related to this job manager instance. This includes the apps,
+            jobs, scripts, and trash directories.
         """
 
-        if system not in self.TACC_SYSTEMS:
-            msg = f"Unrecognized TACC system {system}. Must be one of {self.TACC_SYSTEMS}."
-            logger.error(msg)
-            raise ValueError(msg)
+        if system not in self.SYSTEMS:
+            m = f"Unrecognized system {system}. Valid options - {self.SYSTEMS}."
+            logger.error(m)
+            raise ValueError(m)
         if any([working_dir.startswith('../'),
                 working_dir.endswith('/..'),
                 '/../' in working_dir ]):
-            msg = f"Inavlid working directory {working_dir}. Contains '..' which isn't allowed."
+            msg = f"Inavlid working dir {working_dir} - Contains '..'."
             logger.error(msg)
             raise ValueError(msg)
 
         # Connect to system
-        logger.info(f"Connecting {user} to TACC system {system}...")
+        logger.info(f"Connecting {user} to system {system}...")
         self.system= f"{system}.tacc.utexas.edu"
-        self._client = SSHClient2FA(user_prompt=self.TACC_USER_PROMPT,
-                psw_prompt=self.TACC_PSW_PROMPT,
-                mfa_prompt=self.TACC_MFA_PROMPT)
+        self._client = SSHClient2FA(user_prompt=self.USER_PROMPT,
+                psw_prompt=self.PSW_PROMPT,
+                mfa_prompt=self.MFA_PROMPT)
         self._client.load_system_host_keys()
         self.user = self._client.connect(self.system, uid=user, pswd=psw, mfa_pswd=mfa)
         logger.info(f"Succesfuly connected to {system}")
@@ -889,10 +898,7 @@ class TACCJobManager():
         cur_apps = self.get_apps()
 
         # Required parameters for application configuration
-        required_args = ['name', 'shortDescription', 'defaultQueue', 'defaultNodeCount',
-                'defaultProcessorsPerNode', 'defaultMaxRunTime', 'templatePath', 'inputs',
-                'parameters', 'outputs']
-        missing = set(required_args) - set(app_config.keys())
+        missing = set(REQUIRED_APP_CONFIGS) - set(app_config.keys())
         if len(missing)>0:
             msg = f"deploy_app - missing required app configs {missing}"
             logger.error(msg)
@@ -995,7 +1001,7 @@ class TACCJobManager():
 
         """
 
-        # ---- HEADER ---- 
+        # ---- HEADER ----
         # The total number of MPI processes is the product of these two quantities
         total_mpi_processes = job_config['nodeCount'] * job_config['processorsPerNode']
 
@@ -1127,7 +1133,8 @@ class TACCJobManager():
         job_config['desc'] = _get_attr('desc','shortDescription')
         job_config['queue'] = _get_attr('queue','defaultQueue')
         job_config['nodeCount'] = _get_attr('nodeCount','defaultNodeCount')
-        job_config['processorsPerNode'] = _get_attr('processorsPerNode','defaultProcessorsPerNode')
+        job_config['processorsPerNode'] = _get_attr('processorsPerNode',
+                'defaultProcessorsPerNode')
         job_config['maxRunTime'] = _get_attr('maxRunTime','defaultMaxRunTime')
 
         # TODO: check all necessary job arguments present?

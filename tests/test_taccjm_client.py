@@ -1,15 +1,17 @@
 """
-Integration tests for taccjm_client
+Tests for taccjm_client
 
 
 """
 import os
 import pdb
 import psutil
+import pytest
 from dotenv import load_dotenv
 from unittest.mock import patch
 
 from taccjm import taccjm_client as tc
+from taccjm.taccjm_client import TACCJMError
 from taccjm.utils import *
 
 __author__ = "Carlos del-Castillo-Negrete"
@@ -31,23 +33,45 @@ PW = os.environ.get("TACCJM_PW")
 SYSTEM = os.environ.get("TACCJM_SYSTEM")
 ALLOCATION = os.environ.get("TACCJM_ALLOCATION")
 
-# Global Initialized Flag - Marks if JM has been initailized for any test
-initialized = False
-
 # Port to srat test servers on
-TEST_TACCJM_PORT=8661
+TEST_TACCJM_PORT = 8661
+TEST_JM_ID = 'test-taccjm'
 
-# def _init(mfa):
-#
-#     # Set port to test port
-#     set_host(port=TEST_TACCJM_PORT)
-#
-#     global initialized
-#     if not initialized:
-#         init_args = {'jm_id': test_jm, 'system': SYSTEM,
-#                      'user': USER, 'psw': PW, 'mfa':mfa}
-#         response = hug.test.post(taccjm_server, 'init', init_args)
-#         initialized = True
+# TEST JM as configured
+TEST_JM = {'jm_id': 'test-taccjm',
+           'sys': 'stampede2.tacc.utexas.edu',
+           'user': 'clos21',
+           'apps_dir': '/scratch/06307/clos21/test-taccjm/apps',
+           'jobs_dir': '/scratch/06307/clos21/test-taccjm/jobs'}
+TEST_QUEUE = [{'job_id': '1111111', 'job_name': 'test-1',
+              'username': 'clos21', 'state': 'Running',
+              'nodes': '11', 'remaining': '11', 'start_time': '19:24:57'},
+              {'job_id': '2222222', 'job_name': 'test-2', 'username': 'clos21',
+               'state': 'Waiting', 'nodes': '16',
+               'remaining': '16', 'start_time': '6:00:00'}]
+TEST_ALLOCATIONS = [{'name': 'alloc-1',
+                     'service_units': 1000,
+                     'exp_date': '2022-12-31'},
+                    {'name': 'alloc-2',
+                     'service_units': 2222,
+                     'exp_date': '2022-03-31'}]
+
+
+def _init():
+    """
+    Initializes TEST_JM on server. Note if server not found, not server will
+    be started if not found.
+
+    """
+
+    # Set port to test port
+    tc.set_host(port=TEST_TACCJM_PORT)
+
+    global TEST_JM
+    if TEST_JM is None:
+        mfa = input('TACC Token:')
+        TEST_JM = tc.init_jm(TEST_JM_ID, SYSTEM, USER, PW, mfa)
+
 
 def test_set_host():
     """
@@ -57,13 +81,13 @@ def test_set_host():
 
     """
     # Set to something new
-    tc.set_host(host='0.0.0.0', port=8662)
-    assert tc.TACCJM_PORT == 8662
+    tc.set_host(host='0.0.0.0', port=TEST_TACCJM_PORT+1)
+    assert tc.TACCJM_PORT == TEST_TACCJM_PORT+1
     assert tc.TACCJM_HOST == '0.0.0.0'
 
     # Set back to default
     tc.set_host(host='localhost', port=TEST_TACCJM_PORT)
-    assert tc.TACCJM_PORT == 8661
+    assert tc.TACCJM_PORT == TEST_TACCJM_PORT
     assert tc.TACCJM_HOST == 'localhost'
 
 
@@ -74,14 +98,171 @@ def test_find_tjm_process():
     Tests searching and finding TACCJM processes
     """
 
-    processes = [{'name':'hb', 'pid':11111,
-        'cmdline': tc._parse_hb_cmd().split()},
-                 {'name':'server', 'pid':11111,
-                     'cmdline': tc._parse_srv_cmd().split()}]
-    with patch(tc.psutil.process_iter, return_value=processes):
-        proc = tc.find_tjm_processes()
-        proc
-        pdb.set_trace()
+    # Set to other port so don't kill JM if running other tests
+    temp_port = TEST_TACCJM_PORT+1
+    tc.set_host(port=temp_port)
+    assert tc.TACCJM_PORT == temp_port
+
+    # Search for processes, kill if we find them
+    tc.find_tjm_processes(kill=True)
+
+    # Now start the processes
+    tc.find_tjm_processes(start=True)
+
+    # Now start again (should do nothing)
+    tc.find_tjm_processes(start=True)
+
+    # Now kill them
+    tc.find_tjm_processes(kill=True)
+
+    # Set back to default
+    tc.set_host(host='localhost', port=TEST_TACCJM_PORT)
+    assert tc.TACCJM_PORT == TEST_TACCJM_PORT
+
+def test_api_call():
+    """
+    Tests api_call method
+
+    """
+    # Set to other port so don't kill JM if running other tests
+    temp_port = TEST_TACCJM_PORT+1
+    tc.set_host(port=temp_port)
+    assert tc.TACCJM_PORT == temp_port
+
+    # Search for processes, kill if we find them
+    tc.find_tjm_processes(kill=True)
+
+    # Test good api call, but server is down, will have to retry
+    tc.api_call('GET', 'list', data=None)
+
+    # Test good api call, server is up so no restart
+    tc.api_call('GET', 'list', data=None)
+
+    # Test a bad endpoint
+    with pytest.raises(TACCJMError):
+        tc.api_call('GET', 'does/not/exist', data=None)
+
+    # Set back to default
+    tc.set_host(host='localhost', port=TEST_TACCJM_PORT)
+    assert tc.TACCJM_PORT == TEST_TACCJM_PORT
+
+
+@patch('taccjm.taccjm_client.api_call')
+def test_list_jm(mock_api_call):
+    """
+    Tests operation of listing job managers available
+
+    Note - All API calls are mocked
+    """
+    # Successful return with no JMs
+    mock_api_call.return_value = []
+    jms = tc.list_jms()
+    assert jms==[]
+    mock_api_call.reset()
+
+    # Error
+    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    with pytest.raises(TACCJMError):
+        jms = tc.list_jms()
+    mock_api_call.reset()
+
+
+@patch('taccjm.taccjm_client.api_call')
+def test_init_jm(mock_api_call):
+    """
+    Tests operation of listing job managers available
+
+    Note - All API calls are mocked
+    """
+
+    # Test a JM that has already been initialized (mocked)
+    mock_api_call.return_value = ['already_init']
+    with pytest.raises(ValueError):
+        jm = tc.init_jm('already_init', 'foo', 'bar', 'test', 123456)
+    mock_api_call.reset()
+
+    # Successful return
+    mock_api_call.return_value = TEST_JM
+    jm = tc.init_jm(TEST_JM['jm_id'], TEST_JM['sys'],
+                    TEST_JM['user'], 'testpw', 123456)
+    assert type(jm) == dict
+    assert jm == TEST_JM
+    mock_api_call.reset()
+
+    # Error
+    mock_api_call.side_effect = [[], TACCJMError('Mock TACCJMError')]
+    with pytest.raises(TACCJMError):
+        jm = tc.init_jm(TEST_JM['jm_id'], TEST_JM['sys'],
+                        TEST_JM['user'], 'testpw', 123456)
+    mock_api_call.reset()
+
+
+@patch('taccjm.taccjm_client.api_call')
+def test_get_jm(mock_api_call):
+    """
+    Tests of getting info on a jm instance.
+
+    Note - All API calls are mocked
+    """
+
+    # Successful return
+    mock_api_call.return_value = TEST_JM
+    jm = tc.get_jm(TEST_JM['jm_id'])
+    assert jm == TEST_JM
+    mock_api_call.reset()
+
+    # Error
+    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    with pytest.raises(TACCJMError):
+        jm = tc.get_jm(TEST_JM['jm_id'])
+    mock_api_call.reset()
+
+
+@patch('taccjm.taccjm_client.api_call')
+def test_get_queue(mock_api_call):
+    """
+    Tests of getting job queue for system.
+
+    Note - All API calls are mocked
+    """
+
+    # Successful return
+    mock_api_call.return_value = TEST_QUEUE
+    jm = tc.get_queue(TEST_JM['jm_id'])
+    assert jm == TEST_QUEUE
+    mock_api_call.reset()
+
+    # Error
+    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    with pytest.raises(TACCJMError):
+        jm = tc.get_queue(TEST_JM['jm_id'])
+    mock_api_call.reset()
+
+
+
+@patch('taccjm.taccjm_client.api_call')
+def test_get_allocations(mock_api_call):
+    """
+    Tests of allocations on jm instance
+
+    Note - All API calls are mocked
+    """
+
+    # Successful return
+    mock_api_call.return_value = TEST_ALLOCATIONS
+    jm = tc.get_allocations(TEST_JM['jm_id'])
+    assert jm == TEST_ALLOCATIONS
+    mock_api_call.reset()
+
+    # Error
+    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    with pytest.raises(TACCJMError):
+        jm = tc.get_allocations(TEST_JM['jm_id'])
+    mock_api_call.reset()
+
+
+
+
 
 
 

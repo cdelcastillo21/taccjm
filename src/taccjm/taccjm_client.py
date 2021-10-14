@@ -13,6 +13,7 @@ import subprocess
 from time import sleep
 from getpass import getpass
 from taccjm.constants import *
+from typing import List, Tuple
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -38,7 +39,7 @@ class TACCJMError(Exception):
         Str message explaining error.
     """
 
-    def __init__(self, res, message="API Error"):
+    def __init__(self, res, message:str="API Error"):
         self.res = res
         self.message = message
         super().__init__(self.message)
@@ -67,11 +68,12 @@ class TACCJMError(Exception):
         return m
 
 
-def set_host(host:str=TACCJM_HOST, port:int=TACCJM_PORT):
+def set_host(host:str=TACCJM_HOST, port:int=TACCJM_PORT) -> Tuple[str, int]:
     """
     Set Host
 
-    Set where to look for a TACCJM server to be running.
+    Set where to look for a TACCJM server to be running. Note that this does not
+    start/stop any servers on old or new host/port combinations.
 
     Parameters
     ----------
@@ -82,6 +84,8 @@ def set_host(host:str=TACCJM_HOST, port:int=TACCJM_PORT):
 
     Returns
     -------
+    host_port : tuple of str or int
+        Tuple containg (host, port) of new TACCJM_HOST and TACCJM_PORT.
 
     Warnings
     --------
@@ -94,8 +98,10 @@ def set_host(host:str=TACCJM_HOST, port:int=TACCJM_PORT):
     TACCJM_PORT = int(port)
     logger.info(f"Switched host {TACCJM_HOST} and port {TACCJM_PORT}")
 
+    return (TACCJM_HOST, TACCJM_PORT)
 
-def find_tjm_processes(start=False, kill=False):
+
+def find_tjm_processes(start:bool=False, kill:bool=False) -> dict:
     """
     Find TACC Job Manager Processes
 
@@ -165,19 +171,30 @@ def find_tjm_processes(start=False, kill=False):
     return processes_found
 
 
-def api_call(http_method, end_point, data=None):
+def api_call(http_method:str, end_point:str, data:dict=None) -> dict:
     """
     API Call
 
-    Wrapper for general http call to taccjm server.
+    Wrapper for general http call to taccjm server
 
     Parameters
     ----------
+    http_method : str
+        HTTP method to use.
+    end_point : str
+        URL end_point of resource to access with http method.
+    data : dict
+        Data to send along with http request.
 
     Returns
     -------
     p : dict
-        Dictionary containing server and heartbeat processes found or started.
+        Json returned from http method call.
+
+    Raises
+    ------
+    TACCJMError
+        Json returned from http method call.
     """
 
     # Build http request
@@ -189,26 +206,21 @@ def api_call(http_method, end_point, data=None):
     s = requests.Session()
 
     try:
-        try:
-            res = s.send(prepared)
-        except requests.exceptions.ConnectionError as c:
-            logger.info('Cannot connect to server. Restarting and waiting 5s.')
-            _ = find_tjm_processes(start=True)
-            sleep(5)
-            res = s.send(prepared)
+        res = s.send(prepared)
+    except requests.exceptions.ConnectionError as c:
+        logger.info('Cannot connect to server. Restarting and waiting 5s.')
+        _ = find_tjm_processes(start=True)
+        sleep(5)
+        res = s.send(prepared)
 
-        # Return content if success, else raise error
-        if res.status_code == 200:
-            return json.loads(res.text)
-        else:
-            raise TACCJMError(res)
-    except TACCJMError as t:
-        raise t
-    except Exception as e:
-        logger.info(f"Unknown error when trying to connect to server - {e}")
+    # Return content if success, else raise error
+    if res.status_code == 200:
+        return json.loads(res.text)
+    else:
+        raise TACCJMError(res)
 
 
-def list_jms():
+def list_jms() -> List[str]:
     """
     List JMs
 
@@ -233,7 +245,7 @@ def list_jms():
 
 
 def init_jm(jm_id:str, system:str,
-        user:str=None, psw:str=None, mfa:str=None):
+        user:str=None, psw:str=None, mfa:str=None) -> dict:
     """
     Init JM
 
@@ -263,7 +275,7 @@ def init_jm(jm_id:str, system:str,
     jm : dict
         Dictionary containing info about job manager instance just initialized.
     """
-    if jm_id in [j['jm_id'] for j in list_jms()]:
+    if jm_id in list_jms():
         raise ValueError(f"{jm_id} already exists.")
 
     # Get user credentials/psw/mfa if not provided
@@ -284,7 +296,7 @@ def init_jm(jm_id:str, system:str,
     return res
 
 
-def get_jm(jm_id:str):
+def get_jm(jm_id:str) -> dict:
     """
     Get JM
 
@@ -311,7 +323,7 @@ def get_jm(jm_id:str):
     return res
 
 
-def get_queue(jm_id:str, user:str=None):
+def get_queue(jm_id:str, user:str=None) -> dict:
     """
     Get Queue
 
@@ -343,7 +355,7 @@ def get_queue(jm_id:str, user:str=None):
     return queue
 
 
-def get_allocations(jm_id:str):
+def get_allocations(jm_id:str) -> dict:
     """
     Get Allocations
 
@@ -370,7 +382,7 @@ def get_allocations(jm_id:str):
     return allocations
 
 
-def list_files(jm_id:str, path:str='~'):
+def list_files(jm_id:str, path:str='~') -> List[str]:
     """
     List Files
 
@@ -399,7 +411,7 @@ def list_files(jm_id:str, path:str='~'):
     return res
 
 
-def peak_file(jm_id:str, path:str, head:int=-1, tail:int=-1):
+def peak_file(jm_id:str, path:str, head:int=-1, tail:int=-1) -> str:
     """
     Peak File
 
@@ -435,7 +447,8 @@ def peak_file(jm_id:str, path:str, head:int=-1, tail:int=-1):
     return res
 
 
-def upload(jm_id:str, local_path:str, remote_path:str, file_filter:str='*'):
+def upload(jm_id:str, local_path:str,
+        remote_path:str, file_filter:str='*') -> str:
     """
     Upload
 
@@ -472,7 +485,8 @@ def upload(jm_id:str, local_path:str, remote_path:str, file_filter:str='*'):
     return res
 
 
-def download(jm_id:str, remote_path:str, local_path:str, file_filter:str='*'):
+def download(jm_id:str, remote_path:str,
+        local_path:str, file_filter:str='*') -> str:
     """
     Download
 
@@ -528,7 +542,7 @@ def remove(jm_id:str, remote_path:str):
     """
     data = {'remote_path': remote_path}
     try:
-        res = api_call('GET', f"{jm_id}/files/remove", data)
+        res = api_call('DELETE', f"{jm_id}/files/remove", data)
     except TACCJMError as e:
         e.message = "remove error"
         logger.error(e.message)

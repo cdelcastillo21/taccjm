@@ -40,6 +40,15 @@ def _check_init(mfa):
         # Initialize taccjm that will be used for tests - use special tests dir
         JM = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="test-taccjm")
 
+def test_queue():
+    """get_queue unit tests
+    """
+    with open('./tests/test_app/empty_queue.txt', 'r') as f:
+        empty_queue = f.read()
+
+    with open('./tests/test_app/full_queue.txt', 'r') as f:
+        full_queue = f.read()
+
 
 def test_init(mfa):
     """Testing initializing class and class helper functions"""
