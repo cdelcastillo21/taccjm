@@ -53,7 +53,7 @@ class TACCJMError(Exception):
         m += '\n'.join([f"{k} : {v}" for k,v in res.json()['errors'].items()])
 
         # Format HTTP request
-        m += "-----------START-----------\n"
+        m += "\n-----------START-----------\n"
         m += f"{res.request.method} {res.request.url}\r\n"
         m += '\r\n'.join('{}: {}'.format(k, v) for k,
                 v in res.request.headers.items())
