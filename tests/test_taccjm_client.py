@@ -239,7 +239,6 @@ def test_get_queue(mock_api_call):
     mock_api_call.reset()
 
 
-
 @patch('taccjm.taccjm_client.api_call')
 def test_get_allocations(mock_api_call):
     """
@@ -261,8 +260,178 @@ def test_get_allocations(mock_api_call):
     mock_api_call.reset()
 
 
+@patch('taccjm.taccjm_client.api_call')
+def test_get_files(mock_api_call):
+    """
+    Tests get files operation
+
+    Note - All API calls are mocked
+    """
+
+    # Successful return
+    mock_api_call.return_value = ["foo"]
+    files = tc.list_files(TEST_JM['jm_id'])
+    assert "foo" in files
+    mock_api_call.reset()
+
+    # Error
+    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    with pytest.raises(TACCJMError):
+        jm = tc.list_files(TEST_JM['jm_id'])
+    mock_api_call.reset()
 
 
+@patch('taccjm.taccjm_client.api_call')
+def test_peak_file(mock_api_call):
+    """
+    Tests peak file operation
+
+    Note - All API calls are mocked
+    """
+
+    # Successful return
+    text =  "Hello World\n"
+    mock_api_call.return_value = text
+    peak = tc.peak_file(TEST_JM['jm_id'], "foo")
+    assert text==peak
+    mock_api_call.reset()
+
+    # Error
+    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    with pytest.raises(TACCJMError):
+        jm = tc.peak_file(TEST_JM['jm_id'], "foo")
+    mock_api_call.reset()
 
 
+@patch('taccjm.taccjm_client.api_call')
+def test_upload(mock_api_call):
+    """
+    Tests upload operation
+
+    Note - All API calls are mocked
+    """
+    # Successful return
+    mock_api_call.return_value = None
+    tc.upload(TEST_JM['jm_id'], "foo", "foo", "*")
+    mock_api_call.reset()
+
+    # Error
+    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    with pytest.raises(TACCJMError):
+        tc.upload(TEST_JM['jm_id'], "foo", "foo", "*")
+    mock_api_call.reset()
+
+
+@patch('taccjm.taccjm_client.api_call')
+def test_download(mock_api_call):
+    """
+    Tests download operation
+
+    Note - All API calls are mocked
+    """
+    # Successful return
+    mock_api_call.return_value = "foo"
+    tc.download(TEST_JM['jm_id'], "foo", "foo", "*")
+    mock_api_call.reset()
+
+    # Error
+    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    with pytest.raises(TACCJMError):
+        tc.download(TEST_JM['jm_id'], "foo", "foo", "*")
+    mock_api_call.reset()
+
+
+@patch('taccjm.taccjm_client.api_call')
+def test_remove(mock_api_call):
+    """
+    Tests remove operation
+
+    Note - All API calls are mocked
+    """
+    # Successful return
+    mock_api_call.return_value = None
+    tc.remove(TEST_JM['jm_id'], "foo")
+    mock_api_call.reset()
+
+    # Error
+    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    with pytest.raises(TACCJMError):
+        tc.remove(TEST_JM['jm_id'], "foo")
+    mock_api_call.reset()
+
+
+@patch('taccjm.taccjm_client.api_call')
+def test_restore(mock_api_call):
+    """
+    Tests restore operation
+
+    Note - All API calls are mocked
+    """
+    # Successful return
+    mock_api_call.return_value = None
+    tc.restore(TEST_JM['jm_id'], "foo")
+    mock_api_call.reset()
+
+    # Error
+    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    with pytest.raises(TACCJMError):
+        tc.restore(TEST_JM['jm_id'], "foo")
+    mock_api_call.reset()
+
+
+@patch('taccjm.taccjm_client.api_call')
+def test_write(mock_api_call):
+    """
+    Tests write operation
+
+    Note - All API calls are mocked
+    """
+    # Successful return
+    mock_api_call.return_value = None
+    tc.write(TEST_JM['jm_id'], "foo", "foo.txt")
+    mock_api_call.reset()
+
+    # Error
+    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    with pytest.raises(TACCJMError):
+        tc.write(TEST_JM['jm_id'], "foo", "foo.txt")
+    mock_api_call.reset()
+
+
+@patch('taccjm.taccjm_client.api_call')
+def test_read(mock_api_call):
+    """
+    Tests read operation
+
+    Note - All API calls are mocked
+    """
+    # Successful return
+    mock_api_call.return_value = None
+    tc.read(TEST_JM['jm_id'], "foo.txt", data_type="text")
+    mock_api_call.reset()
+
+    # Error
+    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    with pytest.raises(TACCJMError):
+        tc.read(TEST_JM['jm_id'], "foo.txt", data_type="text")
+    mock_api_call.reset()
+
+
+@patch('taccjm.taccjm_client.api_call')
+def test_list_apps(mock_api_call):
+    """
+    Tests list_apps operation
+
+    Note - All API calls are mocked
+    """
+    # Successful return
+    mock_api_call.return_value = ["foo"]
+    tc.list_apps(TEST_JM['jm_id'])
+    mock_api_call.reset()
+
+    # Error
+    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    with pytest.raises(TACCJMError):
+        tc.list_apps(TEST_JM['jm_id'])
+    mock_api_call.reset()
 

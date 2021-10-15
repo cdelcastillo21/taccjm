@@ -9,12 +9,14 @@ import json                     # For reading/writing dictionary<->json
 import errno                    # For error messages
 import configparser             # For reading configs
 from jinja2 import Template     # For templating input json files
+from typing import Tuple        # For type hinting
+from taccjm.constants import *  # Library constants
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
-def update_dic_keys(d, **kwargs):
+def update_dic_keys(d:dict, **kwargs) -> dict:
     """
     Utility to update a dictionary, with only updating singular parameters in
     sub-dictionaries. Used when updating and configuring/templating job configs.
@@ -44,7 +46,7 @@ def update_dic_keys(d, **kwargs):
     return d
 
 
-def load_templated_json_file(path, config_path, **kwargs):
+def load_templated_json_file(path:str, config_path:str, **kwargs) -> dict:
     """
     Loads a local json config found at path and templates it using jinja with
     the values found in config ini file found at config_path . For example, if
@@ -56,9 +58,11 @@ def load_templated_json_file(path, config_path, **kwargs):
     ----------
     path : str
         Local path to json file.
-    config : dict
-        Dictionary with values to substitute in for jinja templates
-        in json file.
+    config_path : str
+        Path to config file (.ini)
+    **kwargs : dict, optional
+        Any extra keyword arguments will be interpreted as items to override in
+        from the loaded json config file.
 
     Returns
     -------
@@ -89,4 +93,72 @@ def load_templated_json_file(path, config_path, **kwargs):
 
     # Return json_config
     return json_config
+
+
+def create_template_app(name:str,
+        dest_dir:str='.',
+        app_template:dict=APP_TEMPLATE,
+        script:str=APP_SCRIPT_TEMPLATE,
+        **kwargs) -> Tuple[dict, dict]:
+    """
+    Create files for a templated HPC application at given directory.
+
+    Parameters
+    ----------
+    dir : str, default='.'
+        Directory to put application.
+    app_template : dict, default=taccjm.constants.APP_TEMPLATE
+        Dictionary containing application template.
+    script : dict, default=taccjm.constants.APP_SCRIPT_TEMPLATE
+        Dictionary containing application template.
+    **kwargs : dict, optional
+        Any keyword arguments will be interpreted as an override to the template
+        paremters.
+
+    Returns
+    -------
+    configs : Tuple[dict, dict]
+        Tuple of app and job configs as loaded from application created.
+
+    Raises
+    -------
+    FileExistsError
+        If application with given name already exists in local directory.
+    """
+    # Update app template dictionary with passed in arguments
+    app_template.update(kwargs)
+
+    # Create application directory - Fails if already exists
+    app_dir = os.path.join(dest_dir, name)
+    os.mkdir(app_dir)
+
+    # Create application assets directory
+    assets_dir = os.path.join(app_dir, 'assets')
+    os.mkdir(assets_dir)
+
+    # Write project config file
+    config_path = os.path.join(app_dir, 'project.ini')
+    with open(config_path, 'w') as f:
+        f.write(CONFIG_TEMPLATE)
+
+    # Write app config json file
+    app_config_path = os.path.join(app_dir, 'app.json')
+    with open(app_config_path, 'w') as f:
+        f.write(json.dump(app_template))
+
+    # Write job config json file
+    job_config_path = os.path.join(job_dir, 'job.json')
+    with open(job_config_path, 'w') as f:
+        f.write(json.dump(JOB_TEMPLATE))
+
+    # Write entry point script
+    with open(os.path.join(assets_dir, 'run.sh'), 'w') as f:
+        f.write(json.dump(script))
+
+    # Load in app and job config from templates as they were created
+    app_config = load_templated_json_file(app_config_path, config_path)
+    job_config = load_templated_json_file(job_config_path, config_path)
+
+    return (app_config, job_config)
+
 

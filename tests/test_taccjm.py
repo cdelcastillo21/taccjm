@@ -40,15 +40,6 @@ def _check_init(mfa):
         # Initialize taccjm that will be used for tests - use special tests dir
         JM = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="test-taccjm")
 
-def test_queue():
-    """get_queue unit tests
-    """
-    with open('./tests/test_app/empty_queue.txt', 'r') as f:
-        empty_queue = f.read()
-
-    with open('./tests/test_app/full_queue.txt', 'r') as f:
-        full_queue = f.read()
-
 
 def test_init(mfa):
     """Testing initializing class and class helper functions"""
@@ -93,12 +84,6 @@ def test_init(mfa):
     with pytest.raises(TJMCommandError):
         JM._mkdir(posixpath.join(JM.trash_dir, 'test/will/fail'))
 
-    # Test Update dictionary keys utility
-    d = {'a': 1, 'b':{'a':1, 'b':2}}
-    new = JM._update_dic_keys(d, a=2, b={'b':3})
-    assert d['a']==2
-    assert d['b']['b']==3
-
 
 def test_files(mfa):
     """Test listing, sending, and getting files and directories"""
@@ -107,14 +92,14 @@ def test_files(mfa):
     _check_init(mfa)
 
     # List files in path that exists and doesnt exist
-    assert 'test-taccjm-apps' in JM.list_files(JM.scratch_dir)
-    with pytest.raises(TJMCommandError):
+    with pytest.raises(FileNotFoundError):
          JM.list_files('/bad/path')
 
     # Send file - Try sending test application script to apps directory
     test_file = '/'.join([JM.apps_dir, 'test_file'])
     JM.upload('./tests/test_app/assets/run.sh', test_file)
-    assert 'test_file' in JM.list_files(JM.apps_dir)
+    files = JM.list_files(JM.apps_dir)
+    assert 'test_file' in [f['filename'] for f in files]
 
     # Test peaking at a file just sent
     first = '#### BEGIN SCRIPT LOGIC'
@@ -132,14 +117,7 @@ def test_files(mfa):
     test_folder = JM.apps_dir + '/test_folder'
     JM.upload('./tests/test_app/assets', test_folder)
     files = JM.list_files(JM.apps_dir)
-    assert 'test_folder' in files
-    assert '.hidden_file' not in files
-
-    # Send directory - Now try sending whole assets directory, include hidden files
-    test_folder_hidden = '/'.join([JM.apps_dir, 'test_folder_hidden'])
-    JM.upload('./tests/test_app/assets', test_folder_hidden)
-    assert 'test_folder_hidden' in JM.list_files(path=JM.apps_dir)
-    assert '.hidden_file' in JM.list_files(path=test_folder_hidden)
+    assert 'test_folder' in [f['filename'] for f in files]
 
     # Get test file
     JM.download(test_file, './tests/test_file')
@@ -156,13 +134,16 @@ def test_files(mfa):
     test_file = '/'.join([JM.apps_dir, 'test_file'])
     trash_file = test_file.replace('/','___')
     JM.remove(test_file)
-    assert 'test_file' not in JM.list_files(JM.apps_dir)
-    assert trash_file in JM.list_files(JM.trash_dir)
+    files = JM.list_files(JM.apps_dir)
+    trash_files = JM.list_files(JM.trash_dir)
+    assert 'test_file' not in [f['filename'] for f in files]
+    assert trash_file in [f['filename'] for f in trash_files]
 
     # Restore file removed
     test_file = '/'.join([JM.apps_dir, 'test_file'])
     JM.restore(test_file)
-    assert 'test_file' in JM.list_files(JM.apps_dir)
+    files = JM.list_files(JM.apps_dir)
+    assert 'test_file' in [f['filename'] for f in files]
 
     # Now try to remove files that don't exist and don't have permission to. Should throw errors
     with pytest.raises(Exception):
@@ -180,7 +161,7 @@ def test_data(mfa):
     # Send text and json data
     JM.send_data('foo','test_text_data')
     JM.send_data({'foo':'bar'},'test_json_data')
-    files = JM.list_files()
+    files = [f['filename'] for f in JM.list_files()]
     assert 'test_text_data' in files and 'test_json_data' in files
 
     # Read text and json data

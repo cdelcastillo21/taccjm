@@ -448,7 +448,7 @@ def peak_file(jm_id:str, path:str, head:int=-1, tail:int=-1) -> str:
 
 
 def upload(jm_id:str, local_path:str,
-        remote_path:str, file_filter:str='*') -> str:
+        remote_path:str, file_filter:str='*') -> None:
     """
     Upload
 
@@ -469,20 +469,16 @@ def upload(jm_id:str, local_path:str,
 
     Returns
     -------
-    path : str
-        Path on remote system of file/folder just uploaded.
     """
     data = {'local_path': local_path,
             'remote_path': remote_path,
             'file_filter': file_filter}
     try:
-        res = api_call('GET', f"{jm_id}/files/upload", data)
+        api_call('PUT', f"{jm_id}/files/upload", data)
     except TACCJMError as e:
         e.message = "upload error"
         logger.error(e.message)
         raise e
-
-    return res
 
 
 def download(jm_id:str, remote_path:str,
@@ -575,7 +571,7 @@ def restore(jm_id:str, remote_path:str):
     """
     data = {'remote_path': remote_path}
     try:
-        res = api_call('GET', f"{jm_id}/files/restore", data)
+        res = api_call('PUT', f"{jm_id}/files/restore", data)
     except TACCJMError as e:
         e.message = "restore error"
         logger.error(e.message)
@@ -606,7 +602,7 @@ def write(jm_id:str, data, remote_path:str):
     data = {'data': data,
             'remote_path': remote_path}
     try:
-        res = api_call('GET', f"{jm_id}/files/write", data)
+        res = api_call('PUT', f"{jm_id}/files/write", data)
     except TACCJMError as e:
         e.message = "write error"
         logger.error(e.message)
@@ -733,7 +729,7 @@ def deploy_app(jm_id:str, app_config:dict,
             'local_app_dir': local_app_dir,
             'overwrite': overwrite}
     try:
-        res = api_call('GET', f"{jm_id}/apps/deploy", data)
+        res = api_call('POST', f"{jm_id}/apps/deploy", data)
     except TACCJMError as e:
         e.message = f"deploy_app error"
         logger.error(e.message)
@@ -817,7 +813,8 @@ def deploy_job(jm_id:str, job_config:dict):
     """
 
     try:
-        res = api_call('GET', f"{jm_id}/jobs/deploy", {'job_config':job_config})
+        res = api_call('POST',
+                f"{jm_id}/jobs/deploy", {'job_config':job_config})
     except TACCJMError as e:
         e.message = f"deploy_job error"
         logger.error(e.message)
@@ -846,7 +843,7 @@ def submit_job(jm_id:str, job_id:str):
     """
 
     try:
-        res = api_call('GET', f"{jm_id}/jobs/{job_id}/submit")
+        res = api_call('PUT', f"{jm_id}/jobs/{job_id}/submit")
     except TACCJMError as e:
         e.message = f"submit_job error"
         logger.error(e.message)
@@ -875,7 +872,7 @@ def cancel_job(jm_id:str, job_id:str):
     """
 
     try:
-        res = api_call('GET', f"{jm_id}/jobs/{job_id}/cancel")
+        res = api_call('PUT', f"{jm_id}/jobs/{job_id}/cancel")
     except TACCJMError as e:
         e.message = f"cancel_job error"
         logger.error(e.message)
@@ -904,7 +901,7 @@ def cleanup_job(jm_id:str, job_id:str):
     """
 
     try:
-        res = api_call('GET', f"{jm_id}/jobs/{job_id}/cleanup")
+        res = api_call('PUT', f"{jm_id}/jobs/{job_id}/cleanup")
     except TACCJMError as e:
         e.message = f"cleanup_job error"
         logger.error(e.message)
@@ -1012,7 +1009,7 @@ def upload_job_file(jm_id:str, job_id:str,
 
     data = {'path': path, 'dest_dir': dest_dir, 'file_filter': file_filter}
     try:
-        res = api_call('GET', f"{jm_id}/jobs/{job_id}/files/upload", data)
+        res = api_call('PUT', f"{jm_id}/jobs/{job_id}/files/upload", data)
     except TACCJMError as e:
         e.message = "upload_job_file error"
         logger.error(e.message)
@@ -1081,7 +1078,7 @@ def write_job_file(jm_id:str, job_id:str, data, path:str):
     """
     data = {'data': data, 'path': path}
     try:
-        res = api_call('GET', f"{jm_id}/jobs/{job_id}/files/write", data)
+        res = api_call('PUT', f"{jm_id}/jobs/{job_id}/files/write", data)
     except TACCJMError as e:
         e.message = "write_job_file error"
         logger.error(e.message)
@@ -1179,7 +1176,7 @@ def deploy_script(jm_id:str, script_name:str, local_file:str=None):
 
     data = {'script_name': script_name, 'local_file': local_file}
     try:
-        res = api_call('GET', f"{jm_id}/scripts/deploy", data)
+        res = api_call('POST', f"{jm_id}/scripts/deploy", data)
     except TACCJMError as e:
         e.message = f"deploy_script error"
         logger.error(e.message)
@@ -1214,7 +1211,7 @@ def run_script(jm_id:str, script_name:str, job_id:str=None, args:[str]=None):
 
     data = {'script_name': script_name, 'job_id': job_id,  'args': args}
     try:
-        res = api_call('GET', f"{jm_id}/scripts/run", data)
+        res = api_call('PUT', f"{jm_id}/scripts/run", data)
     except TACCJMError as e:
         e.message = f"run_script error"
         logger.error(e.message)
