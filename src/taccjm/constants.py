@@ -25,6 +25,9 @@ version = 0.0.0
 short_desc = Template Application
 long_description = Template to build HPC apps.
 
+# Assume we are using this app on TACC stampede2
+queue = skx-dev
+
 [job]
 # Can also specify job parameters here
 desc = A test run of the template hpc application
@@ -47,6 +50,7 @@ APP_TEMPLATE = {'name': '{{ app.name }}--{{ app.version }}',
                 'default_processors_per_node': 10,
                 'default_memory_per_node': '1',
                 'default_max_run_time': '00:10:00',
+                'default_queue': '{{ app.queue }}',
                 'entry_script': 'run.sh',
                 'inputs': [{'name': 'input1',
                             'label': 'Input argument',

@@ -14,6 +14,7 @@ from time import sleep
 from getpass import getpass
 from taccjm.constants import *
 from typing import List, Tuple
+from taccjm.exceptions import TACCJMError
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -21,51 +22,6 @@ __license__ = "MIT"
 
 # Initialize logger
 logger = logging.getLogger(__name__)
-
-class TACCJMError(Exception):
-    """
-    Custom TACCJM exception for errors encountered when interacting with
-    commands sent to TACCJM server via HTTP endpoints.
-
-    Attributes
-    ----------
-    jm_id : str
-        TACC Job Manager which command was sent to.
-    user : str
-        User that sent API call.
-    res : requests.models.Response
-        Response object containing info on API call that failed.
-    message : str
-        Str message explaining error.
-    """
-
-    def __init__(self, res, message:str="API Error"):
-        self.res = res
-        self.message = message
-        super().__init__(self.message)
-
-
-    def __str__(self):
-        # Get response object
-        res = self.res
-
-        # Format errors
-        m =  f"{self.message} - {res.status_code} {res.reason}:\n"
-        m += '\n'.join([f"{k} : {v}" for k,v in res.json()['errors'].items()])
-
-        # Format HTTP request
-        m += "\n-----------START-----------\n"
-        m += f"{res.request.method} {res.request.url}\r\n"
-        m += '\r\n'.join('{}: {}'.format(k, v) for k,
-                v in res.request.headers.items())
-        if res.request.body is not None:
-            # Fix body to remove psw if exists, don't want in logs
-            body = [s.split('=') for s in res.request.body.split('&')]
-            body = [x if x[0]!='psw' else (x[0], '') for x in body]
-            body = '&'.join(['='.join(x) for x in body])
-            m += body
-
-        return m
 
 
 def set_host(host:str=TACCJM_HOST, port:int=TACCJM_PORT) -> Tuple[str, int]:

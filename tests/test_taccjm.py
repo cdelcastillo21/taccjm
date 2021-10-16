@@ -12,13 +12,13 @@ from unittest.mock import patch
 
 from taccjm.TACCJobManager import TACCJobManager, TJMCommandError
 from taccjm.SSHClient2FA import SSHClient2FA
-from paramiko import SSHException, AuthenticationException, BadHostKeyException
+from paramiko import SSHException
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
-# Note: .env file in tests directory must contain TACC_USER and TACC_PW variables defined
+# Note: .env file in tests directory must contain bellow params to run tests:
 load_dotenv()
 
 global SYSTEM, USER, PW, SYSTEM, ALLOCATION
@@ -27,44 +27,59 @@ PW = os.environ.get("TACCJM_PW")
 SYSTEM = os.environ.get("TACCJM_SYSTEM")
 ALLOCATION = os.environ.get("TACCJM_ALLOCATION")
 
-# JM will be the job manager instance that should be initialized once but used by all tests.
-# Note the test_init test initializes the JM to begin with, but if only running one other test,
-# the first test to run will initialize the JM for the test session.
-global JM
+# JM will be the job manager instance that should be initialized once but used
+# by all tests. Note the test_init test initializes the JM to begin with,
+# but if only running one other test, the first test to run will initialize
+# the JM for the test session.
+mfa = input('\nTACC Token:')
 JM = None
+JM = TACCJobManager(SYSTEM, user=USER,
+        psw=PW, mfa=mfa, working_dir="test-taccjm")
+
+def _setup_local_test_files():
+    """Setup test directory and file"""
+    # Create a test file and folder
+    cwd = os.getcwd()
+    test_fname = "test.txt"
+    test_folder = f"{cwd}/.test"
+    test_file = f"{test_folder}/{test_fname}"
+    _ = os.system(f"rm -rf {test_folder}")
+    _ = os.system(f"mkdir {test_folder}")
+    _ = os.system(f"echo hello world > {test_file}")
+
+    return test_fname, test_file, test_folder
+
+def _cleanup_local_test_files():
+    """Remove test directory and file"""
+    cwd = os.getcwd()
+    test_folder = f"{cwd}/.test"
+    _ = os.system(f"rm -rf {test_folder}")
 
 
-def _check_init(mfa):
-    global JM
-    if JM is None:
-        # Initialize taccjm that will be used for tests - use special tests dir
-        JM = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="test-taccjm")
-
-
-def test_init(mfa):
+def test_init():
     """Testing initializing class and class helper functions"""
-
-    global JM
-    # Initialize taccjm that will be used for tests - use special tests dir
-    JM = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="test-taccjm")
 
     # Invalid TACC system specified
     with pytest.raises(ValueError):
-        bad = TACCJobManager("foo", user=USER, psw=PW, mfa=mfa)
+        bad = TACCJobManager("foo", user=USER, psw=PW, mfa=123456)
 
     # Invalid working directory specified, no tricky business allowed with ..
     with pytest.raises(ValueError):
-        bad = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="../test-taccjm")
+        bad = TACCJobManager(SYSTEM, user=USER,
+                psw=PW, mfa=123456, working_dir="../test-taccjm")
     with pytest.raises(ValueError):
-        bad = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="test-taccjm/..")
+        bad = TACCJobManager(SYSTEM, user=USER,
+                psw=PW, mfa=123456, working_dir="test-taccjm/..")
     with pytest.raises(ValueError):
-        bad = TACCJobManager(SYSTEM, user=USER, psw=PW, mfa=mfa, working_dir="test-taccjm/../test")
+        bad = TACCJobManager(SYSTEM, user=USER,
+                psw=PW, mfa=123456, working_dir="test-taccjm/../test")
 
     # Command that should work, also test printing to stdout the output
     assert JM._execute_command('echo test') == 'test\n'
 
-     # Tests command that fails due to SSH error, which we mock from the paramiko client class.
-    with patch.object(SSHClient2FA, 'exec_command', side_effect=SSHException('Mock ssh exception')):
+     # Tests command that fails due to SSH error, which we mock
+    with patch.object(SSHClient2FA, 'exec_command',
+            side_effect=SSHException('Mock ssh exception')):
         with pytest.raises(SSHException):
              JM._execute_command('echo test')
 
@@ -84,12 +99,122 @@ def test_init(mfa):
     with pytest.raises(TJMCommandError):
         JM._mkdir(posixpath.join(JM.trash_dir, 'test/will/fail'))
 
+def test_showq():
+    """Test accessing TACC queue"""
 
-def test_files(mfa):
+    # Get queue for all users
+    queue = JM.showq(user='all')
+    assert len(queue)>0
+    queue_fields = ['job_id', 'job_name', 'username',
+            'state', 'nodes', 'remaining', 'start_time']
+    assert all([q in queue[0].keys() for q in queue_fields])
+
+    # Fail to get queue
+    with patch.object(TACCJobManager, '_execute_command',
+            side_effect=TJMCommandError(SYSTEM, USER, 'showq', 1,
+                            'mock error', '', 'mock error')):
+        with pytest.raises(TJMCommandError) as t:
+            bad_queue = JM.showq()
+
+
+def test_get_allocations():
+    """Test accessing TACC allocations"""
+
+    # Get allocations
+    allocations = JM.get_allocations()
+    assert len(allocations)>0
+    allocation_fields = ['name', 'service_units', 'exp_date']
+    assert all([a in allocations[0].keys() for a in allocation_fields])
+
+    # Fail to get allocations
+    with patch.object(TACCJobManager, '_execute_command',
+            side_effect=TJMCommandError(SYSTEM, USER,
+                '/usr/local/etc/taccinfo', 1, 'mock error', '', 'mock error')):
+        with pytest.raises(TJMCommandError) as t:
+            bad_queue = JM.get_allocations()
+
+
+def test_list_files():
+    """Test getting info on file and folders in remote directories"""
+
+    # Create a test file and folder
+    test_fname, test_file, test_folder, = _setup_local_test_files()
+
+    # Upload directory with file in it
+    dest_name = 'test_dir'
+    dest_dir = '/'.join([JM.trash_dir, dest_name])
+    JM.upload(test_folder, dest_dir)
+
+    # Now get folder info of folder uploaded
+    files = JM.list_files(dest_dir)
+    assert len(files)==1
+    assert test_fname==files[0]['filename']
+    assert 12==files[0]['st_size']
+
+    # Now get info on file only in folder
+    remote_file_path = '/'.join([dest_dir, test_fname])
+    file = JM.list_files(remote_file_path)
+    assert len(file)==1
+    assert remote_file_path==file[0]['filename']
+    assert 12==file[0]['st_size']
+
+    # TODO: Mock errors
+
+    # Cleanup local and remote files
+    JM.remove(dest_dir)
+    _cleanup_local_test_files()
+
+
+def test_upload():
+    """Test uploadng a file and folder"""
+
+    # Create a test file and folder
+    test_fname, test_file, test_folder, = _setup_local_test_files()
+
+    # Send file - Try sending file only to trash directory
+    dest_name = 'test_file'
+    dest_path = '/'.join([JM.trash_dir, dest_name])
+    JM.upload(test_file, dest_path)
+    files = JM.list_files(JM.trash_dir)
+    assert dest_name in [f['filename'] for f in files]
+
+    # Send directory - Try sending directory now
+    dest_name = 'test_dir'
+    dest_dir = '/'.join([JM.trash_dir, dest_name])
+    JM.upload(test_folder, dest_dir)
+    files = JM.list_files(JM.trash_dir)
+    assert dest_name in [f['filename'] for f in files]
+    files = JM.list_files(dest_dir)
+    assert test_fname in [f['filename'] for f in files]
+
+    # Try sending a file that doesn't exist
+    with pytest.raises(FileNotFoundError):
+        JM.upload('./does-not-exist', dest_path)
+
+    # Now mock permission and untar-ing error, and unexpcted error
+    with patch.object(SSHClient2FA, 'open_sftp',
+            side_effect=PermissionError('Mock file permission')):
+        with pytest.raises(PermissionError):
+            JM.upload(test_folder, dest_dir)
+    with patch.object(SSHClient2FA, 'open_sftp',
+            side_effect=Exception('Mock other error')):
+        with pytest.raises(Exception):
+            JM.upload(test_file, dest_path)
+    with patch.object(TACCJobManager, '_execute_command',
+            side_effect=TJMCommandError(SYSTEM, USER, 'tar...', 1,
+                            'mock tar error', '', 'mock tar error')):
+        with pytest.raises(TJMCommandError) as t:
+            JM.upload(test_folder, dest_dir)
+
+    # Remove test folder and file we sent and local test folder
+    JM.remove(dest_dir)
+    JM.remove(dest_path)
+    _ = os.system(f"rm -rf {test_folder}")
+
+
+
+def test_files():
     """Test listing, sending, and getting files and directories"""
-    global JM
-
-    _check_init(mfa)
 
     # List files in path that exists and doesnt exist
     with pytest.raises(FileNotFoundError):
@@ -152,11 +277,11 @@ def test_files(mfa):
          JM.remove('/tmp')
 
 
-def test_data(mfa):
+def test_data():
     """Test sending and receiving data."""
     global JM
 
-    _check_init(mfa)
+    _check_init()
 
     # Send text and json data
     JM.send_data('foo','test_text_data')
@@ -203,10 +328,10 @@ def test_data(mfa):
             JM.get_data('/other')
 
 
-def test_templating(mfa):
+def test_templating():
     """Test loading project configuration files and templating json files"""
     global JM
-    _check_init(mfa)
+    _check_init()
 
     proj_conf_path = './tests/test_app/project.ini'
     app_config = JM.load_templated_json_file('./tests/test_app/app.json', proj_conf_path)
@@ -214,10 +339,10 @@ def test_templating(mfa):
     with pytest.raises(FileNotFoundError):
         JM.load_templated_json_file('./tests/test_app/not_found.json', proj_conf_path)
 
-def test_deploy_app(mfa):
+def test_deploy_app():
     """Test deploy applications """
     global JM
-    _check_init(mfa)
+    _check_init()
 
     # Test deploying app when sending files to system is failing
     with patch.object(TACCJobManager, 'upload', side_effect=Exception('Mock file send error')):
@@ -237,10 +362,10 @@ def test_deploy_app(mfa):
         test_app = JM.deploy_app(local_app_dir='./tests/test_app')
 
 
-def test_jobs(mfa):
+def test_jobs():
     """Test setting up a job."""
     global JM
-    _check_init(mfa)
+    _check_init()
 
     # Make sure app is deployed
     test_app = JM.deploy_app(local_app_dir='./tests/test_app', overwrite=True)
