@@ -36,6 +36,7 @@ JM = None
 JM = TACCJobManager(SYSTEM, user=USER,
         psw=PW, mfa=mfa, working_dir="test-taccjm")
 
+
 def _setup_local_test_files():
     """Setup test directory and file"""
     # Create a test file and folder
@@ -46,6 +47,7 @@ def _setup_local_test_files():
     _ = os.system(f"rm -rf {test_folder}")
     _ = os.system(f"mkdir {test_folder}")
     _ = os.system(f"echo hello world > {test_file}")
+    _ = os.system(f"echo hello again >> {test_file}")
 
     return test_fname, test_file, test_folder
 
@@ -99,6 +101,7 @@ def test_init():
     with pytest.raises(TJMCommandError):
         JM._mkdir(posixpath.join(JM.trash_dir, 'test/will/fail'))
 
+
 def test_showq():
     """Test accessing TACC queue"""
 
@@ -137,8 +140,9 @@ def test_get_allocations():
 def test_list_files():
     """Test getting info on file and folders in remote directories"""
 
-    # Create a test file and folder
+    # Create a test file and folder and empty trash directory
     test_fname, test_file, test_folder, = _setup_local_test_files()
+    JM.empty_trash()
 
     # Upload directory with file in it
     dest_name = 'test_dir'
@@ -149,19 +153,76 @@ def test_list_files():
     files = JM.list_files(dest_dir)
     assert len(files)==1
     assert test_fname==files[0]['filename']
-    assert 12==files[0]['st_size']
+    assert 24==files[0]['st_size']
 
     # Now get info on file only in folder
     remote_file_path = '/'.join([dest_dir, test_fname])
     file = JM.list_files(remote_file_path)
     assert len(file)==1
     assert remote_file_path==file[0]['filename']
-    assert 12==file[0]['st_size']
+    assert 24==file[0]['st_size']
 
-    # TODO: Mock errors
+    with patch.object(SSHClient2FA, 'open_sftp',
+            side_effect=FileNotFoundError('Mock file not found error')):
+        with pytest.raises(FileNotFoundError):
+            JM.list_files(dest_dir)
+    with patch.object(SSHClient2FA, 'open_sftp',
+            side_effect=PermissionError('Mock file permission error')):
+        with pytest.raises(PermissionError):
+            JM.list_files(dest_dir)
+    with patch.object(SSHClient2FA, 'open_sftp',
+            side_effect=Exception('Mock unexpected error')):
+        with pytest.raises(Exception):
+            JM.list_files(dest_dir)
 
     # Cleanup local and remote files
-    JM.remove(dest_dir)
+    JM.empty_trash()
+    _cleanup_local_test_files()
+
+
+def test_peak_file():
+    """Test peak_file operations"""
+
+    # Create a test file and folder
+    test_fname, test_file, test_folder = _setup_local_test_files()
+
+    # Upload directory with file in it
+    dest_fname = 'test_path'
+    dest_path = '/'.join([JM.trash_dir, dest_fname])
+    JM.upload(test_file, dest_path)
+
+    # Now peak at first line in file
+    first_line = JM.peak_file(dest_path, head=1)
+    assert first_line=='hello world\n'
+
+    # Now peak at last line in file
+    last_line = JM.peak_file(dest_path, tail=1)
+    assert last_line=='hello again\n'
+
+    # Now peak again at first line
+    both_lines = JM.peak_file(dest_path)
+    assert both_lines=='hello world\nhello again\n'
+
+    # Mock permission, file not found, and unexpected peak file errors
+    with patch.object(TACCJobManager, '_execute_command',
+            side_effect=TJMCommandError(SYSTEM, USER, 'head', 1,
+                             'Permission denied',
+                             '', 'Mock permission error')):
+        with pytest.raises(PermissionError) as p:
+            JM.peak_file(test_file)
+    with patch.object(TACCJobManager, '_execute_command',
+            side_effect=TJMCommandError(SYSTEM, USER, 'head', 1,
+                             'Not a directory', '', 'Mock file not found')):
+        with pytest.raises(FileNotFoundError) as f:
+            JM.peak_file(test_file)
+    with patch.object(TACCJobManager, '_execute_command',
+            side_effect=TJMCommandError(SYSTEM, USER, 'head', 1,
+                             'Unexpected error', '', 'Mock unexpected error')):
+        with pytest.raises(TJMCommandError) as t:
+            JM.peak_file(test_file)
+
+    # Cleanup local and remote files
+    JM.remove(dest_path)
     _cleanup_local_test_files()
 
 
@@ -169,7 +230,7 @@ def test_upload():
     """Test uploadng a file and folder"""
 
     # Create a test file and folder
-    test_fname, test_file, test_folder, = _setup_local_test_files()
+    test_fname, test_file, test_folder = _setup_local_test_files()
 
     # Send file - Try sending file only to trash directory
     dest_name = 'test_file'
@@ -209,8 +270,57 @@ def test_upload():
     # Remove test folder and file we sent and local test folder
     JM.remove(dest_dir)
     JM.remove(dest_path)
-    _ = os.system(f"rm -rf {test_folder}")
+    _cleanup_local_test_files()
 
+def test_download():
+    """Test downloading files/folders"""
+
+    # Create a test file and folder
+    test_fname, test_file, test_folder = _setup_local_test_files()
+
+    # Upload directory with file in it
+    dest_dirname = 'test_path'
+    dest_path = '/'.join([JM.trash_dir, dest_dirname])
+    JM.upload(test_folder, dest_path)
+
+    # Now download file inside folder just uploaded
+    remote_fpath = '/'.join([dest_path, test_fname])
+    download_path = os.path.join(test_folder, 'test_downloaded.txt')
+    JM.download(remote_fpath, download_path)
+    with open(download_path, 'r') as f1, open(test_file, 'r') as f2:
+        assert f1.read()==f2.read()
+
+    # Now download full folder just uploaded
+    JM.download(dest_path, test_folder)
+    assert dest_dirname in os.listdir(test_folder)
+    downloaded_file = os.path.join(test_folder, dest_dirname, test_fname)
+    with open(downloaded_file, 'r') as f1, open(test_file, 'r') as f2:
+        assert f1.read()==f2.read()
+
+    # This should mock a false tar warning, but then trigger file not found
+    # becaseu tar does not exist on remote system.
+    with patch.object(TACCJobManager, '_execute_command',
+            side_effect=TJMCommandError(SYSTEM, USER, 'tar...', 1,
+                            '', 'padding with zeros', 'mock tar error')):
+        with pytest.raises(FileNotFoundError) as t:
+            JM.download(dest_path, test_folder)
+
+    # Mock other critical tar error
+    with patch.object(TACCJobManager, '_execute_command',
+            side_effect=TJMCommandError(SYSTEM, USER, 'tar...', 1,
+                            'critical error', '', 'mock tar error')):
+        with pytest.raises(TJMCommandError) as t:
+            JM.download(dest_path, test_folder)
+
+    # Mock permission error
+    with patch.object(SSHClient2FA, 'open_sftp',
+            side_effect=PermissionError('Mock file permission')):
+        with pytest.raises(PermissionError):
+            JM.download(dest_path, test_folder)
+
+    # Remove test folder and file we sent and local test folder
+    JM.remove(dest_path)
+    _cleanup_local_test_files()
 
 
 def test_files():

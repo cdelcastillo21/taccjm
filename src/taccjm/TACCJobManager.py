@@ -659,8 +659,8 @@ class TACCJobManager():
         local : str
             Destination where file/folder being downloaded will be placed.
             If a file is being downloaded, then local is the destination path.
-            If a folder is being downloaded, local where folder contents will
-            be downloaded
+            If a folder is being downloaded, local is where folder downloaded
+            will be placed
         file_filter: str, optional, default='*'
             If a folder is being download, unix style pattern matching string
             to use on files to download. For example, '*.txt' would only
@@ -688,34 +688,46 @@ class TACCJobManager():
         all TACC systems are unix.
         """
 
-        local = local.rstrip('/')
+        local = os.path.abspath(local.rstrip('/'))
         remote = remote.rstrip('/')
         try:
             with self._client.open_sftp() as sftp:
                 fileattr = sftp.stat(remote)
                 is_dir = stat.S_ISDIR(fileattr.st_mode)
                 if is_dir:
-                    dirname, fname = os.path.split(remote)
+                    dirname, fname = posixpath.split(remote)
+                    remote_tar = f"{dirname}/{fname}.tar.gz"
 
                     # Build command. Filter files according to file filter
                     cmd = f"cd {dirname} && "
-                    cmd += f"find . -name '{file_filter}' -print0 | "
-                    cmd += f"tar -czvf {fname}.tar.gz --null --files-from -"
-                    self._execute_command(cmd)
-                    local_dir = os.path.abspath(os.path.join(local, os.pardir))
+                    cmd += f"find {fname} -name '{file_filter}' -print0 | "
+                    cmd += f"tar -czvf {remote_tar} --null --files-from -"
 
-                    # Change local/remote paths to be tar files
-                    local = f"{local_dir}/{fname}.tar.gz"
-                    remote = f"{dirname}/{fname}.tar.gz"
+                    # Try packing remote tar file
+                    try:
+                        self._execute_command(cmd)
+                    except TJMCommandError as t:
+                        if 'padding with zeros' in t.stdout:
+                            # Warning message, not an error.
+                            pass
+                        else:
+                            # Other error tar-ing file. Raise
+                            raise t
 
-                # Get remote file
-                sftp.get(remote, local)
+                    # get tar file
+                    local_tar = f"{local}.tar.gz"
+                    sftp.get(remote_tar, local_tar)
 
-                # If directory, unpack tar file
-                if is_dir:
-                    with tarfile.open(local) as tar:
-                        tar.extractall(path=os.path.dirname(local))
-                    os.remove(local)
+                    # unpack tar file locally
+                    with tarfile.open(local_tar) as tar:
+                        tar.extractall(path=local)
+
+                    # Remove local and remote tar files
+                    os.remove(local_tar)
+                    self._execute_command(f"rm -rf {remote_tar}")
+                else:
+                    # Get remote file
+                    sftp.get(remote, local)
         except FileNotFoundError as f:
             msg = f"download - No such file or folder {f.filename}."
             logger.error(msg)
@@ -724,6 +736,11 @@ class TACCJobManager():
             msg = f"download - Permission denied on {p.filename}"
             logger.error(msg)
             raise PermissionError(errno.EACCES, msg, p.filename)
+        except TJMCommandError as t:
+            msg = f"download - Error tar-ing remote file."
+            t.message = msg
+            logger.error(msg)
+            raise t
 
 
     def remove(self, remote_path:str) -> None:
@@ -802,6 +819,23 @@ class TACCJobManager():
             tjm_error.message = f"restore - Unable to restore {remote_path}"
             logger.error(tjm_error.message)
             raise tjm_error
+
+
+    def empty_trash(self, filter:str='*') -> None:
+        """
+        Cleans out trahs directly by permently removing contents with rm -rf
+        command.
+
+        Parameters
+        ----------
+        filter : str, default='*'
+            Filter files in trash directory to remove
+
+        Returns
+        -------
+
+        """
+        self._execute_command(f"rm -rf {self.trash_dir}/{filter}")
 
 
     def write(self, data:Union[str, dict], path:str) -> None:
