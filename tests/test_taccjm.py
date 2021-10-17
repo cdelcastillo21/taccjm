@@ -9,6 +9,7 @@ import pytest
 import posixpath
 from dotenv import load_dotenv
 from unittest.mock import patch
+from taccjm.utils import create_template_app
 
 from taccjm.TACCJobManager import TACCJobManager, TJMCommandError
 from taccjm.SSHClient2FA import SSHClient2FA
@@ -141,8 +142,8 @@ def test_list_files():
     """Test getting info on file and folders in remote directories"""
 
     # Create a test file and folder and empty trash directory
-    test_fname, test_file, test_folder, = _setup_local_test_files()
     JM.empty_trash()
+    test_fname, test_file, test_folder, = _setup_local_test_files()
 
     # Upload directory with file in it
     dest_name = 'test_dir'
@@ -184,6 +185,7 @@ def test_peak_file():
     """Test peak_file operations"""
 
     # Create a test file and folder
+    JM.empty_trash()
     test_fname, test_file, test_folder = _setup_local_test_files()
 
     # Upload directory with file in it
@@ -222,14 +224,15 @@ def test_peak_file():
             JM.peak_file(test_file)
 
     # Cleanup local and remote files
-    JM.remove(dest_path)
+    JM.empty_trash(dest_path)
     _cleanup_local_test_files()
 
 
 def test_upload():
     """Test uploadng a file and folder"""
 
-    # Create a test file and folder
+    # Create a test file and folder and empty trash
+    JM.empty_trash()
     test_fname, test_file, test_folder = _setup_local_test_files()
 
     # Send file - Try sending file only to trash directory
@@ -268,14 +271,14 @@ def test_upload():
             JM.upload(test_folder, dest_dir)
 
     # Remove test folder and file we sent and local test folder
-    JM.remove(dest_dir)
-    JM.remove(dest_path)
+    JM.empty_trash()
     _cleanup_local_test_files()
 
 def test_download():
     """Test downloading files/folders"""
 
-    # Create a test file and folder
+    # Empty trash Create a test file and folder
+    JM.empty_trash()
     test_fname, test_file, test_folder = _setup_local_test_files()
 
     # Upload directory with file in it
@@ -298,12 +301,16 @@ def test_download():
         assert f1.read()==f2.read()
 
     # This should mock a false tar warning, but then trigger file not found
-    # becaseu tar does not exist on remote system.
+    # because tar does not exist on remote system.
+    # Note: temporary tar file .test.tar.gz should be cleaned up here
     with patch.object(TACCJobManager, '_execute_command',
             side_effect=TJMCommandError(SYSTEM, USER, 'tar...', 1,
                             '', 'padding with zeros', 'mock tar error')):
         with pytest.raises(FileNotFoundError) as t:
             JM.download(dest_path, test_folder)
+            local_tar = f"{os.path.split(test_folder)[1]}.tar.gz."
+            assert local_tar not in os.listdir('.')
+
 
     # Mock other critical tar error
     with patch.object(TACCJobManager, '_execute_command',
@@ -318,289 +325,335 @@ def test_download():
         with pytest.raises(PermissionError):
             JM.download(dest_path, test_folder)
 
-    # Remove test folder and file we sent and local test folder
-    JM.remove(dest_path)
+    # Empty trash dir and clean local files to conclude tests
+    JM.empty_trash()
     _cleanup_local_test_files()
 
 
-def test_files():
-    """Test listing, sending, and getting files and directories"""
+def test_remove():
+    """Test removing files on remote system"""
 
-    # List files in path that exists and doesnt exist
-    with pytest.raises(FileNotFoundError):
-         JM.list_files('/bad/path')
+    # Empty trash dir and create a test file and folder
+    JM.empty_trash()
+    test_fname, test_file, test_folder = _setup_local_test_files()
 
-    # Send file - Try sending test application script to apps directory
-    test_file = '/'.join([JM.apps_dir, 'test_file'])
-    JM.upload('./tests/test_app/assets/run.sh', test_file)
-    files = JM.list_files(JM.apps_dir)
-    assert 'test_file' in [f['filename'] for f in files]
+    # Upload directory with file in it
+    dest_dirname = 'test_path'
+    dest_path = '/'.join([JM.trash_dir, dest_dirname])
+    JM.upload(test_folder, dest_path)
 
-    # Test peaking at a file just sent
-    first = '#### BEGIN SCRIPT LOGIC'
-    first_line = JM.peak_file(test_file, head=1)
-    assert first in first_line
-    last = '${command} ${command_opts} >>out.txt 2>&1'
-    last_line = JM.peak_file(test_file, tail=1)
-    assert last in last_line
-    both_lines = JM.peak_file(test_file)
-
-    with pytest.raises(Exception):
-         JM.peak_file('/bad/path')
-
-    # Send directory - Now try sending whole assets directory
-    test_folder = JM.apps_dir + '/test_folder'
-    JM.upload('./tests/test_app/assets', test_folder)
-    files = JM.list_files(JM.apps_dir)
-    assert 'test_folder' in [f['filename'] for f in files]
-
-    # Get test file
-    JM.download(test_file, './tests/test_file')
-    assert os.path.isfile('./tests/test_file')
-    os.remove('./tests/test_file')
-
-    # Get test folder
-    JM.download(test_folder, './tests/test_folder')
-    assert os.path.isdir('./tests/test_folder')
-    assert os.path.isfile('./tests/test_folder/run.sh')
-    os.system('rm -rf ./tests/test_folder')
-
-    # Remove file - Remove file initially sent (test application script in apps directory)
-    test_file = '/'.join([JM.apps_dir, 'test_file'])
-    trash_file = test_file.replace('/','___')
-    JM.remove(test_file)
-    files = JM.list_files(JM.apps_dir)
+    # Now remove file inside directory
+    remote_fname = posixpath.join(dest_path, test_fname)
+    trash_name = remote_fname.replace('/','___')
+    JM.remove(remote_fname)
+    remote_dir_files = JM.list_files(dest_path)
     trash_files = JM.list_files(JM.trash_dir)
-    assert 'test_file' not in [f['filename'] for f in files]
-    assert trash_file in [f['filename'] for f in trash_files]
+    assert test_fname not in [f['filename'] for f in remote_dir_files]
+    assert trash_name in [f['filename'] for f in trash_files]
 
-    # Restore file removed
-    test_file = '/'.join([JM.apps_dir, 'test_file'])
-    JM.restore(test_file)
-    files = JM.list_files(JM.apps_dir)
-    assert 'test_file' in [f['filename'] for f in files]
+    # Now remove whole directory
+    JM.remove(dest_path)
+    trash_name = dest_path.replace('/','___')
+    trash_files = JM.list_files(JM.trash_dir)
+    assert trash_name in [f['filename'] for f in trash_files]
 
-    # Now try to remove files that don't exist and don't have permission to. Should throw errors
-    with pytest.raises(Exception):
-         JM.remove('/does/not/exist')
-    with pytest.raises(Exception):
-         JM.remove('/tmp')
+    # Mock error removing or back-ing up file in trash dir
+    with patch.object(TACCJobManager, '_execute_command',
+            side_effect=TJMCommandError(SYSTEM, USER, 'rsync ...', 1,
+                            'mock rsync error', '', 'mock error')):
+        with pytest.raises(TJMCommandError) as t:
+            JM.remove(dest_path)
+
+    # Upload and delete file again (even though file exists already in trash)
+    # Should be ok with this.
+    JM.upload(test_folder, dest_path)
+    JM.remove(dest_path)
+
+    # Empty trash dir and clean local files to conclude tests
+    JM.empty_trash()
+    _cleanup_local_test_files()
 
 
-def test_data():
-    """Test sending and receiving data."""
-    global JM
+def test_restore():
+    """Test restoring file"""
 
-    _check_init()
+    # Empty trash dir and create a test file and folder
+    JM.empty_trash()
+    test_fname, test_file, test_folder = _setup_local_test_files()
 
-    # Send text and json data
-    JM.send_data('foo','test_text_data')
-    JM.send_data({'foo':'bar'},'test_json_data')
-    files = [f['filename'] for f in JM.list_files()]
-    assert 'test_text_data' in files and 'test_json_data' in files
+    # Upload directory with file in it
+    dest_dirname = 'test_path'
+    dest_path = '/'.join([JM.trash_dir, dest_dirname])
+    JM.upload(test_folder, dest_path)
 
-    # Read text and json data
-    text_data = JM.get_data('test_text_data', 'text')
-    json_data = JM.get_data('test_json_data', 'json')
-    assert text_data=='foo'
-    assert json_data=={'foo':'bar'}
+    # Now remove file inside directory and restore it
+    remote_fname = posixpath.join(dest_path, test_fname)
+    trash_name = remote_fname.replace('/','___')
+    JM.remove(remote_fname)
+    JM.restore(remote_fname)
+    remote_dir_files = JM.list_files(dest_path)
+    trash_files = JM.list_files(JM.trash_dir)
+    assert test_fname in [f['filename'] for f in remote_dir_files]
+    assert trash_name not in [f['filename'] for f in trash_files]
 
-    # Send bad data type, and data to non-existant path, or path where we have no permission
+    # Now do the same for the whole directory
+    trash_name = dest_path.replace('/','___')
+    JM.remove(dest_path)
+    JM.restore(dest_path)
+    trash_files = JM.list_files(JM.trash_dir)
+    assert test_fname in [f['filename'] for f in remote_dir_files]
+    assert trash_name not in [f['filename'] for f in trash_files]
+
+    # Mock error error restoring file
+    with patch.object(TACCJobManager, '_execute_command',
+            side_effect=TJMCommandError(SYSTEM, USER, 'mv ...', 1,
+                            'mock mv error', '', 'mock error')):
+        with pytest.raises(TJMCommandError) as t:
+            JM.restore(remote_fname)
+
+    # Empty trash dir and clean local files to conclude tests
+    JM.empty_trash()
+    _cleanup_local_test_files()
+
+
+def test_empty_trash():
+    """Test emptying trash directory"""
+
+    # Empty trash dir and create a test file and folder
+    JM.empty_trash()
+    test_fname, test_file, test_folder = _setup_local_test_files()
+
+    # Upload directory with file in it to trash directory
+    dest_dirname = 'test_path'
+    dest_path = '/'.join([JM.trash_dir, dest_dirname])
+    JM.upload(test_folder, dest_path)
+
+    # Empty trash directory and assert nothing in it now
+    JM.empty_trash()
+    trash_files = JM.list_files(JM.trash_dir)
+    assert len(trash_files)==0
+
+    # Empty trash dir and clean local files to conclude tests
+    JM.empty_trash()
+    _cleanup_local_test_files()
+
+
+def test_write():
+    """Test writing file directly"""
+
+    # Empty trash dir
+    JM.empty_trash()
+
+    # Write some text data to a file
+    txt_file = posixpath.join(JM.trash_dir, 'test.txt')
+    JM.write('hello world\n', txt_file)
+    trash_files = JM.list_files(JM.trash_dir)
+    assert len(trash_files)==1
+    assert trash_files[0]['filename']=='test.txt'
+    assert trash_files[0]['st_size']==12
+    JM.empty_trash()
+
+    # Write some json data to a file
+    json_file = posixpath.join(JM.trash_dir, 'test.json')
+    JM.write({'msg':'hello world'}, json_file)
+    trash_files = JM.list_files(JM.trash_dir)
+    assert len(trash_files)==1
+    assert trash_files[0]['filename']=='test.json'
+    assert trash_files[0]['st_size']==22
+    JM.empty_trash()
+
+    # Try to write wrong data type
     with pytest.raises(ValueError):
-        JM.send_data(['foo'],'foo')
+        JM.write(['hello world'], json_file)
+
+    # Mock not found, permission, and unexpected errors
     with patch.object(SSHClient2FA, 'open_sftp',
             side_effect=FileNotFoundError('Mock file not found')):
         with pytest.raises(FileNotFoundError):
-            JM.send_data('foo', '/does/not/exist')
+            JM.write('hello world\n', txt_file)
     with patch.object(SSHClient2FA, 'open_sftp',
-            side_effect=PermissionError('Mock file permission')):
+            side_effect=PermissionError('Mock permission error')):
         with pytest.raises(PermissionError):
-            JM.send_data('foo', '/canthere')
+            JM.write('hello world\n', txt_file)
     with patch.object(SSHClient2FA, 'open_sftp',
-            side_effect=Exception('Mock other error')):
+            side_effect=Exception('Unexpected Error')):
         with pytest.raises(Exception):
-            JM.send_data('foo', '/other')
+            JM.write('hello world\n', txt_file)
 
-    # Get data from non-existant path, or path where we have no permission
+def test_read():
+    """Test reading file directly"""
+
+    # Empty trash dir
+    JM.empty_trash()
+
+    txt = 'hello world\n'
+    d = {'msg':'hello world'}
+
+    # Write some text and json data to a files
+    txt_file = posixpath.join(JM.trash_dir, 'test.txt')
+    json_file = posixpath.join(JM.trash_dir, 'test.json')
+    JM.write(txt, txt_file)
+    JM.write(d, json_file)
+
+    # Read data back in
+    txt_data = JM.read(txt_file, data_type='text')
+    json_data = JM.read(json_file, data_type='json')
+    assert txt_data==txt
+    assert json_data==d
+
+    # Try to read not supported data type
     with pytest.raises(ValueError):
-        JM.send_data('foo', data_type='bad-type')
+        JM.read(txt_file, data_type='list')
+
+    # Mock not found, permission, and unexpected errors
     with patch.object(SSHClient2FA, 'open_sftp',
             side_effect=FileNotFoundError('Mock file not found')):
         with pytest.raises(FileNotFoundError):
-            JM.get_data('/does/not/exist')
+            txt_data = JM.read(txt_file, data_type='text')
     with patch.object(SSHClient2FA, 'open_sftp',
-            side_effect=PermissionError('Mock file permission')):
+            side_effect=PermissionError('Mock permission error')):
         with pytest.raises(PermissionError):
-            JM.get_data('/canthere')
+            txt_data = JM.read(txt_file, data_type='text')
     with patch.object(SSHClient2FA, 'open_sftp',
-            side_effect=Exception('Mock other error')):
+            side_effect=Exception('Unexpected Error')):
         with pytest.raises(Exception):
-            JM.get_data('/other')
+            txt_data = JM.read(txt_file, data_type='text')
+
+    # Empty trash dir to finish
+    JM.empty_trash()
 
 
-def test_templating():
-    """Test loading project configuration files and templating json files"""
-    global JM
-    _check_init()
+def test_apps():
+    """Test getting and deploying applications"""
 
-    proj_conf_path = './tests/test_app/project.ini'
-    app_config = JM.load_templated_json_file('./tests/test_app/app.json', proj_conf_path)
-    assert app_config['name']=='test_app--1.0.0'
-    with pytest.raises(FileNotFoundError):
-        JM.load_templated_json_file('./tests/test_app/not_found.json', proj_conf_path)
+    # Name of test app directory locally
+    test_app = '.test-app'
 
-def test_deploy_app():
-    """Test deploy applications """
-    global JM
-    _check_init()
+    # Remove all apps in apps dir remotely and remove app locally if exists
+    JM._execute_command(f"rm -rf {JM.apps_dir}/*")
+    os.system(f"rm -rf {test_app}")
 
-    # Test deploying app when sending files to system is failing
-    with patch.object(TACCJobManager, 'upload', side_effect=Exception('Mock file send error')):
-        with pytest.raises(Exception) as e:
-            bad_deploy = JM.deploy_app(local_app_dir='./tests/test_app', overwrite=True)
-    # Test deploying app with bad config (missing required config)
-    with pytest.raises(Exception) as e:
-        bad_deploy = JM.deploy_app(local_app_dir='./tests/test_app', app_config_file='app_2.json',
-                overwrite=True)
+    # Create template app locally
+    app_config = create_template_app(test_app)
 
-    # Deploy app (should not exist to begin with)
-    test_app = JM.deploy_app(local_app_dir='./tests/test_app', overwrite=True)
-    assert test_app['name']=='test_app--1.0.0'
+    # Deploy app from files
+    app1 = JM.deploy_app(local_app_dir=test_app)
+    apps = JM.get_apps()
+    assert len(apps)==1
+    assert apps[0]==app1['name']
 
-    # Now try without overwrite and this will fail
-    with pytest.raises(Exception):
-        test_app = JM.deploy_app(local_app_dir='./tests/test_app')
+    # Assert app assets, in this case its script, were uploaded
+    remote_app_dir = posixpath.join(JM.apps_dir, app1['name'])
+    app_files = JM.list_files(remote_app_dir)
+    assert 'run.sh' in [f['filename'] for f in app_files]
 
+    # Ge app and assert its config matches what we got back from deploy
+    dep_app = JM.get_app(app1['name'])
+    assert dep_app==app1
 
-def test_jobs():
-    """Test setting up a job."""
-    global JM
-    _check_init()
+    # Now get app that doesn exist
+    with pytest.raises(ValueError):
+        bad_app = JM.get_app('bad-app')
 
-    # Make sure app is deployed
-    test_app = JM.deploy_app(local_app_dir='./tests/test_app', overwrite=True)
+    # Now deploy app from dictionary with same name but change node-count
+    app1['default_node_count'] = 2*app1['default_node_count']
+    app1_up= JM.deploy_app(app_config=app1,
+            local_app_dir=test_app, overwrite=True)
+    assert app1_up['default_node_count']==2*dep_app['default_node_count']
 
-    # Now try setting up test job, but don't stage inputs
-    test_config = JM.setup_job(local_job_dir='./tests/test_app',
-            job_config_file='job.json', stage=False)
-    assert test_config['appId']=='test_app--1.0.0'
-    # We didn't stage the inputs, so this should hold
-    assert test_config['job_id'] not in JM.get_jobs()
+    # error - overwrite not set
+    with pytest.raises(ValueError):
+        app1_up= JM.deploy_app(app_config=app1)
 
-    # Now try setting up test job
-    job_config = JM.setup_job(local_job_dir='./tests/test_app', job_config_file='job.json')
-    assert job_config['appId']=='test_app--1.0.0'
+    # error - missing app config
+    with pytest.raises(ValueError):
+        app1.pop('entry_script')
+        app1_up= JM.deploy_app(app_config=app1)
 
-    # Get job we se just set up
-    jobs = JM.get_jobs()
-    assert job_config['job_id'] in jobs
-
-    # Fail setting up job -> Sending input file fails
+    # Force error deploying application data
     with patch.object(TACCJobManager, 'upload',
             side_effect=Exception('Mock upload file error')):
         with pytest.raises(Exception) as e:
-            job_config = JM.setup_job(local_job_dir='./tests/test_app', job_config_file='job.json')
+            bad_app = JM.deploy_app(local_app_dir=test_app, name='bad_app')
 
-    # Update job config to include email and allocation
-    job_config = JM.setup_job(job_config,
-            email="test@test.com", allocation=ALLOCATION)
-    assert job_config['email']=="test@test.com"
-    assert job_config['allocation']==ALLOCATION
-
-    # Get job config now, should be updated
-    new_job_config = JM.get_job(job_config['job_id'])
-    assert new_job_config['email']=="test@test.com"
-    assert new_job_config['allocation']==ALLOCATION
-
-    # Fail to save job config -> Example bad job_dir path
-    with pytest.raises(Exception) as e:
-        bad_config = job_config
-        bad_config['job_dir'] = '/bad/path'
-        JM._save_job_config(bad_config)
-
-    # Fail to load job config -> Example: bad job id
-    with pytest.raises(Exception) as e:
-        bad_job = JM.get_job('bad_job')
-
-    # Get input job file from job with input file
-    input_file_path = JM.download_job_data(job_config['job_id'], 'test_input_file',
-            dest_dir='./tests')
-    with open(input_file_path, 'r') as f:
-        assert f.read()=="hello\nworld\n"
-    os.remove('./tests/test_input_file')
-
-    # Get job file that doesn't exist
-    with pytest.raises(Exception) as e:
-        bad_file = JM.download_job_data(job_config['job_id'], 'bad_file')
-
-    # Fail to get job file (some download error maybe)
-    with patch.object(TACCJobManager, 'download',
-            side_effect=Exception('Mock download file error')):
-        with pytest.raises(Exception) as e:
-            bad_file = JM.download_job_data(job_config['job_id'], 'test_input_file', dest_dir='./tests')
-
-    # Cleanup files just downloaded
-    os.remove(input_file_path)
-    os.rmdir(os.path.join('.', 'tests', job_config['job_id']))
-
-    # Send file - Try sending this script to job directory
-    sent_file_path = JM.upload_job_data(job_config['job_id'],
-        './tests/test_taccjm.py', dest_dir='.')
-    job_files = JM.ls_job(job_config['job_id'])
-    assert 'test_taccjm.py' in job_files
-
-    # Fail to send job file
-    with pytest.raises(Exception) as e:
-        bad_send = JM.upload_job_data(job_config['job_id'], './tests/bad_file', dest_dir='.')
-
-    # Peak at job we just sent (this script, should start with a comment line)
-    input_file_text = JM.peak_job_file(job_config['job_id'], 'test_taccjm.py')
-    assert input_file_text.startswith('"""')
+    # Clean app dir to conclude and remove local app
+    JM._execute_command(f"rm -rf {JM.apps_dir}/*")
+    os.system(f"rm -rf {test_app}")
 
 
-    # Fail to submit job because SLURM error
-    with patch.object(TACCJobManager, '_execute_command',
-            return_value="FAILED\n"):
-        with pytest.raises(Exception) as e:
-            bad_submit = JM.submit_job(job_config['job_id'])
+def test_jobs():
+    """Test setting up and running jobs"""
 
-    # Cancel job before its submitted
-    with pytest.raises(Exception) as e:
-        bad_cancel = JM.cancel_job(job_config['job_id'])
+    # Name of test app directory locally
+    test_app = '.test-app'
 
-    # Succesfully submit job
-    submitted_job = JM.submit_job(job_config['job_id'])
-    assert submitted_job['slurm_id'] is not None
+    # Remove all apps and jobs  in apps/jobs dir remotely
+    JM._execute_command(f"rm -rf {JM.apps_dir}/*")
+    JM._execute_command(f"rm -rf {JM.jobs_dir}/*")
 
-    # Fail to try to submit job again
-    with pytest.raises(Exception) as e:
-        _ = JM.submit_job(job_config['job_id'])
+    # Remove app locally if exists
+    os.system(f"rm -rf {test_app}")
 
-    # Forced failure to cancel job -> slurm error
-    with patch.object(TACCJobManager, '_execute_command',
-            side_effect=Exception('Mock slurm error')):
-        with pytest.raises(Exception) as e:
-            _ = JM.cancel_job(job_config['job_id'])
+    # Create template app locally
+    app_config, job_config = create_template_app(test_app)
 
-    # Successfully cancel job we just submitted
-    canceled = JM.cancel_job(job_config['job_id'])
+    # Deploy app from files
+    app1 = JM.deploy_app(local_app_dir=test_app)
 
-    # Fail to re-cancel job
-    with pytest.raises(Exception) as e:
-        bad_cancel = JM.cancel_job(job_config['job_id'])
+    # Setup a test job from the configs in default app directory, dont stage
+    job1 = JM.setup_job(local_job_dir=test_app, stage=False)
+    assert job1['app']==app_config['name']
 
-    # Fail to submit job because of slurm error
-    with patch.object(TACCJobManager, '_execute_command',
-            side_effect=Exception('Execute command error')):
-        with pytest.raises(Exception) as e:
-            bad_deploy = JM.cancel_job(job_config['job_id'])
+    # Setup a test job from dictioanry just loaded, dont stage
+    job2 = JM.setup_job(job_config=job1, local_job_dir=test_app, stage=False)
+    assert job2['app']==app_config['name']
 
-    # Cleanup non existent job
-    bad_cleanup = JM.cleanup_job('bad_job')
+    # Now create test input file and send with job and stage job
+    os.system(f"echo hello world > {job1['inputs']['input1']}")
+    job3 = JM.setup_job(job_config=job1, local_job_dir=test_app, stage=True)
+    jobs = JM.get_jobs()
+    assert job3['job_id'] in jobs
+    staged_job = JM.get_job(job3['job_id'])
+    assert staged_job==job3
 
-    # Cleanup jobs we set-up
-    _ = JM.cleanup_job(job_config['job_id'])
+    # Error - Getting job that doesn't exist
+    with pytest.raises(ValueError):
+        _ = JM.get_job('does_not_exist')
 
+    # Error - Setting up jobs with missing params/inputs
+    no_inputs = job1.copy()
+    no_inputs['inputs'] = {}
+    no_params = job1.copy()
+    no_params['parameters'] = {}
+    with pytest.raises(ValueError):
+        _ = JM.setup_job(job_config=no_inputs, local_job_dir=test_app, stage=True)
+    with pytest.raises(ValueError):
+        _ = JM.setup_job(job_config=no_params, local_job_dir=test_app, stage=True)
+
+    # Error - Staging submit script
+    with patch.object(TACCJobManager, '_parse_submit_script',
+            side_effect=Exception('Mock parse submit script exception')):
+        with pytest.raises(Exception):
+            _ = JM.setup_job(job_config=job3,
+                    local_job_dir=test_app, stage=True)
+
+    # Error - Failing to stage input (delete first)
+    os.remove(f"{job3['inputs']['input1']}")
+    with pytest.raises(Exception):
+        _ = JM.setup_job(job_config=job3,
+                local_job_dir=test_app, stage=True)
+
+    # Error - Failing to stage app contents (delete app first)
+    # app_dir = posixpath.join(JM.apps_dir, job3['app'])
+    # JM.remove(app_dir)
+    # with pytest.raises(TJMCommandError):
+    #     _ = JM.setup_job(job_config=job3,
+    #             local_job_dir=test_app, stage=True)
+
+    # cleanup
+    JM._execute_command(f"rm -rf {JM.apps_dir}/*")
+    JM._execute_command(f"rm -rf {JM.jobs_dir}/*")
+    os.system(f"rm -rf {test_app}")
 
 
 # def test_main(capsys):

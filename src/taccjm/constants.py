@@ -26,7 +26,7 @@ short_desc = Template Application
 long_description = Template to build HPC apps.
 
 # Assume we are using this app on TACC stampede2
-queue = skx-dev
+queue = development
 
 [job]
 # Can also specify job parameters here
@@ -36,10 +36,10 @@ desc = A test run of the template hpc application
 queue = development
 
 # Test input file from local system to send to job
-job_input = test_file.txt
+input = test_file.txt
 
 # Test job parameter to be passed to job run
-job_parameter = 1
+parameter = 1
 """
 
 # Example APP and JOB configs, with jinja template string patterns
@@ -83,13 +83,13 @@ SUBMIT_SCRIPT_TEMPLATE = """#!/bin/bash
 # {desc}
 #----------------------------------------------------
 
-#SBATCH -J {job_id}                               # Job name
-#SBATCH -o {job_id}.o%j                           # Name of stdout output file
-#SBATCH -e {job_id}.e%j                           # Name of stderr error file
-#SBATCH -p {queue}                                # Queue (partition) name
-#SBATCH -N {node_count}                           # Total # of nodes
-#SBATCH -n {node_count*processors_per_node}       # Total # of mpi tasks
-#SBATCH -t {max_run_time}                         # Run time (hh:mm:ss)"""
+#SBATCH -J {job_id}     # Job name
+#SBATCH -o {job_id}.o%j # Name of stdout output file
+#SBATCH -e {job_id}.e%j # Name of stderr error file
+#SBATCH -p {queue}      # Queue (partition) name
+#SBATCH -N {N}          # Total num nodes
+#SBATCH -n {n}          # Total num mpi tasks
+#SBATCH -t {rt}         # Run time (hh:mm:ss)"""
 
 
 def make_taccjm_dir():

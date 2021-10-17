@@ -144,16 +144,16 @@ def create_template_app(name:str,
     # Write app config json file
     app_config_path = os.path.join(app_dir, 'app.json')
     with open(app_config_path, 'w') as f:
-        f.write(json.dump(app_template))
+        json.dump(app_template, f)
 
     # Write job config json file
-    job_config_path = os.path.join(job_dir, 'job.json')
+    job_config_path = os.path.join(app_dir, 'job.json')
     with open(job_config_path, 'w') as f:
-        f.write(json.dump(JOB_TEMPLATE))
+        json.dump(JOB_TEMPLATE, f)
 
     # Write entry point script
     with open(os.path.join(assets_dir, 'run.sh'), 'w') as f:
-        f.write(json.dump(script))
+        f.write(APP_SCRIPT_TEMPLATE)
 
     # Load in app and job config from templates as they were created
     app_config = load_templated_json_file(app_config_path, config_path)

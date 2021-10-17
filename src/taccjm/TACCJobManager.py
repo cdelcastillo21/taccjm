@@ -247,13 +247,14 @@ class TACCJobManager():
 
         """
         # Format submit scripts with appropriate inputs for job
+        np = job_config['node_count']*job_config['processors_per_node']
         header = SUBMIT_SCRIPT_TEMPLATE.format(
                 name=job_config['name'],
                 desc=job_config['desc'],
                 job_id=job_config['job_id'],
                 queue=job_config['queue'],
-                node_count=job_config['node_count'],
-                processors_per_node=job_config['processors_per_node'],
+                N=job_config['node_count'],
+                n=np,
                 rt=job_config['max_run_time'])
 
         # Add slurm directives for email and allocation if specified for job
@@ -270,7 +271,6 @@ class TACCJobManager():
 
         # Build function arguments
         # always pass total number of MPI processes
-        np =  job_config['node_count'] * job_config['processors_per_node']
         job_args = {"NP": np}
 
         # Add paths of job inputs (transferred to job dir) as argument
@@ -293,7 +293,7 @@ class TACCJobManager():
         # Parse final submit script
         entry_path = f"{job_config['job_dir']}/{job_config['entry_script']}"
         submit_script = (
-            submit_script_header                   # set SBATCH params
+            header                                 # set SBATCH params
             + f"\ncd {job_config['job_dir']}\n\n"  # cd to job directory
             + "\n".join(export_list)               # set job params
             + f"\n{entry_path}"                    # run main script
@@ -714,9 +714,13 @@ class TACCJobManager():
                             # Other error tar-ing file. Raise
                             raise t
 
-                    # get tar file
-                    local_tar = f"{local}.tar.gz"
-                    sftp.get(remote_tar, local_tar)
+                    # try to get tar file
+                    try:
+                        local_tar = f"{local}.tar.gz"
+                        sftp.get(remote_tar, local_tar)
+                    except Exception as e:
+                        os.remove(local_tar)
+                        raise e
 
                     # unpack tar file locally
                     with tarfile.open(local_tar) as tar:
@@ -776,7 +780,7 @@ class TACCJobManager():
         trash_path = f"{self.trash_dir}/{file_name}"
         abs_path = '~/' + remote_path if remote_path[0]!='/' else remote_path
 
-        cmnd = f"rsync -a {abs_path} {trash_path}"
+        cmnd = f"rsync -a {abs_path} {trash_path}; rm -rf {abs_path}"
         try:
             ret = self._execute_command(cmnd)
         except TJMCommandError as tjm_error:
@@ -812,7 +816,7 @@ class TACCJobManager():
         trash_path = f"{self.trash_dir}/{file_name}"
         abs_path = '~/' + remote_path if remote_path[0]!='/' else remote_path
 
-        cmnd = f"rsync -a {trash_path} {abs_path}"
+        cmnd = f"mv {trash_path} {abs_path}"
         try:
             ret = self._execute_command(cmnd)
         except TJMCommandError as tjm_error:
@@ -1075,7 +1079,7 @@ class TACCJobManager():
 
             # Make entry point script executable
             entry_script = f"{remote_app_dir}/{app_config['entry_script']}"
-            self._execute_command(f"chmod +x {entry__script}")
+            self._execute_command(f"chmod +x {entry_script}")
 
         except Exception as e:
             msg = f"deploy_app - Unable to stage appplication data."
@@ -1137,6 +1141,7 @@ class TACCJobManager():
 
     def setup_job(self,
             job_config:dict=None,
+            local_job_dir:str='.',
             job_config_file:str='job.json',
             proj_config_file:str='project.ini',
             stage:bool=True,
@@ -1195,19 +1200,8 @@ class TACCJobManager():
         else:
             job_config = update_dic_keys(job_config, **kwargs)
 
-        if any([job_config.get(x) for x in ['job_id', 'job_dir']]):
-            # job_id is name of job folder in jobs_dir
-            ts = datetime.fromtimestamp(time.time()).strftime('%Y%m%d_%H%M%S')
-            job_config['job_id'] = '{job_name}_{ts}'.format(
-                    job_name=job_config['name'], ts=ts)
-            job_config['job_dir'] = '{job_dir}/{job_id}'.format(
-                    job_dir=self.jobs_dir, job_id=job_config['job_id'])
-            job_dir_exists = False
-        else:
-            job_dir_exists = True
-
         # Get default arguments from deployed application
-        app_config = self.get_app(job_config['appId'])
+        app_config = self.get_app(job_config['app'])
         def _get_attr(j, a):
             # Helper function to get app defatults for job configs
             if j in job_config.keys():
@@ -1236,44 +1230,57 @@ class TACCJobManager():
 
         if stage:
             # Stage job inputs
-            try:
+            if not any([job_config.get(x) for x in ['job_id', 'job_dir']]):
+                # If job_id/job_dir has not been assigned, job hasn't been
+                # set up before, so must create job directory.
+                ts = datetime.fromtimestamp(
+                        time.time()).strftime('%Y%m%d_%H%M%S')
+                job_config['job_id'] = '{job_name}_{ts}'.format(
+                        job_name=job_config['name'], ts=ts)
+                job_config['job_dir'] = '{job_dir}/{job_id}'.format(
+                        job_dir=self.jobs_dir, job_id=job_config['job_id'])
+
                 # Make job directory
-                job_dir = job_config['job_dir']
-                if not job_dir_exists:
-                    sftp_ret = self._mkdir(job_dir)
-                    # TODO: Check return of mkdir?
+                self._mkdir(job_config['job_dir'])
 
-                # Copy app contents to job directory
-                cmnd = 'cp -r {apps_dir}/{app}/* {job_dir}/'.format(
-                        apps_dir=self.apps_dir,
-                        app=job_config['appId'],
-                        job_dir=job_dir)
-                ret = self._execute_command(cmnd)
-
-                # Send job input data to job directory
-                for arg, path in job_config['inputs'].items():
-                    self.upload(path, '/'.join([job_dir,
-                        os.path.basename(path)]))
-
-                # Parse and write submit_script to job_directory
-                submit_script = self.parse_submit_script(job_config)
-                submit_script_path = f"{job_dir}/submit_script.sh"
-                self.write(submit_script, submit_script_path)
-
-                # chmod submit_scipt
-                self._execute_command(f"chmod +x {submit_script_path}")
-
-                # Save job config
-                job_config_path = f"{job_dir}/job.json"
-                self.write(job_config, job_config_path)
-
-            except Exception as e:
-                # If failed to stage job, remove contents that have been staged
-                self._execute_command('rm -rf ' + job_dir)
-                message = f"stage_job - Error staging: {e}."
-                logger.error(message)
+            # Utility function to clean-up job directory and raise error
+            job_dir = job_config['job_dir']
+            def err(e, msg):
+                self._execute_command(f"rm -rf {job_dir}")
+                logger.error(f"setup_job - {msg}")
                 raise e
 
+            # Copy app contents to job directory
+            cmnd = 'cp -r {apps_dir}/{app}/* {job_dir}/'.format(
+                    apps_dir=self.apps_dir,
+                    app=job_config['app'],
+                    job_dir=job_dir)
+            try:
+                ret = self._execute_command(cmnd)
+            except TJMCommandError as t:
+                err(t, "Error copying app assets to job dir")
+
+            # Send job input data to job directory
+            for arg, path in job_config['inputs'].items():
+                arg_dest_path = posixpath.join(job_dir,
+                        posixpath.basename(path))
+                try:
+                    self.upload(path, arg_dest_path)
+                except Exception as e:
+                    err(e, f"Error staging input {arg} with path {path}")
+
+            # Parse and write submit_script to job_directory, and chmod it
+            submit_script_path = f"{job_dir}/submit_script.sh"
+            try:
+                submit_script = self._parse_submit_script(job_config)
+                self.write(submit_script, submit_script_path)
+                self._execute_command(f"chmod +x {submit_script_path}")
+            except Exception as e:
+                err(e, f"Error parsing or staging job submit script.")
+
+            # Save job config
+            job_config_path = f"{job_dir}/job.json"
+            self.write(job_config, job_config_path)
 
         return job_config
 
