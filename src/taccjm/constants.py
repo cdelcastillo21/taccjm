@@ -74,6 +74,7 @@ JOB_TEMPLATE = {'name': '{{ app.name }}-job-test',
 
 # Example of an application entry point script.
 APP_SCRIPT_TEMPLATE = """#### BEGIN SCRIPT LOGIC
+sleep 30
 head ${input1} -n ${param1} >out.txt 2>&1"""
 
 # SLURM Config Template

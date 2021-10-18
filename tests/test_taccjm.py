@@ -581,8 +581,8 @@ def test_apps():
     os.system(f"rm -rf {test_app}")
 
 
-def test_jobs():
-    """Test setting up and running jobs"""
+def test_setup_job():
+    """Test setting up jobs"""
 
     # Name of test app directory locally
     test_app = '.test-app'
@@ -610,11 +610,22 @@ def test_jobs():
 
     # Now create test input file and send with job and stage job
     os.system(f"echo hello world > {job1['inputs']['input1']}")
-    job3 = JM.setup_job(job_config=job1, local_job_dir=test_app, stage=True)
+    job3 = JM.setup_job(job_config=job1.copy(),
+            local_job_dir=test_app, stage=True)
     jobs = JM.get_jobs()
     assert job3['job_id'] in jobs
     staged_job = JM.get_job(job3['job_id'])
     assert staged_job==job3
+
+    # Setup another job with allocation and email
+    job4 = JM.setup_job(job_config=job1.copy(),
+            local_job_dir=test_app, stage=True,
+            email='test@test.com', allocation=ALLOCATION)
+    jobs = JM.get_jobs()
+    assert job4['job_id'] in jobs
+    staged_job = JM.get_job(job4['job_id'])
+    assert staged_job==job4
+    assert 'allocation' in job4.keys() and 'email' in job4.keys()
 
     # Error - Getting job that doesn't exist
     with pytest.raises(ValueError):
@@ -634,21 +645,79 @@ def test_jobs():
     with patch.object(TACCJobManager, '_parse_submit_script',
             side_effect=Exception('Mock parse submit script exception')):
         with pytest.raises(Exception):
-            _ = JM.setup_job(job_config=job3,
-                    local_job_dir=test_app, stage=True)
+            _ = JM.setup_job(local_job_dir=test_app, stage=True)
 
-    # Error - Failing to stage input (delete first)
-    os.remove(f"{job3['inputs']['input1']}")
-    with pytest.raises(Exception):
+    # Error - Failing to stage input
+    with patch.object(TACCJobManager, 'upload',
+            side_effect=Exception('Mock upload error')):
+        with pytest.raises(Exception):
+            _ = JM.setup_job(local_job_dir=test_app, stage=True)
+
+    # Error - Failing to stage app contents (delete job dir)
+    _ = JM.remove_job(job3['job_id'])
+    with pytest.raises(TJMCommandError):
         _ = JM.setup_job(job_config=job3,
                 local_job_dir=test_app, stage=True)
 
-    # Error - Failing to stage app contents (delete app first)
-    # app_dir = posixpath.join(JM.apps_dir, job3['app'])
-    # JM.remove(app_dir)
-    # with pytest.raises(TJMCommandError):
-    #     _ = JM.setup_job(job_config=job3,
-    #             local_job_dir=test_app, stage=True)
+    # cleanup
+    JM._execute_command(f"rm -rf {JM.apps_dir}/*")
+    JM._execute_command(f"rm -rf {JM.jobs_dir}/*")
+    os.system(f"rm -rf {test_app}")
+
+
+def test_run_jobs():
+    """Test submitting and canceling jobs"""
+
+    # Name of test app directory locally
+    test_app = '.test-app'
+
+    # Remove all apps and jobs  in apps/jobs dir remotely
+    JM._execute_command(f"rm -rf {JM.apps_dir}/*")
+    JM._execute_command(f"rm -rf {JM.jobs_dir}/*")
+
+    # Remove app locally if exists
+    os.system(f"rm -rf {test_app}")
+
+    # Create template app locally
+    app_config, job_config = create_template_app(test_app)
+
+    # Deploy app from files
+    app = JM.deploy_app(local_app_dir=test_app)
+
+    # Now create test input file and send with job and stage job
+    os.system(f"echo hello world > {job1['inputs']['input1']}")
+    job = JM.setup_job(local_job_dir=test_app, stage=True,
+            email='test@test.com', allocation=ALLOCATION)
+
+    # Now submit job
+    job = JM.submit_job(job4['job_id'])
+    assert 'slurm_id' in job4.keys()
+    assert job['slurm_id'] in [j['job_id'] for j in JM.showq()]
+
+    # Error - Try submitting again
+    with pytest.raises(ValueError):
+        _ = JM.submit_job(job['job_id'])
+
+    # Error - Cancel job, mock slurm queue error
+    with patch.object(TACCJobManager, '_execute_command',
+            side_effect=TJMCommandError(SYSTEM, USER,
+                'scancel ...', 1, 'mock scancel error', '', 'mock error')):
+        with pytest.raises(TJMCommandError):
+            _ = JM.cancel_job(job['job_id'])
+
+    # Cancel job
+    job = JM.cancel_job(job['job_id'])
+    assert 'slurm_id' not in job.keys()
+    assert 'slurm_hist' in job.keys()
+
+    # Error - Try to cancel job again
+    with pytest.raises(ValueError):
+        _ = JM.cancel_job(job4['job_id'])
+
+    # Error - submit job but mock slurm queue error
+    with patch.object(TACCJobManager, '_execute_command', returns='FAILED'):
+        with pytest.raises(TJMCommandError):
+            _ = JM.submit_job(job['job_id'])
 
     # cleanup
     JM._execute_command(f"rm -rf {JM.apps_dir}/*")

@@ -284,10 +284,10 @@ class TACCJobManager():
         # Create list of arguments to pass as env variables to job
         export_list = [""]
         for arg, value in job_args.items():
-            value = str(value)
             # wrap with single quotes if needed
-            if " " in value and not (value[0] == value[-1] == "'"):
-                value = f"'{value}'"
+            value = str(value)
+            needs_quote = " " in value and not (value[0] == value[-1] == "'")
+            value = f"'{value}'" if needs_quote else value
             export_list.append(f"export {arg}={value}")
 
         # Parse final submit script
@@ -1346,15 +1346,15 @@ class TACCJobManager():
             also updated in the jobs directory.
         """
         # Load job config
-        job_config =  self.get_job(jobId)
+        job_config =  self.get_job(job_id)
 
         if 'slurm_id' in job_config.keys():
             cmnd = f"scancel {job_config['slurm_id']}"
             try:
                 self._execute_command(cmnd)
-            except Exception as e:
-                msg = f"cancel_job - Failed to cancel job {jobId}."
-                logger.error(msg)
+            except TJMCommandError as e:
+                e.message= f"cancel_job - Failed to cancel job {job_id}."
+                logger.error(e.message)
                 raise e
 
             # Remove slurm ID and store into job hist
@@ -1365,9 +1365,9 @@ class TACCJobManager():
             job_config_path = job_config['job_dir'] + '/job.json'
             self.write(job_config, job_config_path)
         else:
-            msg = f"Job {jobId} has not been submitted yet."
+            msg = f"Job {job_id} has not been submitted yet."
             logger.error(msg)
-            raise Exception(msg)
+            raise ValueError(msg)
 
         return job_config
 
@@ -1385,9 +1385,8 @@ class TACCJobManager():
 
         Returns
         -------
-        job_config : dict
-            Config of job just removed. Note that job can be restored by
-            performing restore(job_config['job_dir']).
+        job_id : str
+            ID of job just removed.
         """
         # Cancel job, if needed.
         try:
@@ -1402,7 +1401,7 @@ class TACCJobManager():
         except:
             pass
 
-        return job_config
+        return job_id
 
 
     def restore_job(self, job_id:str) -> dict:
