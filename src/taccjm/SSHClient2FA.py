@@ -46,18 +46,18 @@ def inter_handler(title, instructions, prompt_list):
     global user, pw, mfa, user_p, pw_p, mfa_p
     resp = []  #Initialize the response container
 
+    # Make pairs of (response, prompt)
+    prompts = [(user, user_p), (pw, pw_p), (mfa, mfa_p)]
+
     #Walk the list of prompts that the server sent that we need to answer
     for pr in prompt_list:
-        # str() - check we're dealing with a string rather than a unicode string
+        # str() - amke sure dealing with a string rather than a unicode string
         # strip() - get rid of any padding spaces sent by the server
 
-        if str(pr[0]).strip() == user_p:
-            resp.append(user)
-        elif str(pr[0]).strip() == pw_p:
-            resp.append(pw)
-        elif mfa_p is not None:
-            if str(pr[0]).strip() == mfa_p:
-                resp.append(mfa)
+        # Match prompts with responses
+        for p in prompts:
+            if str(pr[0]).strip() == p[1]:
+                resp.append(p[0])
 
     return tuple(resp)  #Convert the response list to a tuple and return it
 
@@ -65,13 +65,16 @@ def inter_handler(title, instructions, prompt_list):
 class SSHClient2FA(paramiko.SSHClient):
     """Paramiko SSH Client with 2-Factor Authentication
 
-    This class inherits from the usual paramiko SSHClient class, but overwrites the connect method
-    to allow for connections where 2-Factor authenticaion may be required. It does this by creating 
-    its own custom inter_handler method, a callback method for paramiko.transport.auth_interactive
-    that defines what prompts to expect and how to respond to them when creating an ssh connection.
+    This class inherits from the usual paramiko SSHClient class, but overwrites
+    the connect method to allow for connections where 2-Factor authenticaion
+    may be required. It does this by creating  its own custom inter_handler
+    method, a callback method for paramiko.transport.auth_interactive that
+    defines what prompts to expect and how to respond to them when creating an
+    ssh connection.
     """
 
-    def __init__(self, user_prompt="Username:", psw_prompt="Password:", mfa_prompt=None):
+    def __init__(self, user_prompt="Username:",
+            psw_prompt="Password:", mfa_prompt=None):
         """
         Create a new SSHClient.
         """
@@ -98,8 +101,8 @@ class SSHClient2FA(paramiko.SSHClient):
         #Get the username, password, and MFA token code from the user
         user = uid if uid is not None else input(user_p)
         pw = pswd if pswd is not None else getpass.getpass(pw_p)
-        if mfa_p is not None:
-            mfa = mfa_pswd if mfa_pswd is not None else input(mfa_p)
+        mfa = None if mfa_p is None else \
+                mfa_pswd if mfa_pswd is not None else input(mfa_p)
 
         #Create a socket and connect it to port 22 on the host
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

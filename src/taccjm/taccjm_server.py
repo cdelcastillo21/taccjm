@@ -11,6 +11,7 @@ import os
 import hug
 import falcon
 import logging
+from tpying import Union, List, Tuple
 from taccjm.TACCJobManager import TACCJobManager, TJMCommandError
 
 __author__ = "Carlos del-Castillo-Negrete"
@@ -25,17 +26,60 @@ logging.basicConfig(level=logging.DEBUG)
 # Note there could be multiple instance if managing more than one system
 JM = {}
 
-# @hug.exception(AssertionError)
-# def handle_custom_exceptions(exception):
-#     # Handles Assertion Errors - Usually for invalid inputs
-#     msg = exception.args[0]
-#     return {'error': msg}
+
+@hug.exception(ValueError)
+def handle_custom_exceptions(exception):
+    """Handling exceptions when ValueError due to input thrown."""
+
+    # Raise 400 Bad Request if invalid data type passed
+    raise falcon.HTTPError(falcon.HTTP_400, "BadRequest", str(exception))
+
+
+@hug.exception(FileNotFoundError)
+def handle_custom_exceptions(exception):
+    """Handling exceptions when resource can't be found."""
+
+    # Raise 404 not found error if local or remoate path don't exist
+    raise falcon.HTTPError(falcon.HTTP_404, "NotFound", str(exception))
+
+
+@hug.exception(PermissionError)
+def handle_custom_exceptions(exception):
+    """Handling exception when don't have access to resource"""
+
+    # Raise 403 forbidden if dont have permissions to access either paath
+    raise falcon.HTTPError(falcon.HTTP_403, "Forbidden", str(exception))
+
+
+@hug.exception(TJMCommandError)
+def handle_custom_exceptions(exception):
+    """Handling any other unforseen error"""
+
+    # Raise 500 internal server error for unanticipated error
+    raise falcon.HTTPError(falcon.HTTP_403, "Forbidden", str(exception))
+
+
+@hug.exception(Exception)
+def handle_custom_exceptions(exception):
+    """Handling any other unforseen error"""
+
+    headers = {}
+    if type(exception)==TJMCommandError:
+        # Add extra to HTTP error
+        attrs = ['system', 'user', 'command' ,'rc', 'stderr', 'stdout']
+        for a in attrs:
+            headers[a] = exception.__getattribute__(a)
+
+    # Raise 500 internal server error for unanticipated error
+    raise falcon.HTTPError(falcon.HTTP_500, "Server Error", str(exception),
+            headers)
 
 
 def _check_init(jm_id):
     """Check if Job Manager is initalized"""
     if jm_id not in JM.keys():
-        raise falcon.HTTPError(falcon.HTTP_404, "jm_error", f"TACCJM {jm_id} does not exist.")
+        raise falcon.HTTPError(falcon.HTTP_404,
+                "jm_error", f"TACCJM {jm_id} does not exist.")
 
 
 @hug.post('/init')
@@ -50,8 +94,9 @@ def init_jm(jm_id:str, system:str, user:str, psw:str, mfa:str):
                     working_dir=jm_id)
             logger.info(f"SUCCESS - TACCJM {jm_id} initialized successfully.")
 
-            ret = {'jm_id':jm_id, 'sys':JM[jm_id].system, 'user':JM[jm_id].user,
-                   'apps_dir':JM[jm_id].apps_dir, 'jobs_dir':JM[jm_id].jobs_dir}
+            ret = {'jm_id':jm_id, 'sys':JM[jm_id].system,
+                   'user':JM[jm_id].user, 'apps_dir':JM[jm_id].apps_dir,
+                   'jobs_dir':JM[jm_id].jobs_dir}
             return ret
         except ValueError as v:
             # Raise Not Found HTTP code for non TACC system
@@ -63,13 +108,13 @@ def init_jm(jm_id:str, system:str, user:str, psw:str, mfa:str):
             raise falcon.HTTPError(falcon.HTTP_401, "jm_error", msg)
     else:
         # Raise Conflict HTTP error
-        raise falcon.HTTPError(falcon.HTTP_409, "jm_error", f"TACCJM {jm_id} already exists.")
+        raise falcon.HTTPError(falcon.HTTP_409,
+                "jm_error", f"TACCJM {jm_id} already exists.")
 
 
 @hug.get('/list')
 def list_jm():
     """Show initialized job managers"""
-    # out = f"{'JM_ID'.rjust(10)|{'SYS'.rjust(20)}|{'USER'.rjust(10)}\n"
     out = []
     for jm in JM.keys():
         out.append({'jm_id':jm, 'sys':JM[jm].system, 'user':JM[jm].user,
@@ -107,17 +152,11 @@ def allocations(jm_id:str):
 
 
 @hug.get('/{jm_id}/files/list')
-def list_files(jm_id:str, path:str="~"):
+def list_files(jm_id:str, path:str="."):
     """List files on system"""
     _check_init(jm_id)
 
-    try:
-        files = JM[jm_id].list_files(path=path)
-    except TJMCommandError as e:
-        # Raise 404 not found error if can't list files at given path
-        raise falcon.HTTPError(falcon.HTTP_404, "files", str(e))
-
-    return files
+    return JM[jm_id].list_files(path=path)
 
 
 @hug.get('/{jm_id}/files/peak')
@@ -128,14 +167,7 @@ def peak_file(jm_id:str, path:str, head:int=-1, tail:int=-1):
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].peak_file(path, head=head, tail=tail)
-    except FileNotFoundError as f:
-        # Raise 404 not found error if local or remoate path don't exist
-        raise falcon.HTTPError(falcon.HTTP_404, "files", str(f))
-    except PermissionError as p:
-        # Raise 403 forbidden if dont have permissions to access either paath
-        raise falcon.HTTPError(falcon.HTTP_403, "files", str(p))
+    return JM[jm_id].peak_file(path, head=head, tail=tail)
 
 
 @hug.put('/{jm_id}/files/upload')
@@ -147,17 +179,7 @@ def upload(jm_id:str, local_path:str, remote_path:str, file_filter:str='*'):
     """
     _check_init(jm_id)
 
-    try:
-        JM[jm_id].upload(local_path, remote_path, file_filter=file_filter)
-    except FileNotFoundError as f:
-        # Raise 404 not found error if local or remoate path don't exist
-        raise falcon.HTTPError(falcon.HTTP_404, "files", str(f))
-    except PermissionError as p:
-        # Raise 403 forbidden if dont have permissions to access either paath
-        raise falcon.HTTPError(falcon.HTTP_403, "files", str(p))
-    except Exception as e:
-        # Unknown Error
-        raise falcon.HTTPError(falcon.HTTP_500, "files", str(e))
+    JM[jm_id].upload(local_path, remote_path, file_filter=file_filter)
 
 
 @hug.get('/{jm_id}/files/download')
@@ -169,17 +191,7 @@ def download(jm_id:str, remote_path:str, local_path:str, file_filter:str='*'):
     """
     _check_init(jm_id)
 
-    try:
-        JM[jm_id].download(remote_path, local_path, file_filter='*')
-    except FileNotFoundError as f:
-        # Raise 404 not found error if local or remoate path don't exist
-        raise falcon.HTTPError(falcon.HTTP_404, "files", str(f))
-    except PermissionError as p:
-        # Raise 403 forbidden if dont have permissions to access either paath
-        raise falcon.HTTPError(falcon.HTTP_403, "files", str(p))
-    except Exception as e:
-        # Unknown Error
-        raise falcon.HTTPError(falcon.HTTP_500, "files", str(e))
+    JM[jm_id].download(remote_path, local_path, file_filter=file_filter)
 
 
 @hug.delete('/{jm_id}/files/remove')
@@ -189,17 +201,7 @@ def remove(jm_id:str, remote_path:str):
     """
     _check_init(jm_id)
 
-    try:
-        JM[jm_id].remove(remote_path)
-    except FileNotFoundError as f:
-        # Raise 404 not found error remote_path to remove does not exist
-        raise falcon.HTTPError(falcon.HTTP_404, "files", str(f))
-    except PermissionError as p:
-        # Raise 403 forbidden if dont have permissions to access remote_path
-        raise falcon.HTTPError(falcon.HTTP_403, "files", str(p))
-    except Exception as e:
-        # Unknown Error
-        raise falcon.HTTPError(falcon.HTTP_500, "files", str(e))
+    JM[jm_id].remove(remote_path)
 
 
 @hug.put('/{jm_id}/files/restore')
@@ -209,14 +211,7 @@ def restore(jm_id:str, remote_path:str):
     """
     _check_init(jm_id)
 
-    try:
-        JM[jm_id].restore(remote_path)
-    except FileNotFoundError as f:
-        # Raise 404 not found error remote_path to remove does not exist
-        raise falcon.HTTPError(falcon.HTTP_404, "files", str(f))
-    except Exception as e:
-        # Unknown Error
-        raise falcon.HTTPError(falcon.HTTP_500, "files", str(e))
+    JM[jm_id].restore(remote_path)
 
 
 @hug.put('/{jm_id}/files/write')
@@ -227,20 +222,7 @@ def write(jm_id:str, data, remote_path:str):
     """
     _check_init(jm_id)
 
-    try:
-        JM[jm_id].send_data(data, remote_path)
-    except ValueError as v:
-        # Raise 400 Bad Request if invalid data type passed
-        raise falcon.HTTPError(falcon.HTTP_400, "files", str(v))
-    except FileNotFoundError as f:
-        # Raise 404 if remote_path does not exist
-        raise falcon.HTTPError(falcon.HTTP_404, "files", str(f))
-    except PermissionError as p:
-        # Raise 403 forbidden if dont have permissions to remote_path
-        raise falcon.HTTPError(falcon.HTTP_403, "files", str(p))
-    except Exception as e:
-        # Unknown Error
-        raise falcon.HTTPError(falcon.HTTP_500, "files", str(e))
+    JM[jm_id].write(data, remote_path)
 
 
 @hug.get('/{jm_id}/files/read')
@@ -252,20 +234,7 @@ def read(jm_id:str, remote_path:str, data_type:str='text'):
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].get_data(remote_path, data_type=data_type)
-    except ValueError as v:
-        # Raise bad request if data_type is not text or json
-        raise falcon.HTTPError(falcon.HTTP_400, "files", str(v))
-    except FileNotFoundError as f:
-        # Raise 404 not found error if local or remoate path don't exist
-        raise falcon.HTTPError(falcon.HTTP_404, "files", str(f))
-    except PermissionError as p:
-        # Raise 403 forbidden if dont have permissions to access either paath
-        raise falcon.HTTPError(falcon.HTTP_403, "files", str(p))
-    except Exception as e:
-        # Unknown Error
-        raise falcon.HTTPError(falcon.HTTP_500, "files", str(e))
+    return JM[jm_id].read(remote_path, data_type=data_type)
 
 
 @hug.get('/{jm_id}/apps/list')
@@ -288,14 +257,7 @@ def get_app(jm_id:str, app_id:str):
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].get_app(app_id)
-    except ValueError as v:
-        # Raise 404 not found error if couldn't find app
-        raise falcon.HTTPError(falcon.HTTP_404, "apps", str(v))
-    except Exception as e:
-        # Unknown Error
-        raise falcon.HTTPError(falcon.HTTP_500, "apps", str(e))
+    return JM[jm_id].get_app(app_id)
 
 
 @hug.post('/{jm_id}/apps/deploy')
@@ -308,18 +270,8 @@ def deploy_app(jm_id:str, app_config:dict, local_app_dir:str='.',
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].deploy_app(app_config=app_config,
-                local_app_dir=local_app_dir, overwrite=overwrite)
-    except FileNotFoundError as f:
-        # Raise 404 not found error if couldn't find app config files
-        raise falcon.HTTPError(falcon.HTTP_404, "apps", str(f))
-    except ValueError as v:
-        # Raise 400 Bad Request if app config is invalid
-        raise falcon.HTTPError(falcon.HTTP_400, "apps", str(v))
-    except Exception as e:
-        # Unknown Error
-        raise falcon.HTTPError(falcon.HTTP_500, "apps", str(e))
+    return JM[jm_id].deploy_app(app_config=app_config,
+            local_app_dir=local_app_dir, overwrite=overwrite)
 
 
 @hug.get('/{jm_id}/jobs/list')
@@ -339,14 +291,7 @@ def get_job(jm_id:str, job_id:str):
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].get_job(job_id)
-    except ValueError as v:
-        # Raise 404 not found error if couldn't find job
-        raise falcon.HTTPError(falcon.HTTP_404, "jobs", str(v))
-    except Exception as e:
-        # Unknown Error
-        raise falcon.HTTPError(falcon.HTTP_500, "jobs", str(e))
+    return JM[jm_id].get_job(job_id)
 
 
 @hug.post('/{jm_id}/jobs/deploy')
@@ -358,14 +303,7 @@ def deploy_job(jm_id:str, job_config:dict):
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].setup_job(job_config=job_config)
-    except ValueError as v:
-        # Raise 400 if bad job config
-        raise falcon.HTTPError(falcon.HTTP_400, "jobs", str(v))
-    except Exception as e:
-        # Raise Internal Server error if error staging job.
-        raise falcon.HTTPError(falcon.HTTP_500, "jobs", str(e))
+    return JM[jm_id].setup_job(job_config=job_config)
 
 
 @hug.put('/{jm_id}/jobs/{job_id}/submit')
@@ -377,14 +315,8 @@ def submit_job(jm_id:str, job_id:str):
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].submit_job(job_id)
-    except ValueError as v:
-        # Raise 400 if job can't be submitted because it dne or not setup
-        raise falcon.HTTPError(falcon.HTTP_400, "jobs", str(v))
-    except Exception as e:
-        # Raise Internal Server error if another error submitting job.
-        raise falcon.HTTPError(falcon.HTTP_500, "jobs", str(e))
+    return JM[jm_id].submit_job(job_id)
+
 
 @hug.put('/{jm_id}/jobs/{job_id}/cancel')
 def cancel_job(jm_id:str, job_id:str):
@@ -396,25 +328,29 @@ def cancel_job(jm_id:str, job_id:str):
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].cancel_job(job_id)
-    except ValueError as v:
-        # Raise 400 if job can't be cancelled because it dne or not running
-        raise falcon.HTTPError(falcon.HTTP_400, "jobs", str(v))
-    except Exception as e:
-        # Raise Internal Server error if another error cancelling job.
-        raise falcon.HTTPError(falcon.HTTP_500, "jobs", str(e))
+    return JM[jm_id].cancel_job(job_id)
 
 
 @hug.delete('/{jm_id}/jobs/{job_id}/remove')
-def cleanup_job(jm_id:str, job_id:str):
+def remove_job(jm_id:str, job_id:str):
     """Cleanup Job
 
     Removes job directory (Sends it to trash) on given TACC system.
 
     """
 
-    return JM[jm_id].cleanup_job(job_id)
+    return JM[jm_id].remove_job(job_id)
+
+
+@hug.post('/{jm_id}/jobs/{job_id}/restore')
+def restore_job(jm_id:str, job_id:str):
+    """Cleanup Job
+
+    Restores a job directory from the trash dir on given TACC system.
+
+    """
+
+    return JM[jm_id].restore_job(job_id)
 
 
 @hug.get('/{jm_id}/jobs/{job_id}/files/list')
@@ -426,11 +362,7 @@ def list_job_files(jm_id:str, job_id:str, path:str=''):
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].ls_job(job_id, path=path)
-    except TJMCommandError as e:
-        # Raise 404 not found error if can't list files at given path
-        raise falcon.HTTPError(falcon.HTTP_404, "jobs", str(e))
+    return JM[jm_id].ls_job(job_id, path=path)
 
 
 @hug.get('/{jm_id}/jobs/{job_id}/files/download')
@@ -442,18 +374,12 @@ def download_job_file(jm_id:str, job_id:str, path:str, dest_dir:str='.'):
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].download_job_data(job_id, path, dest_dir=dest_dir)
-    except FileNotFoundError as f:
-        # Raise 404 if path does not exist in job directory
-        raise falcon.HTTPError(falcon.HTTP_404, "jobs", str(f))
-    except Exception as e:
-        # Raise 500 if unable to download data
-        raise falcon.HTTPError(falcon.HTTP_500, "jobs", str(e))
+    return JM[jm_id].download_job_file(job_id, path, dest_dir=dest_dir)
 
 
 @hug.get('/{jm_id}/jobs/{job_id}/files/read')
-def read_job_file(jm_id:str, job_id:str, path:str, data_type:str='text'):
+def read_job_file(jm_id:str, job_id:str,
+        path:str, data_type:str='text') -> Union[str, dict]:
     """Read Job file
 
     Read a job text or json file and return contents directly.
@@ -461,19 +387,12 @@ def read_job_file(jm_id:str, job_id:str, path:str, data_type:str='text'):
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].get_job_data(job_id, path, data_type=data_type)
-    except FileNotFoundError as f:
-        # Raise 404 if path does not exist in job directory
-        raise falcon.HTTPError(falcon.HTTP_404, "jobs", str(f))
-    except Exception as e:
-        # Raise 500 if unable to read file
-        raise falcon.HTTPError(falcon.HTTP_500, "jobs", str(e))
+    return JM[jm_id].read_job_file(job_id, path, data_type=data_type)
 
 
 @hug.put('/{jm_id}/jobs/{job_id}/files/upload')
 def upload_job_file(jm_id:str, job_id:str, path:str, dest_dir:str='.',
-        file_filter:str='*'):
+        file_filter:str='*') -> None:
     """Upload Job File/Folder
 
     Uplaod a file/folder to a job's directory
@@ -481,19 +400,12 @@ def upload_job_file(jm_id:str, job_id:str, path:str, dest_dir:str='.',
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].upload_job_data(job_id, path, dest_dir=dest_dir,
+    JM[jm_id].upload_job_file(job_id, path, dest_dir=dest_dir,
                 file_filter=file_filter)
-    except FileNotFoundError as f:
-        # Raise 404 if path to upload does not exist
-        raise falcon.HTTPError(falcon.HTTP_404, "jobs", str(f))
-    except Exception as e:
-        # Raise 500 if unable to download data
-        raise falcon.HTTPError(falcon.HTTP_500, "jobs", str(e))
 
 
 @hug.put('/{jm_id}/jobs/{job_id}/files/write')
-def write_job_file(jm_id:str, job_id:str, data, path:str):
+def write_job_file(jm_id:str, job_id:str, data, path:str) -> None:
     """Write Job file
 
     Write text or json data to a file in a job directory directly.
@@ -501,76 +413,48 @@ def write_job_file(jm_id:str, job_id:str, data, path:str):
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].send_job_data(job_id, data, path)
-    except ValueError as v:
-        # Raise 400 if bad data type to write
-        raise falcon.HTTPError(falcon.HTTP_400, "jobs", str(v))
-    except FileNotFoundError as f:
-        # Raise 404 if path does not exist in job directory
-        raise falcon.HTTPError(falcon.HTTP_404, "jobs", str(f))
-    except Exception as e:
-        # Raise 500 if unable to read file
-        raise falcon.HTTPError(falcon.HTTP_500, "jobs", str(e))
+    return JM[jm_id].write_job_file(job_id, data, path)
 
 
 @hug.get('/{jm_id}/jobs/{job_id}/files/peak')
-def peak_job_file(jm_id:str, job_id:str, path:str, head:int=-1, tail:int=-1):
+def peak_job_file(jm_id:str,
+        job_id:str, path:str, head:int=-1, tail:int=-1) -> str:
     """Peak Job File
 
     Extract first or last lines of a file in job directory via head/tail command.
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].peak_job_file(job_id, path, head=head, tail=tail)
-    except FileNotFoundError as f:
-        # Raise 404 not found error if job file don't exist
-        raise falcon.HTTPError(falcon.HTTP_404, "jobs", str(f))
-    except Exception as e:
-        # Raise 500 if some other error with peaking at file
-        raise falcon.HTTPError(falcon.HTTP_500, "jobs", str(e))
+    return JM[jm_id].peak_job_file(job_id, path, head=head, tail=tail)
 
 
 @hug.get('/{jm_id}/scripts/list')
-def list_scripts(jm_id:str):
+def list_scripts(jm_id:str) -> List[str]:
     """List Scripts
 
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].list_scripts()
-    except Exception as e:
-        # Raise 500 if any error deploying script
-        raise falcon.HTTPError(falcon.HTTP_500, "scripts", str(e))
+    return JM[jm_id].list_scripts()
 
 
 @hug.post('/{jm_id}/scripts/deploy')
-def deploy_script(jm_id:str, script_name:str, local_file:str=None):
+def deploy_script(jm_id:str, script_name:str, local_file:str=None) -> None:
     """Deploy Script
 
     """
     _check_init(jm_id)
 
-    try:
-        JM[jm_id].deploy_script(script_name, local_file=local_file)
-    except Exception as e:
-        # Raise 500 if any error deploying script
-        raise falcon.HTTPError(falcon.HTTP_500, "scripts", str(e))
+    JM[jm_id].deploy_script(script_name, local_file=local_file)
 
 
 @hug.put('/{jm_id}/scripts/run')
-def run_script(jm_id:str, script_name:str, job_id:str=None, args:[str]=None):
+def run_script(jm_id:str, script_name:str,
+        job_id:str=None, args:[str]=None) -> str:
     """Run Script
 
     """
     _check_init(jm_id)
 
-    try:
-        return JM[jm_id].run_script(script_name, job_id=job_id, args=args)
-    except Exception as e:
-        # Raise 500 if any error running script
-        raise falcon.HTTPError(falcon.HTTP_500, "scripts", str(e))
-
+    return JM[jm_id].run_script(script_name, job_id=job_id, args=args)
 

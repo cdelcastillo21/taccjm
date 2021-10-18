@@ -36,7 +36,7 @@ desc = A test run of the template hpc application
 queue = development
 
 # Test input file from local system to send to job
-input = test_file.txt
+input = input.txt
 
 # Test job parameter to be passed to job run
 parameter = 1

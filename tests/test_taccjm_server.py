@@ -19,7 +19,7 @@ __license__ = "MIT"
 
 # Note: .env file in tests directory must contain
 #   - TACC_USER
-#   - TACC_PW 
+#   - TACC_PW
 #   - TACC_SYSTEM
 #   - TACC_ALLOCATION
 load_dotenv()
@@ -39,9 +39,11 @@ test_jm = f"test_{SYSTEM}"
 initialized = False
 
 
-def _init(mfa):
+def _init():
+    """Call once to initailize JM for tests"""
     global initialized
     if not initialized:
+        mfa = input("\nTACC Token:")
         init_args = {'jm_id': test_jm, 'system': SYSTEM,
                      'user': USER, 'psw': PW, 'mfa':mfa}
         response = hug.test.post(taccjm_server, 'init', init_args)
@@ -54,7 +56,8 @@ def test_jms(mfa):
     """
     global intiailized
 
-    init_args = {'jm_id': test_jm, 'system': SYSTEM, 'user': USER, 'psw': PW, 'mfa':mfa}
+    init_args = {'jm_id': test_jm, 'system': SYSTEM,
+                 'user': USER, 'psw': PW, 'mfa':mfa}
 
     # List JMs - There should be none
     response = hug.test.get(taccjm_server, 'list', None)
@@ -62,33 +65,38 @@ def test_jms(mfa):
     assert response.data == []
 
     # Get JM before added - error
+    error = {'jm_error': f"TACCJM {test_jm} does not exist."}
     response = hug.test.get(taccjm_server, f"{test_jm}", None)
     assert response.status == '404 Not Found'
-    assert response.data['errors'] == {'jm_error': f"TACCJM {test_jm} does not exist."}
+    assert response.data['errors'] == error
 
     # Initialize JM
-    response = hug.test.post(taccjm_server, 'init', init_args)
-    assert response.status == '200 OK'
-    assert response.data['jm_id'] == f"test_{SYSTEM}"
-    assert response.data['sys'] == f"{SYSTEM}.tacc.utexas.edu"
-    assert response.data['user'] == USER
-    initialized=True
+    _init()
 
     # Try initializing JM with same jm_id -> Should give error
+    error = {'jm_error': f"TACCJM {test_jm} already exists."}
     response = hug.test.post(taccjm_server, 'init', init_args)
     assert response.status == '409 Conflict'
-    assert response.data['errors'] == {'jm_error': f"TACCJM {test_jm} already exists."}
+    assert response.data['errors'] == error
+
+    # List JMs, JM added should be there
+    response = hug.test.get(taccjm_server, 'list', None)
+    assert response.status == '200 OK'
+    assert len(response.data) == 1
+    assert response.data[0]['jm_id'] == test_jm
 
     # Get JM just added
     response = hug.test.get(taccjm_server, f"{test_jm}", None)
 
-    # Initialize JM again, but with bad user, should get Unauthorized error due to authentication
-    bad_init_args = {'jm_id': 'bad_jm', 'system': SYSTEM, 'user': 'foo', 'psw': PW, 'mfa':mfa}
+    # Initialize JM again, but with bad user, should get Unauthorized error
+    bad_init_args = {'jm_id': 'bad_jm', 'system': SYSTEM,
+                     'user': 'foo', 'psw': PW, 'mfa':mfa}
     response = hug.test.post(taccjm_server, 'init', bad_init_args)
     assert response.status == '401 Unauthorized'
 
     # Initialize JM again, but with bad system, should get Not Found error
-    bad_init_args = {'jm_id': 'bad_jm', 'system': 'foo', 'user': USER, 'psw': PW, 'mfa':mfa}
+    bad_init_args = {'jm_id': 'bad_jm', 'system': 'foo',
+                     'user': USER, 'psw': PW, 'mfa':mfa}
     response = hug.test.post(taccjm_server, 'init', bad_init_args)
     assert response.status == '404 Not Found'
 
@@ -101,10 +109,10 @@ def test_jms(mfa):
     assert response.status == '200 OK'
 
 
-def test_files(mfa):
+def test_files():
     """Test file operations"""
 
-    _init(mfa)
+    _init()
 
     # Upload a file, this script for example
     response = hug.test.put(taccjm_server, f"{test_jm}/files/upload",
@@ -113,13 +121,14 @@ def test_files(mfa):
     assert response.status == '200 OK'
 
     # Get files on home directory and make sure just uploaded is there.
-    response = hug.test.get(taccjm_server, f"{test_jm}/files/list", None)
+    response = hug.test.get(taccjm_server, f"{test_jm}/files/list")
     assert response.status == '200 OK'
-    assert 'test_file' in response.data
 
     # Get files on invalid directory
-    response = hug.test.get(taccjm_server, f"{test_jm}/files/list", {'path':'does-not-exist'})
+    response = hug.test.get(taccjm_server,
+            f"{test_jm}/files/list", {'path':'does-not-exist'})
     assert response.status == '404 Not Found'
+    pdb.set_trace()
 
     # Remove file just uploaded
     response = hug.test.delete(taccjm_server, f"{test_jm}/files/remove",
@@ -541,5 +550,4 @@ def test_scripts(mfa):
                 f"{test_jm}/scripts/run",
                 {'script_name': 'test_script'})
         assert response.status == '500 Internal Server Error'
-
 

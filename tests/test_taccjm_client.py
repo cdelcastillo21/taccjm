@@ -20,7 +20,7 @@ __license__ = "MIT"
 
 # Note: .env file in tests directory must contain
 #   - TACC_USER
-#   - TACC_PW 
+#   - TACC_PW
 #   - TACC_SYSTEM
 #   - TACC_ALLOCATION
 load_dotenv()

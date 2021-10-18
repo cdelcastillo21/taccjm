@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 class TACCJobManager():
     """
-    Class defining an ssh connection to a remote system .
+    Class defining an ssh connection to a TACC system .
 
     Attributes
     ----------
@@ -87,7 +87,7 @@ class TACCJobManager():
 
     Notes
     -----
-    All remote paths passed to method should be using Unix path seperateor '/'.
+    All remote paths should use Unix path seperateor '/'.
 
     """
 
@@ -156,6 +156,9 @@ class TACCJobManager():
                       ['jobs', 'apps', 'scripts', 'trash']):
             setattr(self, d[0], posixpath.join(taccjm_dir,d[1]))
             self._mkdir(getattr(self, d[0]), parents=True)
+
+        # Get python path
+        self.python_path = self._execute_command('which python')
 
 
     def _execute_command(self, cmnd) -> None:
@@ -330,10 +333,10 @@ class TACCJobManager():
             If slurm queue is not accessible for some reason (TACCC error).
         """
         # Build command string
-        cmnd = 'showq '
+        cmnd = 'showq'
         slurm_user = self.user if user is None else user
         if slurm_user!='all':
-            cmnd += f"-U {user}"
+            cmnd += f" -U {slurm_user}"
 
         # Query job queue
         try:
@@ -471,13 +474,13 @@ class TACCJobManager():
             # Return list of dictionaries with file info
             return f_info
         except FileNotFoundError as f:
-            msg = f"list_files - No such file or folder {f.filename}."
+            msg = f"list_files - No such file or folder"
             logger.error(msg)
-            raise FileNotFoundError(errno.ENOENT, msg, f.filename)
+            raise FileNotFoundError(errno.ENOENT, msg, path)
         except PermissionError as p:
-            msg = f"list_files - Permission denied on {p.filename}"
+            msg = f"list_files - Permission denied"
             logger.error(msg)
-            raise PermissionError(errno.EACCES, msg, p.filename)
+            raise PermissionError(errno.EACCES, msg, path)
         except Exception as e:
             msg = f"list_files - Unknown error trying to access {path}: {e}"
             logger.error(msg)
@@ -779,8 +782,21 @@ class TACCJobManager():
         file_name = remote_path.replace('/','___')
         trash_path = f"{self.trash_dir}/{file_name}"
         abs_path = '~/' + remote_path if remote_path[0]!='/' else remote_path
+        abs_path = posixpath.normpath(abs_path)
 
-        cmnd = f"rsync -a {abs_path} {trash_path}; rm -rf {abs_path}"
+        # Check if path is a file or directory
+        is_dir = False
+        try:
+            with self._client.open_sftp() as sftp:
+                fileattr = sftp.stat(abs_path)
+                is_dir = stat.S_ISDIR(fileattr.st_mode)
+        except FileNotFoundError as f:
+            msg = f"remove - No such file/folder {f.filename}"
+            logger.error(msg)
+            raise FileNotFoundError(errno.ENOENT, msg, f.filename)
+
+        src_path  = abs_path if not is_dir else abs_path + '/'
+        cmnd = f"rsync -a {src_path} {trash_path} && rm -rf {abs_path}"
         try:
             ret = self._execute_command(cmnd)
         except TJMCommandError as tjm_error:
@@ -807,16 +823,29 @@ class TACCJobManager():
         Raises
         ------
         FileNotFoundError
-            If the `remote_path` to restore does not exist in trash directory
-            anymore, or loacation where remote_path needs to be restored to
-            does not exist anymore.
+            If the file to be restored does not exist in trash directory.
+        TJMCommandError
+            If error moving data from trash to its original path. This could
+            be becasue the original path still has data in it/exists.
         """
         # Unix paths -> Get file remote file name and directory
         file_name = remote_path.replace('/','___')
-        trash_path = f"{self.trash_dir}/{file_name}"
+        trash_path = posixpath.join(self.trash_dir, file_name)
         abs_path = '~/' + remote_path if remote_path[0]!='/' else remote_path
 
-        cmnd = f"mv {trash_path} {abs_path}"
+        # Check if trash path is a file or directory
+        is_dir = False
+        try:
+            with self._client.open_sftp() as sftp:
+                fileattr = sftp.stat(trash_path)
+                is_dir = stat.S_ISDIR(fileattr.st_mode)
+        except FileNotFoundError as f:
+            msg = f"restore - file/folder {file_name} not in trash."
+            logger.error(msg)
+            raise FileNotFoundError(errno.ENOENT, msg, f.filename)
+
+        src_path = f"{trash_path}/" if is_dir else trash_path
+        cmnd = f"rsync -a {src_path} {abs_path} && rm -rf {trash_path}"
         try:
             ret = self._execute_command(cmnd)
         except TJMCommandError as tjm_error:
@@ -1315,10 +1344,10 @@ class TACCJobManager():
         cmnd = f"cd {job_config['job_dir']}; "
         cmnd += f"sbatch {job_config['job_dir']}/submit_script.sh"
         ret = self._execute_command(cmnd)
-        slurm_ret = ret.split('\n')[-2]
-        if 'error' in slurm_ret or 'FAILED' in slurm_ret:
-            raise Exception(f"Failed to submit job. SLURM error: {slurm_ret}")
-        job_config['slurm_id'] = slurm_ret.split(' ')[-1]
+        if '\nFAILED\n' in ret:
+            raise TJMCommandError(self.system, self.user, cmnd, 0, '', ret,
+                                  f"submit_job - SLURM error")
+        job_config['slurm_id'] = ret.split('\n')[-2].split(' ')[-1]
 
         # Save job config
         job_config_path = job_config['job_dir'] + '/job.json'
@@ -1435,7 +1464,7 @@ class TACCJobManager():
             raise ValueError(msg)
 
         # Return restored job config
-        job_config = get_job(job_id)
+        job_config = self.get_job(job_id)
 
         return job_config
 
@@ -1503,14 +1532,6 @@ class TACCJobManager():
         fname = '/'.join(path.split('/')[-1:])
         job_folder = '/'.join(path.split('/')[:-1])
 
-        # Make sure job file/folder exists
-        files = self.ls_job(job_id, path=job_folder)
-        if fname not in files:
-            msg = f"Unable to find job file {path} for job {job_id}."
-            logger.error(msg)
-            raise FileNotFoundError(errno.ENOENT,
-                    os.strerror(errno.ENOENT), path)
-
         # Make local data directory if it doesn't exist already
         local_data_dir = os.path.join(dest_dir, job_id)
         os.makedirs(local_data_dir, exist_ok=True)
@@ -1561,14 +1582,6 @@ class TACCJobManager():
         fname = '/'.join(path.split('/')[-1:])
         job_folder = '/'.join(path.split('/')[:-1])
 
-        # Make sure job file/folder exists
-        files = self.ls_job(job_id, path=job_folder)
-        if fname not in files:
-            msg = f"Unable to find job file {path} for job {job_id}."
-            logger.error(msg)
-            raise FileNotFoundError(errno.ENOENT,
-                    os.strerror(errno.ENOENT), path)
-
         # Get data
         src_path = '/'.join([self.jobs_dir, job_id, path])
         try:
@@ -1577,6 +1590,7 @@ class TACCJobManager():
             msg = f"read_job_file - Unable read {data_type} from {src_path}."
             logger.error(msg)
             raise e
+
         return data
 
 
@@ -1627,7 +1641,7 @@ class TACCJobManager():
         except Exception as e:
             msg = f"upload_job_file - Unable to upload {path} to {dest_path}."
             logger.error(msg)
-            raise Exception(msg)
+            raise e
         return dest_path
 
 
@@ -1675,7 +1689,7 @@ class TACCJobManager():
         except Exception as e:
             msg = f"write_job_file - Unable to write file {path}."
             logger.error(msg)
-            raise Exception(msg)
+            raise e
 
 
     def peak_job_file(self, job_id:str,
@@ -1707,7 +1721,12 @@ class TACCJobManager():
         # Load job config
         path = '/'.join([self.jobs_dir, job_id, path])
 
-        return self.peak_file(path, head=head, tail=tail)
+        try:
+            return self.peak_file(path, head=head, tail=tail)
+        except Exception as e:
+            msg = f"peak_job_file - Unable to peak at file {path}."
+            logger.error(msg)
+            raise e
 
 
     def deploy_script(self, script_name:str, local_file:str=None) -> None:
@@ -1733,26 +1752,19 @@ class TACCJobManager():
             raise ValueError(f"Could not find script file - {local_fname}!")
 
         # Extract basename in case the script_name is a path
-        script_name = script_name.split("/")[-1]
-        if "." in script_name:
-            # Get the extension, and be robust to mulitple periods in filename
-            parts = script_name.split(".")
-            script_name, ext = ".".join(parts[:-1]), parts[-1]
+        script_name, ext = os.path.splitext(os.path.basename(script_name))
+        remote_path = posixpath.join(self.scripts_dir, script_name)
 
-        remote_path = self.scripts_dir+"/"+script_name
-        if ext == "py":
-            # assume Python3
-            python_path = self._execute_command(
-                    "module load python3 > /dev/null; which python3")
+        # If python file, add directive to python3 path on TACC system
+        if ext == ".py":
+            script = "#!" + self.python_path + "\n"
             with open(local_fname, 'r') as fp:
-                script = fp.read()
-
-            with self._client.open_sftp() as sftp:
-                with sftp.open(remote_path, "w") as fp:
-                    fp.write("#!" + python_path + "\n" + script)
+                script += fp.read()
+            self.write(script, remote_path)
         else:
             self.upload(local_fname, remote_path)
 
+        # Make remote script executable
         self._execute_command(f"chmod +x {remote_path}")
 
 
@@ -1783,6 +1795,7 @@ class TACCJobManager():
         run_cmd = f"{self.scripts_dir}/{script_name} {' '.join(args)}"
         return self._execute_command(run_cmd)
 
+
     def list_scripts(self) -> List[str]:
         """
         List scripts deployed in this TACCJobManager Instance
@@ -1796,5 +1809,5 @@ class TACCJobManager():
             List of scripts in TACC Job Manager's scripts directory.
         """
         sc = [f['filename'] for f in self.list_files(path=self.scripts_dir)]
-        sc = [s for s in scripts if not s.startswith('.')]
         return sc
+

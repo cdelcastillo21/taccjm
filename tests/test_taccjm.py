@@ -5,6 +5,7 @@ Tests for TACC JobManager Class
 """
 import os
 import pdb
+import time
 import pytest
 import posixpath
 from dotenv import load_dotenv
@@ -20,6 +21,10 @@ __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
 # Note: .env file in tests directory must contain bellow params to run tests:
+#   - TACC_USER
+#   - TACC_PW
+#   - TACC_SYSTEM
+#   - TACC_ALLOCATION
 load_dotenv()
 
 global SYSTEM, USER, PW, SYSTEM, ALLOCATION
@@ -357,16 +362,20 @@ def test_remove():
     trash_files = JM.list_files(JM.trash_dir)
     assert trash_name in [f['filename'] for f in trash_files]
 
-    # Mock error removing or back-ing up file in trash dir
+    # Remove non-existant file
+    with pytest.raises(FileNotFoundError) as t:
+        JM.remove('does-not-exist')
+
+    # Upload and mock error back-ing up file in trash dir
+    JM.upload(test_folder, dest_path)
     with patch.object(TACCJobManager, '_execute_command',
             side_effect=TJMCommandError(SYSTEM, USER, 'rsync ...', 1,
                             'mock rsync error', '', 'mock error')):
         with pytest.raises(TJMCommandError) as t:
             JM.remove(dest_path)
 
-    # Upload and delete file again (even though file exists already in trash)
+    # Delete file again (even though file exists already in trash)
     # Should be ok with this.
-    JM.upload(test_folder, dest_path)
     JM.remove(dest_path)
 
     # Empty trash dir and clean local files to conclude tests
@@ -396,20 +405,24 @@ def test_restore():
     assert test_fname in [f['filename'] for f in remote_dir_files]
     assert trash_name not in [f['filename'] for f in trash_files]
 
-    # Now do the same for the whole directory
-    trash_name = dest_path.replace('/','___')
-    JM.remove(dest_path)
-    JM.restore(dest_path)
-    trash_files = JM.list_files(JM.trash_dir)
-    assert test_fname in [f['filename'] for f in remote_dir_files]
-    assert trash_name not in [f['filename'] for f in trash_files]
+    # Restore non-existant file
+    with pytest.raises(FileNotFoundError) as t:
+        JM.restore('does-not-exist')
 
-    # Mock error error restoring file
+    # Mock command error error restoring file. First remove folder again.
+    JM.remove(dest_path)
     with patch.object(TACCJobManager, '_execute_command',
             side_effect=TJMCommandError(SYSTEM, USER, 'mv ...', 1,
                             'mock mv error', '', 'mock error')):
         with pytest.raises(TJMCommandError) as t:
-            JM.restore(remote_fname)
+            JM.restore(dest_path)
+
+    # Now test restoring whole directory
+    JM.restore(dest_path)
+    trash_name = dest_path.replace('/','___')
+    trash_files = JM.list_files(JM.trash_dir)
+    assert test_fname in [f['filename'] for f in remote_dir_files]
+    assert trash_name not in [f['filename'] for f in trash_files]
 
     # Empty trash dir and clean local files to conclude tests
     JM.empty_trash()
@@ -665,8 +678,8 @@ def test_setup_job():
     os.system(f"rm -rf {test_app}")
 
 
-def test_run_jobs():
-    """Test submitting and canceling jobs"""
+def test_run_job():
+    """Test submitting, canceling, and removing/restoring jobs"""
 
     # Name of test app directory locally
     test_app = '.test-app'
@@ -685,44 +698,193 @@ def test_run_jobs():
     app = JM.deploy_app(local_app_dir=test_app)
 
     # Now create test input file and send with job and stage job
-    os.system(f"echo hello world > {job1['inputs']['input1']}")
+    os.system(f"echo hello world > {job_config['inputs']['input1']}")
     job = JM.setup_job(local_job_dir=test_app, stage=True,
             email='test@test.com', allocation=ALLOCATION)
 
+    # Error - submit job but mock slurm queue error (FAILED on last line)
+    with patch.object(TACCJobManager, '_execute_command',
+            return_value='\nFAILED\n'):
+        with pytest.raises(TJMCommandError):
+            _ = JM.submit_job(job['job_id'])
+
     # Now submit job
-    job = JM.submit_job(job4['job_id'])
-    assert 'slurm_id' in job4.keys()
+    job = JM.submit_job(job['job_id'])
+    assert 'slurm_id' in job.keys()
+    time.sleep(1)
     assert job['slurm_id'] in [j['job_id'] for j in JM.showq()]
 
     # Error - Try submitting again
     with pytest.raises(ValueError):
         _ = JM.submit_job(job['job_id'])
 
-    # Error - Cancel job, mock slurm queue error
+    # Error - Cancel job while running, but mock slurm error
     with patch.object(TACCJobManager, '_execute_command',
-            side_effect=TJMCommandError(SYSTEM, USER,
-                'scancel ...', 1, 'mock scancel error', '', 'mock error')):
+            side_effect=TJMCommandError(SYSTEM, USER, 'scancel', 1,
+                            'mock scancel error', '', 'mock scancel error')):
         with pytest.raises(TJMCommandError):
             _ = JM.cancel_job(job['job_id'])
 
-    # Cancel job
+    # Now cancel job for real
+    old_id = job['slurm_id']
     job = JM.cancel_job(job['job_id'])
     assert 'slurm_id' not in job.keys()
     assert 'slurm_hist' in job.keys()
+    assert old_id in job['slurm_hist']
 
-    # Error - Try to cancel job again
+    # Try to cancel job again, will fail
     with pytest.raises(ValueError):
-        _ = JM.cancel_job(job4['job_id'])
+        _ = JM.cancel_job(job['job_id'])
 
-    # Error - submit job but mock slurm queue error
-    with patch.object(TACCJobManager, '_execute_command', returns='FAILED'):
-        with pytest.raises(TJMCommandError):
-            _ = JM.submit_job(job['job_id'])
+    # Submit job again, wait and then remove and restore job
+    job = JM.submit_job(job['job_id'])
+    slurm_id = job['slurm_id']
+    time.sleep(1)
+    rem_id = JM.remove_job(job['job_id'])
+    assert [rem_id not in JM.get_jobs()]
+    restored = JM.restore_job(rem_id)
+    assert [restored['job_id'] in JM.get_jobs()]
+    assert slurm_id in restored['slurm_hist']
+
+    # Now try to remove a non-existant job, will not throw any error
+    _ = JM.remove_job('foo')
+
+    # Try to restore invalid job, will throw error
+    with pytest.raises(ValueError):
+        _ = JM.restore_job('foo')
 
     # cleanup
     JM._execute_command(f"rm -rf {JM.apps_dir}/*")
     JM._execute_command(f"rm -rf {JM.jobs_dir}/*")
     os.system(f"rm -rf {test_app}")
+
+def test_job_files():
+    """Test job file operations"""
+
+    # Set up test files
+    test_fname, test_file, test_folder = _setup_local_test_files()
+
+    # Name of test app directory locally
+    test_app = '.test-app'
+
+    # Remove all apps and jobs  in apps/jobs dir remotely
+    JM._execute_command(f"rm -rf {JM.apps_dir}/*")
+    JM._execute_command(f"rm -rf {JM.jobs_dir}/*")
+
+    # Remove app locally if exists
+    os.system(f"rm -rf {test_app}")
+
+    # Create template app locally
+    app_config, job_config = create_template_app(test_app)
+
+    # Deploy app from files
+    app = JM.deploy_app(local_app_dir=test_app)
+
+    # Now create test input file and send with job and stage job
+    os.system(f"echo hello world > {job_config['inputs']['input1']}")
+    job = JM.setup_job(local_job_dir=test_app, stage=True,
+            email='test@test.com', allocation=ALLOCATION)
+
+    # List job files - Run script, input file, and submit script should exist
+    files = [f['filename'] for f in JM.ls_job(job['job_id'])]
+    input_file = os.path.basename(job['inputs']['input1'])
+    job_files = ['run.sh', 'submit_script.sh', input_file]
+    assert all([j in files for j in job_files])
+
+    # Peak at submit script
+    submit_script = JM.peak_job_file(job['job_id'], 'submit_script.sh', head=1)
+    assert submit_script=='#!/bin/bash\n'
+
+    # Error - peak at non-existant file
+    with pytest.raises(FileNotFoundError):
+        JM.peak_job_file(job['job_id'], 'foo', head=1)
+
+    # Upload test folder to job directory
+    folder_name = os.path.basename(test_folder)
+    JM.upload_job_file(job['job_id'], test_folder)
+    assert folder_name in [f['filename'] for f in JM.ls_job(job['job_id'])]
+    folder_contents = JM.ls_job(job['job_id'], path=folder_name)
+    assert test_fname in [f['filename'] for f in folder_contents]
+
+    # Now download job folder we just uploaded
+    download_path = JM.download_job_file(job['job_id'], folder_name,
+            dest_dir=test_folder)
+    assert job['job_id'] in os.listdir(test_folder)
+    assert folder_name in os.listdir(os.path.join(test_folder, job['job_id']))
+
+    # Error - Upload non-existant folder
+    with pytest.raises(FileNotFoundError):
+        JM.upload_job_file(job['job_id'], 'does-not-exist')
+
+    # Error - download non-existant folder
+    with pytest.raises(FileNotFoundError):
+        _ = JM.download_job_file(job['job_id'], 'foo', dest_dir=test_folder)
+
+    # Write file to job directory
+    JM.write_job_file(job['job_id'], 'hello there\n', 'hi.txt')
+    assert 'hi.txt' in [f['filename'] for f in JM.ls_job(job['job_id'])]
+    text = JM.read_job_file(job['job_id'], 'hi.txt')
+    assert text=='hello there\n'
+
+    # Overwrite file
+    JM.write_job_file(job['job_id'], 'hello again\n', 'hi.txt')
+    text = JM.read_job_file(job['job_id'], 'hi.txt')
+    assert text=='hello again\n'
+
+    # Error - Write bad data to job directory
+    with pytest.raises(ValueError):
+        JM.write_job_file(job['job_id'], ['hello there\n'], 'hi.txt')
+
+    # Error - Read bad data to job directory
+    with pytest.raises(ValueError):
+        JM.read_job_file(job['job_id'], 'hi.txt', data_type='bad')
+
+    # Cleanup
+    JM._execute_command(f"rm -rf {JM.apps_dir}/*")
+    JM._execute_command(f"rm -rf {JM.jobs_dir}/*")
+    os.system(f"rm -rf {test_app}")
+    _cleanup_local_test_files()
+
+
+def test_scripts():
+    """Test deploying and running scripts."""
+
+    # Create test bash and python scripts
+    test_fname, test_file, test_folder = _setup_local_test_files()
+    JM._execute_command(f"rm -rf {JM.scripts_dir}/*")
+
+    py_script = os.path.join(test_folder, 'test-py.py')
+    shell_script = os.path.join(test_folder, 'test-bash')
+    with open(py_script, 'w') as f:
+        f.write('import os\nprint("hello world")\n')
+    with open(shell_script, 'w') as f:
+        f.write('#!/bin/bash\necho $1\n')
+
+    # Remove any existing scripts
+    JM._execute_command(f"rm -rf {JM.scripts_dir}/*")
+
+    # Upload both scripts
+    JM.deploy_script(py_script)
+    JM.deploy_script(shell_script)
+
+    # Check scripts exist now
+    scripts = JM.list_scripts()
+    assert 'test-py' in scripts
+    assert 'test-bash' in scripts
+
+    # Run both scripts and get outputs
+    out_1 = JM.run_script('test-py')
+    out_2 = JM.run_script('test-bash', args=['foo'])
+    assert out_1=='hello world\n'
+    assert out_2=='foo\n'
+
+    # Value error - Deploy non existant script
+    with pytest.raises(ValueError):
+        JM.deploy_script('does-not-exist')
+
+    # Cleanup
+    JM._execute_command(f"rm -rf {JM.scripts_dir}/*")
+    _cleanup_local_test_files()
 
 
 # def test_main(capsys):
