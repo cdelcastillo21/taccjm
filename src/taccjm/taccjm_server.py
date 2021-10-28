@@ -11,7 +11,7 @@ import os
 import hug
 import falcon
 import logging
-from tpying import Union, List, Tuple
+from typing import Union, List, Tuple
 from taccjm.TACCJobManager import TACCJobManager, TJMCommandError
 
 __author__ = "Carlos del-Castillo-Negrete"
@@ -53,25 +53,16 @@ def handle_custom_exceptions(exception):
 
 @hug.exception(TJMCommandError)
 def handle_custom_exceptions(exception):
-    """Handling any other unforseen error"""
-
-    # Raise 500 internal server error for unanticipated error
-    raise falcon.HTTPError(falcon.HTTP_403, "Forbidden", str(exception))
-
-
-@hug.exception(Exception)
-def handle_custom_exceptions(exception):
-    """Handling any other unforseen error"""
+    """Handling other command errors"""
 
     headers = {}
-    if type(exception)==TJMCommandError:
-        # Add extra to HTTP error
-        attrs = ['system', 'user', 'command' ,'rc', 'stderr', 'stdout']
-        for a in attrs:
-            headers[a] = exception.__getattribute__(a)
+    # Add extra to HTTP error
+    attrs = ['system', 'user', 'command' ,'rc', 'stderr', 'stdout']
+    for a in attrs:
+        headers[a] = exception.__getattribute__(a)
 
     # Raise 500 internal server error for unanticipated error
-    raise falcon.HTTPError(falcon.HTTP_500, "Server Error", str(exception),
+    raise falcon.HTTPError(falcon.HTTP_500, "Command error", str(exception),
             headers)
 
 
@@ -94,9 +85,13 @@ def init_jm(jm_id:str, system:str, user:str, psw:str, mfa:str):
                     working_dir=jm_id)
             logger.info(f"SUCCESS - TACCJM {jm_id} initialized successfully.")
 
-            ret = {'jm_id':jm_id, 'sys':JM[jm_id].system,
-                   'user':JM[jm_id].user, 'apps_dir':JM[jm_id].apps_dir,
-                   'jobs_dir':JM[jm_id].jobs_dir}
+            ret = {'jm_id':jm_id,
+                    'sys':JM[jm_id].system,
+                   'user':JM[jm_id].user,
+                   'apps_dir':JM[jm_id].apps_dir,
+                   'jobs_dir':JM[jm_id].jobs_dir,
+                   'scripts_dir':JM[jm_id].scripts_dir,
+                   'trash_dir':JM[jm_id].trash_dir}
             return ret
         except ValueError as v:
             # Raise Not Found HTTP code for non TACC system
@@ -129,7 +124,8 @@ def get_jm(jm_id:str):
     _check_init(jm_id)
 
     jm = {'jm_id':jm_id, 'sys':JM[jm_id].system, 'user':JM[jm_id].user,
-          'apps_dir':JM[jm_id].apps_dir, 'jobs_dir':JM[jm_id].jobs_dir}
+          'apps_dir':JM[jm_id].apps_dir, 'jobs_dir':JM[jm_id].jobs_dir,
+          'trash_dir':JM[jm_id].trash_dir, 'scripts_dir':JM[jm_id].scripts_dir}
     return jm
 
 
@@ -261,8 +257,13 @@ def get_app(jm_id:str, app_id:str):
 
 
 @hug.post('/{jm_id}/apps/deploy')
-def deploy_app(jm_id:str, app_config:dict, local_app_dir:str='.',
-        overwrite:bool=False):
+def deploy_app(jm_id:str,
+               app_config:str=None,
+               local_app_dir:str='.',
+               app_config_file:str="app.json",
+               proj_config_file:str="project.ini",
+               overwrite:bool=False,
+               **kwargs) -> dict:
     """Deploy App
 
     Deploy an application from local directory to TACC system
@@ -271,7 +272,11 @@ def deploy_app(jm_id:str, app_config:dict, local_app_dir:str='.',
     _check_init(jm_id)
 
     return JM[jm_id].deploy_app(app_config=app_config,
-            local_app_dir=local_app_dir, overwrite=overwrite)
+            local_app_dir=local_app_dir,
+            app_config_file=app_config_file,
+            proj_config_file=proj_config_file,
+            overwrite=overwrite,
+            **kwargs)
 
 
 @hug.get('/{jm_id}/jobs/list')
@@ -295,15 +300,22 @@ def get_job(jm_id:str, job_id:str):
 
 
 @hug.post('/{jm_id}/jobs/deploy')
-def deploy_job(jm_id:str, job_config:dict):
-    """Deploy Job
-
-    Deploy a job to TACC system.
-
-    """
+def deploy_job(jm_id:str,
+               job_config:dict=None,
+               local_job_dir:str='.',
+               job_config_file:str='job.json',
+               proj_config_file:str='project.ini',
+               stage:bool=True,
+               **kwargs):
+    """ Deploy a job to TACC system. """
     _check_init(jm_id)
 
-    return JM[jm_id].setup_job(job_config=job_config)
+    return JM[jm_id].deploy_job(job_config=job_config,
+                                local_job_dir=local_job_dir,
+                                job_config_file=job_config_file,
+                                proj_config_file=proj_config_file,
+                                stage=stage,
+                                **kwargs)
 
 
 @hug.put('/{jm_id}/jobs/{job_id}/submit')
@@ -378,8 +390,7 @@ def download_job_file(jm_id:str, job_id:str, path:str, dest_dir:str='.'):
 
 
 @hug.get('/{jm_id}/jobs/{job_id}/files/read')
-def read_job_file(jm_id:str, job_id:str,
-        path:str, data_type:str='text') -> Union[str, dict]:
+def read_job_file(jm_id:str, job_id:str, path:str, data_type:str='text'):
     """Read Job file
 
     Read a job text or json file and return contents directly.
@@ -391,8 +402,8 @@ def read_job_file(jm_id:str, job_id:str,
 
 
 @hug.put('/{jm_id}/jobs/{job_id}/files/upload')
-def upload_job_file(jm_id:str, job_id:str, path:str, dest_dir:str='.',
-        file_filter:str='*') -> None:
+def upload_job_file(jm_id:str, job_id:str,
+        path:str, dest_dir:str='.', file_filter:str='*'):
     """Upload Job File/Folder
 
     Uplaod a file/folder to a job's directory
@@ -405,7 +416,7 @@ def upload_job_file(jm_id:str, job_id:str, path:str, dest_dir:str='.',
 
 
 @hug.put('/{jm_id}/jobs/{job_id}/files/write')
-def write_job_file(jm_id:str, job_id:str, data, path:str) -> None:
+def write_job_file(jm_id:str, job_id:str, data, path:str):
     """Write Job file
 
     Write text or json data to a file in a job directory directly.
@@ -418,7 +429,7 @@ def write_job_file(jm_id:str, job_id:str, data, path:str) -> None:
 
 @hug.get('/{jm_id}/jobs/{job_id}/files/peak')
 def peak_job_file(jm_id:str,
-        job_id:str, path:str, head:int=-1, tail:int=-1) -> str:
+        job_id:str, path:str, head:int=-1, tail:int=-1):
     """Peak Job File
 
     Extract first or last lines of a file in job directory via head/tail command.
@@ -429,7 +440,7 @@ def peak_job_file(jm_id:str,
 
 
 @hug.get('/{jm_id}/scripts/list')
-def list_scripts(jm_id:str) -> List[str]:
+def list_scripts(jm_id:str):
     """List Scripts
 
     """
@@ -439,7 +450,7 @@ def list_scripts(jm_id:str) -> List[str]:
 
 
 @hug.post('/{jm_id}/scripts/deploy')
-def deploy_script(jm_id:str, script_name:str, local_file:str=None) -> None:
+def deploy_script(jm_id:str, script_name:str, local_file:str=None):
     """Deploy Script
 
     """
@@ -450,7 +461,7 @@ def deploy_script(jm_id:str, script_name:str, local_file:str=None) -> None:
 
 @hug.put('/{jm_id}/scripts/run')
 def run_script(jm_id:str, script_name:str,
-        job_id:str=None, args:[str]=None) -> str:
+        job_id:str=None, args:[str]=[]):
     """Run Script
 
     """
@@ -458,3 +469,10 @@ def run_script(jm_id:str, script_name:str,
 
     return JM[jm_id].run_script(script_name, job_id=job_id, args=args)
 
+
+@hug.delete('/{jm_id}/trash/empty')
+def empty_trash(jm_id:str, filter_str:str='*'):
+    """ Empty trash directory """
+    _check_init(jm_id)
+
+    return JM[jm_id].empty_trash(filter_str=filter_str)

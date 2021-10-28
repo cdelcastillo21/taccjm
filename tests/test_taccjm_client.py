@@ -5,14 +5,17 @@ Tests for taccjm_client
 """
 import os
 import pdb
+import stat
 import psutil
 import pytest
+import posixpath
 from dotenv import load_dotenv
 from unittest.mock import patch
 
 from taccjm import taccjm_client as tc
 from taccjm.taccjm_client import TACCJMError
 from taccjm.utils import *
+from taccjm.constants import *
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -37,39 +40,27 @@ ALLOCATION = os.environ.get("TACCJM_ALLOCATION")
 TEST_TACCJM_PORT = 8661
 TEST_JM_ID = 'test-taccjm'
 
-# TEST JM as configured
-TEST_JM = {'jm_id': 'test-taccjm',
-           'sys': 'stampede2.tacc.utexas.edu',
-           'user': 'clos21',
-           'apps_dir': '/scratch/06307/clos21/test-taccjm/apps',
-           'jobs_dir': '/scratch/06307/clos21/test-taccjm/jobs'}
-TEST_QUEUE = [{'job_id': '1111111', 'job_name': 'test-1',
-              'username': 'clos21', 'state': 'Running',
-              'nodes': '11', 'remaining': '11', 'start_time': '19:24:57'},
-              {'job_id': '2222222', 'job_name': 'test-2', 'username': 'clos21',
-               'state': 'Waiting', 'nodes': '16',
-               'remaining': '16', 'start_time': '6:00:00'}]
-TEST_ALLOCATIONS = [{'name': 'alloc-1',
-                     'service_units': 1000,
-                     'exp_date': '2022-12-31'},
-                    {'name': 'alloc-2',
-                     'service_units': 2222,
-                     'exp_date': '2022-03-31'}]
+# TEST JM  to use throughout tests
+TEST_JM = None
 
 
-def _init():
+def _init_client():
     """
     Initializes TEST_JM on server. Note if server not found, not server will
     be started if not found.
 
     """
 
-    # Set port to test port
-    tc.set_host(port=TEST_TACCJM_PORT)
-
     global TEST_JM
     if TEST_JM is None:
-        mfa = input('TACC Token:')
+        # Set port to test port
+        tc.set_host(port=TEST_TACCJM_PORT)
+
+        # Kill test server
+        tc.find_tjm_processes(kill=True)
+
+        # Get input to initialize
+        mfa = input('\nTACC Token:')
         TEST_JM = tc.init_jm(TEST_JM_ID, SYSTEM, USER, PW, mfa)
 
 
@@ -119,6 +110,7 @@ def test_find_tjm_process():
     tc.set_host(host='localhost', port=TEST_TACCJM_PORT)
     assert tc.TACCJM_PORT == TEST_TACCJM_PORT
 
+
 def test_api_call():
     """
     Tests api_call method
@@ -147,291 +139,411 @@ def test_api_call():
     assert tc.TACCJM_PORT == TEST_TACCJM_PORT
 
 
-@patch('taccjm.taccjm_client.api_call')
-def test_list_jm(mock_api_call):
-    """
-    Tests operation of listing job managers available
+def test_list_jms():
+    """ Tests operation of listing job managers available """
 
-    Note - All API calls are mocked
-    """
-    # Successful return with no JMs
-    mock_api_call.return_value = []
+    # Should be just one JM initialized at the beginning of tests
     jms = tc.list_jms()
-    assert jms==[]
-    mock_api_call.reset()
+    assert jms[0]['jm_id'] == TEST_JM['jm_id']
 
-    # Error
-    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
-    with pytest.raises(TACCJMError):
-        jms = tc.list_jms()
-    mock_api_call.reset()
+    # Error in api call
+    with patch('taccjm.taccjm_client.api_call') as mock_api_call:
+        mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+        with pytest.raises(TACCJMError):
+            jms = tc.list_jms()
+        mock_api_call.reset()
 
 
-@patch('taccjm.taccjm_client.api_call')
-def test_init_jm(mock_api_call):
+def test_init_jm():
     """
     Tests operation of listing job managers available
-
-    Note - All API calls are mocked
     """
 
-    # Test a JM that has already been initialized (mocked)
-    mock_api_call.return_value = ['already_init']
+    # Error - Initialize already intialized JM
     with pytest.raises(ValueError):
-        jm = tc.init_jm('already_init', 'foo', 'bar', 'test', 123456)
-    mock_api_call.reset()
+        jm = tc.init_jm(TEST_JM['jm_id'], 'foo', 'bar', 'test', 123456)
 
-    # Successful return
-    mock_api_call.return_value = TEST_JM
-    jm = tc.init_jm(TEST_JM['jm_id'], TEST_JM['sys'],
-                    TEST_JM['user'], 'testpw', 123456)
-    assert type(jm) == dict
-    assert jm == TEST_JM
-    mock_api_call.reset()
-
-    # Error
-    mock_api_call.side_effect = [[], TACCJMError('Mock TACCJMError')]
+    # API Error - Authentication for example
     with pytest.raises(TACCJMError):
-        jm = tc.init_jm(TEST_JM['jm_id'], TEST_JM['sys'],
-                        TEST_JM['user'], 'testpw', 123456)
-    mock_api_call.reset()
+        jm = tc.init_jm('bad_jm', TEST_JM['sys'],
+                        TEST_JM['user'], 'badpw', 123456)
 
 
-@patch('taccjm.taccjm_client.api_call')
-def test_get_jm(mock_api_call):
-    """
-    Tests of getting info on a jm instance.
+def test_get_jm():
+    """ Tests of getting info on a jm instance. """
 
-    Note - All API calls are mocked
-    """
-
-    # Successful return
-    mock_api_call.return_value = TEST_JM
+    # Get test JM
     jm = tc.get_jm(TEST_JM['jm_id'])
     assert jm == TEST_JM
-    mock_api_call.reset()
 
-    # Error
-    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    # Error - JM that does not exist
     with pytest.raises(TACCJMError):
-        jm = tc.get_jm(TEST_JM['jm_id'])
-    mock_api_call.reset()
+        jm = tc.get_jm('does-not-exist')
 
 
-@patch('taccjm.taccjm_client.api_call')
-def test_get_queue(mock_api_call):
-    """
-    Tests of getting job queue for system.
-
-    Note - All API calls are mocked
-    """
+def test_get_queue():
+    """ Tests of getting job queue for system. """
 
     # Successful return
-    mock_api_call.return_value = TEST_QUEUE
-    jm = tc.get_queue(TEST_JM['jm_id'])
-    assert jm == TEST_QUEUE
-    mock_api_call.reset()
+    queue = tc.get_queue(TEST_JM['jm_id'], user='all')
 
     # Error
-    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
-    with pytest.raises(TACCJMError):
-        jm = tc.get_queue(TEST_JM['jm_id'])
-    mock_api_call.reset()
+    with patch('taccjm.taccjm_client.api_call') as mock_api_call:
+        mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+        with pytest.raises(TACCJMError):
+            queue = tc.get_queue(TEST_JM['jm_id'])
 
 
-@patch('taccjm.taccjm_client.api_call')
-def test_get_allocations(mock_api_call):
-    """
-    Tests of allocations on jm instance
-
-    Note - All API calls are mocked
-    """
+def test_get_allocations():
+    """ Tests of allocations on jm instance """
 
     # Successful return
-    mock_api_call.return_value = TEST_ALLOCATIONS
-    jm = tc.get_allocations(TEST_JM['jm_id'])
-    assert jm == TEST_ALLOCATIONS
-    mock_api_call.reset()
+    alloc = tc.get_allocations(TEST_JM['jm_id'])
 
     # Error
-    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
-    with pytest.raises(TACCJMError):
-        jm = tc.get_allocations(TEST_JM['jm_id'])
-    mock_api_call.reset()
+    with patch('taccjm.taccjm_client.api_call') as mock_api_call:
+        mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+        with pytest.raises(TACCJMError):
+            alloc = tc.get_allocations(TEST_JM['jm_id'])
 
 
-@patch('taccjm.taccjm_client.api_call')
-def test_get_files(mock_api_call):
-    """
-    Tests get files operation
+def test_list_files():
+    """ Tests get files operation """
 
-    Note - All API calls are mocked
-    """
-
-    # Successful return
-    mock_api_call.return_value = ["foo"]
-    files = tc.list_files(TEST_JM['jm_id'])
-    assert "foo" in files
-    mock_api_call.reset()
+    # Successful return - Get files in parent dir of jobs/apps/trash dir
+    dirs = ['jobs', 'apps', 'trash']
+    root_jm_dir = posixpath.dirname(TEST_JM['apps_dir'])
+    files = tc.list_files(TEST_JM['jm_id'], path=root_jm_dir)
+    assert [d in [f['filename'] for f in files] for d in dirs]
+    assert all([stat.S_ISDIR(f['st_mode']) for f in files])
 
     # Error
-    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
     with pytest.raises(TACCJMError):
-        jm = tc.list_files(TEST_JM['jm_id'])
-    mock_api_call.reset()
+        files = tc.list_files(TEST_JM['jm_id'], path='bad/path')
 
 
-@patch('taccjm.taccjm_client.api_call')
-def test_peak_file(mock_api_call):
+def test_peak_file():
     """
     Tests peak file operation
-
-    Note - All API calls are mocked
     """
 
-    # Successful return
-    text =  "Hello World\n"
-    mock_api_call.return_value = text
-    peak = tc.peak_file(TEST_JM['jm_id'], "foo")
+    # Empty trash dir
+    tc.empty_trash(TEST_JM['jm_id'])
+
+    # Write test file to trash dir to peak att
+    text = "Hello World\n"
+    test_file_path = posixpath.join(TEST_JM['trash_dir'], 'test_file.txt')
+    tc.write(TEST_JM['jm_id'], text, test_file_path)
+    peak = tc.peak_file(TEST_JM['jm_id'], test_file_path)
     assert text==peak
-    mock_api_call.reset()
 
     # Error
-    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
     with pytest.raises(TACCJMError):
-        jm = tc.peak_file(TEST_JM['jm_id'], "foo")
-    mock_api_call.reset()
+        peak = tc.peak_file(TEST_JM['jm_id'], '/bad/path')
 
 
-@patch('taccjm.taccjm_client.api_call')
-def test_upload(mock_api_call):
-    """
-    Tests upload operation
+def test_upload_download():
+    """ Tests upload and download operations """
 
-    Note - All API calls are mocked
-    """
-    # Successful return
-    mock_api_call.return_value = None
-    tc.upload(TEST_JM['jm_id'], "foo", "foo", "*")
-    mock_api_call.reset()
+    # Empty trash dir
+    tc.empty_trash(TEST_JM['jm_id'])
 
-    # Error
-    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    # Write test file locally and upload to trash directory
+    fname = 'test_file.txt'
+    local_file = f".{fname}"
+    remote_file = posixpath.join(TEST_JM['trash_dir'], fname)
+    os.system(f"echo hello there > {local_file}")
+    tc.upload(TEST_JM['jm_id'], local_file, remote_file)
+    os.remove(local_file)
+
+    # download file now just uploaded
+    downloaded_file = '.test_download.txt'
+    tc.download(TEST_JM['jm_id'], remote_file, downloaded_file)
+    with open(downloaded_file, 'r') as f:
+        assert f.read()=='hello there\n'
+    os.remove(downloaded_file)
+
+    # Error - Upload invalid path
     with pytest.raises(TACCJMError):
-        tc.upload(TEST_JM['jm_id'], "foo", "foo", "*")
-    mock_api_call.reset()
+        tc.upload(TEST_JM['jm_id'], 'foo', remote_file)
 
-
-@patch('taccjm.taccjm_client.api_call')
-def test_download(mock_api_call):
-    """
-    Tests download operation
-
-    Note - All API calls are mocked
-    """
-    # Successful return
-    mock_api_call.return_value = "foo"
-    tc.download(TEST_JM['jm_id'], "foo", "foo", "*")
-    mock_api_call.reset()
-
-    # Error
-    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    # Error - download non-existant file
     with pytest.raises(TACCJMError):
-        tc.download(TEST_JM['jm_id'], "foo", "foo", "*")
-    mock_api_call.reset()
+        tc.download(TEST_JM['jm_id'], 'does-not-exist', downloaded_file)
 
 
-@patch('taccjm.taccjm_client.api_call')
-def test_remove(mock_api_call):
-    """
-    Tests remove operation
+def test_remove_restore():
+    """ Tests remove and restore operations """
 
-    Note - All API calls are mocked
-    """
-    # Successful return
-    mock_api_call.return_value = None
-    tc.remove(TEST_JM['jm_id'], "foo")
-    mock_api_call.reset()
+    # Empty trash dir
+    tc.empty_trash(TEST_JM['jm_id'])
 
-    # Error
-    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    # Write test file to use and send it to the trash directory
+    fname = 'test_file.txt'
+    local_file = f".{fname}"
+    remote_file = posixpath.join(TEST_JM['trash_dir'], fname)
+    os.system(f"echo hello there > {local_file}")
+    tc.upload(TEST_JM['jm_id'], local_file, remote_file)
+    os.remove(local_file)
+
+    # Remove the test file - note this will just rename it in trash dir
+    tc.remove(TEST_JM['jm_id'], remote_file)
+    files = tc.list_files(TEST_JM['jm_id'], TEST_JM['trash_dir'])
+    trash_name = remote_file.replace('/','___')
+    assert fname not in [f['filename'] for f in files]
+    assert trash_name in [f['filename'] for f in files]
+
+    # Now restore it - once again this will just rename the file
+    tc.restore(TEST_JM['jm_id'], remote_file)
+    files = tc.list_files(TEST_JM['jm_id'], TEST_JM['trash_dir'])
+    assert fname in [f['filename'] for f in files]
+    assert trash_name not in [f['filename'] for f in files]
+
+    # Error - Remove file that does not exist
     with pytest.raises(TACCJMError):
-        tc.remove(TEST_JM['jm_id'], "foo")
-    mock_api_call.reset()
+        tc.remove(TEST_JM['jm_id'], '/bad/path')
 
-
-@patch('taccjm.taccjm_client.api_call')
-def test_restore(mock_api_call):
-    """
-    Tests restore operation
-
-    Note - All API calls are mocked
-    """
-    # Successful return
-    mock_api_call.return_value = None
-    tc.restore(TEST_JM['jm_id'], "foo")
-    mock_api_call.reset()
-
-    # Error
-    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    # Error - Restore file that does not exist
     with pytest.raises(TACCJMError):
-        tc.restore(TEST_JM['jm_id'], "foo")
-    mock_api_call.reset()
+        tc.restore(TEST_JM['jm_id'], '/bad/path')
 
 
-@patch('taccjm.taccjm_client.api_call')
-def test_write(mock_api_call):
-    """
-    Tests write operation
+def test_read_write():
+    """ Tests write operation """
 
-    Note - All API calls are mocked
-    """
-    # Successful return
-    mock_api_call.return_value = None
-    tc.write(TEST_JM['jm_id'], "foo", "foo.txt")
-    mock_api_call.reset()
+    # Empty trash dir
+    tc.empty_trash(TEST_JM['jm_id'])
 
-    # Error
-    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    # Write test file
+    text = 'hello there'
+    fname = 'test_write.txt'
+    remote_file = posixpath.join(TEST_JM['trash_dir'], fname)
+    tc.write(TEST_JM['jm_id'], text, remote_file)
+    files = tc.list_files(TEST_JM['jm_id'], path=TEST_JM['trash_dir'])
+    assert fname in [f['filename'] for f in files]
+
+    # Read back in test file and make sure it matches
+    read_txt = tc.read(TEST_JM['jm_id'], remote_file)
+    assert read_txt==text
+
+    # Error - write to non-existant file
     with pytest.raises(TACCJMError):
-        tc.write(TEST_JM['jm_id'], "foo", "foo.txt")
-    mock_api_call.reset()
+        tc.write(TEST_JM['jm_id'], text, '/bad/path')
 
-
-@patch('taccjm.taccjm_client.api_call')
-def test_read(mock_api_call):
-    """
-    Tests read operation
-
-    Note - All API calls are mocked
-    """
-    # Successful return
-    mock_api_call.return_value = None
-    tc.read(TEST_JM['jm_id'], "foo.txt", data_type="text")
-    mock_api_call.reset()
-
-    # Error
-    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    # Error - Read from non-existant file
     with pytest.raises(TACCJMError):
-        tc.read(TEST_JM['jm_id'], "foo.txt", data_type="text")
-    mock_api_call.reset()
+        _ = tc.read(TEST_JM['jm_id'], '/bad/path')
 
 
-@patch('taccjm.taccjm_client.api_call')
-def test_list_apps(mock_api_call):
-    """
-    Tests list_apps operation
+def test_apps():
+    """Test app operations"""
 
-    Note - All API calls are mocked
-    """
-    # Successful return
-    mock_api_call.return_value = ["foo"]
-    tc.list_apps(TEST_JM['jm_id'])
-    mock_api_call.reset()
+    # Name of test app directory locally
+    test_app = '.test-app'
+    dest_dir = os.getcwd()
+    local_app_dir = os.path.join(dest_dir, test_app)
 
-    # Error
-    mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
+    # Remove app locally if exists
+    os.system(f"rm -rf {test_app}")
+
+    # Create template app locally
+    app_config, job_config = create_template_app(test_app, dest_dir=dest_dir)
+
+    # Remove app on remote system if any exist
+    deploy_path = posixpath.join(TEST_JM['apps_dir'], app_config['name'])
+    tc.remove(TEST_JM['jm_id'], deploy_path)
+
+    # Deploy app
+    deployed_app = tc.deploy_app(TEST_JM['jm_id'],
+            app_config, local_app_dir=local_app_dir,
+            overwrite=True)
+    assert deployed_app['name']==app_config['name']
+
+
+    # Assert App just deployed exists in list of apps
+    apps = tc.get_apps()
+    assert deployed_app['name'] in apps
+
+    # Get App Config back
+    deployed_config = tc.get_app(deployed_app['name'])
+    assert deployed_config['name']==app_config['name']
+
+    # Deploy app - Local app does not exist
     with pytest.raises(TACCJMError):
-        tc.list_apps(TEST_JM['jm_id'])
-    mock_api_call.reset()
+        _ = tc.deploy_app(TEST_JM['jm_id'],
+                app_config, local_app_dir='does-not-exst',
+                overwrite=True)
 
+    # Error - get non-existant app
+    with pytest.raises(TACCJMError):
+        _ = tc.get_app(TEST_JM['jm_id'], 'does-not-exst')
+
+    # Cleanup - remove app locally
+    os.system(f"rm -rf {test_app}")
+
+    # Cleanup trash
+    tc.empty_trash()
+
+
+def test_jobs():
+    """Test job operations"""
+
+    # Name of test app directory locally
+    test_app = '.test-app'
+    dest_dir = os.getcwd()
+    local_app_dir = os.path.join(dest_dir, test_app)
+
+    # Remove app locally if exists
+    os.system(f"rm -rf {test_app}")
+
+    # Create template app locally
+    app_config, job_config = create_template_app(test_app, dest_dir=dest_dir)
+
+    # Deploy app
+    deployed_app = tc.deploy_app(TEST_JM['jm_id'],
+            app_config, local_app_dir=local_app_dir,
+            overwrite=True)
+
+    # Set-up test job using app - Place job input file in local app dir
+    job_config['allocation']=ALLOCATION
+    job_config['inputs']['input1'] = os.path.join(local_app_dir, 'input.txt')
+    os.system(f"echo hello world > {job_config['inputs']['input1']}")
+    deployed_job = tc.deploy_job(TEST_JM['jm_id'], job_config=job_config,
+            local_job_dir=local_app_dir, stage=True, desc='Test Job')
+    assert 'job_id' in deployed_job.keys() and 'job_dir' in deployed_job.keys()
+    assert deployed_job['desc']=='Test Job'
+
+    # Check for job in list of jobs
+    jobs = tc.get_jobs()
+    assert deployed_job['job_id'] in jobs
+
+    # Write some data to a job file
+    text = 'hello world\n'
+    tc.write_job_file(TEST_JM['jm_id'],
+            deployed_job['job_id'], text, 'hello.txt')
+
+    # Read data from file just written
+    data = tc.read_job_file(TEST_JM['jm_id'], deployed_job['job_id'],
+            'hello.txt', data_type='text')
+    assert data==text
+
+    # Download file just written
+    downloaded_file = os.path.join(local_app_dir, test_fname)
+    downloaded_file = tc.download_job_file(TEST_JM['jm_id'],
+            deployed_job['job_id'],
+            'hello.txt', dest_dir=local_app_dir)
+    with open(downloaded_file, 'r') as f:
+        assert f.read()==text
+
+    # Rename it and Upload it back to job directory
+    upload_file = os.path.join(local_app_dir, job_id,'goodbye.txt')
+    with open(upload_file, 'w') as f:
+        f.write('goodbye world\n')
+    tc.upload_job_file(TEST_JM['jm_id'], deployed_job['job_id'], upload_file)
+
+    # Check file uploaded is in job directory
+    files = tc.list_job_files(TEST_JM['jm_id'], deployed_job['job_id'])
+    assert 'goodbye.txt' in [f['filename'] for f in files]
+
+    # Peak at file just uploaded
+    peak = tc.peak_job_file(TEST_JM['jm_id'], deployed_job['job_id'],
+            path='goodbye.txt')
+    assert peak=='goodbye world\n'
+
+    # Submit job
+    job = tc.submit_job(TEST_JM['jm_id'], deployed_job['job_id'])
+    assert 'slurm_id' in job.keys()
+
+    # Cancel job
+    slurm_id = job['slurm_id']
+    job = tc.cancel_job(TEST_JM['jm_id'], deployed_job['job_id'])
+    assert 'slurm_id' not in job.keys() and 'slurm_hist' in job.keys()
+    assert slurm_id in job['slurm_hist']
+
+    # Remove job
+    removed = tc.remove_job(TEST_JM['jm_id'], deployed_job['job_id'])
+    assert deployed_job['job_id'] not in tc.list_jobs(TEST_JM['jm_id'])
+    assert removed==deployed_job['job_id']
+
+    # Restore job
+    tc.restore_job(TEST_JM['jm_id'], removed)
+    assert deployed_job['job_id'] in tc.list_jobs(TEST_JM['jm_id'])
+
+    # Error - Get invalid job
+    with pytest.raises(TACCJMError):
+        _ = tc.get_job(TEST_JM['jm_id'], 'bad_job')
+
+    # Error - Deploy job with no input file (bad local job dir):
+    with pytest.raises(TACCJMError):
+        _ = tc.deploy_job(TEST_JM['jm_id'], job_config=job_config,
+                local_job_dir='/bad/path', stage=False, desc='Test Job')
+
+    # Error - Write job file to bad dest_dir
+    with pytest.raises(TACCJMError):
+        tc.write_job_file(TEST_JM['jm_id'],
+                deployed_job['job_id'], text, 'bad/path/hello.txt')
+
+    # Error - Read job file error - file does not exist
+    with pytest.raises(TACCJMError):
+        _ = tc.read_job_file(TEST_JM['jm_id'], deployed_job['job_id'],
+                'bad/path/hello.txt', data_type='text')
+
+    # Error - Download job file that does not exist
+    with pytest.raises(TACCJMError):
+        _ = tc.download_job_file(TEST_JM['jm_id'],
+                deployed_job['job_id'],
+                'does/not/exist/hello.txt', dest_dir=local_app_dir)
+
+    # Error - Upload job file that does not exist
+    with pytest.raises(TACCJMError):
+        tc.upload_job_file(TEST_JM['jm_id'], deployed_job['job_id'],
+                '/bad/path/test.txt')
+
+    # Error - Peak at job file that does not exist
+    with pytest.raises(TACCJMError):
+        peak = tc.peak_job_file(TEST_JM['jm_id'], deployed_job['job_id'],
+                path='does/not/exist/goodbye.txt')
+
+    # Error - Submit job that does not exist
+    with pytest.raises(TACCJMError):
+        _ = tc.submit_job(TEST_JM['jm_id'], 'bad-id')
+
+    # Error - Cancel invalid job
+    with pytest.raises(TACCJMError):
+        _ = tc.cancel_job(TEST_JM['jm_id'], 'bad-id')
+
+    # Error - Remove a job that does not exist
+    with pytest.raises(TACCJMError):
+        _ = tc.remove_job(TEST_JM['jm_id'], 'bad-id')
+
+    # Error - Restore a job that does not exist
+    with pytest.raises(TACCJMError):
+        _ = tc.restore_job(TEST_JM['jm_id'], 'bad-id')
+
+    # Cleanup local app dir
+    os.system(f"rm -rf {local_app_dir}")
+
+
+def test_scripts():
+    """Test script operations"""
+
+    py_script = os.path.join(os.getcwd(), 'test-py.py')
+    with open(py_script, 'w') as f:
+        f.write('import os\nprint("hello world")\n')
+
+    # Send script to taccjm
+    tc.deploy_script(TEST_JM['jm_id'], py_script)
+
+    # Check script exists
+    scripts = tc.list_scripts(TEST_JM['jm_id'])
+    assert 'test-py' in scripts
+
+    # Run script
+    result = tc.run_script(TEST_JM['jm_id'], 'test-py')
+    assert result  == 'hello world\n'
+
+    # Cleanup local app dir
+    os.system(f"rm -rf {py_script}")
+
+
+_init_client()

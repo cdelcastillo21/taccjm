@@ -73,7 +73,7 @@ class TACCJobManager():
     deploy_app
     get_jobs
     get_job
-    setup_job
+    deploy_job 
     submit_job
     cancel_job
     remove_job
@@ -157,7 +157,7 @@ class TACCJobManager():
             setattr(self, d[0], posixpath.join(taccjm_dir,d[1]))
             self._mkdir(getattr(self, d[0]), parents=True)
 
-        # Get python path
+        # Get python path and home dir
         self.python_path = self._execute_command('which python')
 
 
@@ -781,7 +781,7 @@ class TACCJobManager():
         # Unix paths -> Get file remote file name and directory
         file_name = remote_path.replace('/','___')
         trash_path = f"{self.trash_dir}/{file_name}"
-        abs_path = '~/' + remote_path if remote_path[0]!='/' else remote_path
+        abs_path = './' + remote_path if remote_path[0]!='/' else remote_path
         abs_path = posixpath.normpath(abs_path)
 
         # Check if path is a file or directory
@@ -791,9 +791,9 @@ class TACCJobManager():
                 fileattr = sftp.stat(abs_path)
                 is_dir = stat.S_ISDIR(fileattr.st_mode)
         except FileNotFoundError as f:
-            msg = f"remove - No such file/folder {f.filename}"
+            msg = f"remove - No such file/folder {abs_path}"
             logger.error(msg)
-            raise FileNotFoundError(errno.ENOENT, msg, f.filename)
+            raise FileNotFoundError(errno.ENOENT, msg, abs_path)
 
         src_path  = abs_path if not is_dir else abs_path + '/'
         cmnd = f"rsync -a {src_path} {trash_path} && rm -rf {abs_path}"
@@ -831,7 +831,7 @@ class TACCJobManager():
         # Unix paths -> Get file remote file name and directory
         file_name = remote_path.replace('/','___')
         trash_path = posixpath.join(self.trash_dir, file_name)
-        abs_path = '~/' + remote_path if remote_path[0]!='/' else remote_path
+        abs_path = './' + remote_path if remote_path[0]!='/' else remote_path
 
         # Check if trash path is a file or directory
         is_dir = False
@@ -854,7 +854,7 @@ class TACCJobManager():
             raise tjm_error
 
 
-    def empty_trash(self, filter:str='*') -> None:
+    def empty_trash(self, filter_str:str='*') -> None:
         """
         Cleans out trahs directly by permently removing contents with rm -rf
         command.
@@ -868,7 +868,7 @@ class TACCJobManager():
         -------
 
         """
-        self._execute_command(f"rm -rf {self.trash_dir}/{filter}")
+        self._execute_command(f"rm -rf {self.trash_dir}/{filter_str}")
 
 
     def write(self, data:Union[str, dict], path:str) -> None:
@@ -1168,7 +1168,7 @@ class TACCJobManager():
             raise ValueError(msg)
 
 
-    def setup_job(self,
+    def deploy_job(self,
             job_config:dict=None,
             local_job_dir:str='.',
             job_config_file:str='job.json',
@@ -1212,7 +1212,7 @@ class TACCJobManager():
         -------
         job_config : dict
             Dictionary containing info about job that was set-up. If stage
-            was set to True, then a successful completion of setup_job()
+            was set to True, then a successful completion of deploy_job()
             indicates that the job directory was prepared succesffuly and job
             is ready to be submit.
 
@@ -1252,10 +1252,10 @@ class TACCJobManager():
         # Verify appropriate inputs and arguments are passed
         for i in app_config['inputs']:
             if i['name'] not in job_config['inputs']:
-                raise ValueError(f"setup_job - missing input {i['name']}")
+                raise ValueError(f"deploy_job - missing input {i['name']}")
         for i in app_config['parameters']:
             if i['name'] not in job_config['parameters']:
-                raise ValueError(f"setup_job - missing parameter {i['name']}")
+                raise ValueError(f"deploy_job - missing parameter {i['name']}")
 
         if stage:
             # Stage job inputs
@@ -1276,7 +1276,7 @@ class TACCJobManager():
             job_dir = job_config['job_dir']
             def err(e, msg):
                 self._execute_command(f"rm -rf {job_dir}")
-                logger.error(f"setup_job - {msg}")
+                logger.error(f"deploy_job - {msg}")
                 raise e
 
             # Copy app contents to job directory
@@ -1403,6 +1403,8 @@ class TACCJobManager():
 
     def remove_job(self, job_id:str) -> str:
         """
+        Remove Job
+
         Cancels job if it has been submitted to the job queue and deletes the
         job's directory. Note job can be restored with restore() command called
         on jobs directory.
@@ -1502,7 +1504,7 @@ class TACCJobManager():
 
 
     def download_job_file(self, job_id:str,
-            path:str, dest_dir:str='.') -> str:
+            path:str, dest_dir:str='.', file_filter:str='*') -> str:
         """
         Download file/folder at path, relative to job directory, and place it
         in the specified local destination directory. Note downloaded job data
@@ -1540,7 +1542,7 @@ class TACCJobManager():
         src_path = '/'.join([self.jobs_dir, job_id, path])
         dest_path = os.path.join(local_data_dir, fname)
         try:
-            self.download(src_path, dest_path)
+            self.download(src_path, dest_path, file_filter=file_filter)
         except Exception as e:
             m = f"download_job_file - Unable to download {src_path}"
             logger.error(m)

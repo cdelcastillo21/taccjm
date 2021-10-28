@@ -7,7 +7,6 @@ import os
 import pdb
 import time
 import pytest
-import unittest
 import posixpath
 from dotenv import load_dotenv
 from unittest.mock import patch
@@ -34,14 +33,16 @@ PW = os.environ.get("TACCJM_PW")
 SYSTEM = os.environ.get("TACCJM_SYSTEM")
 ALLOCATION = os.environ.get("TACCJM_ALLOCATION")
 
-
 # JM will be the job manager instance that should be initialized once but used
 # by all tests. Note the test_init test initializes the JM to begin with,
 # but if only running one other test, the first test to run will initialize
 # the JM for the test session.
-def _init():
+JM = None
+
+def _init_TACCJobManager_tests():
+    """ Initializes JM for tests """
+    global JM
     mfa = input('\nTACC Token:')
-    JM = None
     JM = TACCJobManager(SYSTEM, user=USER,
         psw=PW, mfa=mfa, working_dir="test-taccjm")
 
@@ -597,7 +598,7 @@ def test_apps():
     os.system(f"rm -rf {test_app}")
 
 
-def test_setup_job():
+def test_deploy_job():
     """Test setting up jobs"""
 
     # Name of test app directory locally
@@ -617,16 +618,16 @@ def test_setup_job():
     app1 = JM.deploy_app(local_app_dir=test_app)
 
     # Setup a test job from the configs in default app directory, dont stage
-    job1 = JM.setup_job(local_job_dir=test_app, stage=False)
+    job1 = JM.deploy_job(local_job_dir=test_app, stage=False)
     assert job1['app']==app_config['name']
 
     # Setup a test job from dictioanry just loaded, dont stage
-    job2 = JM.setup_job(job_config=job1, local_job_dir=test_app, stage=False)
+    job2 = JM.deploy_job(job_config=job1, local_job_dir=test_app, stage=False)
     assert job2['app']==app_config['name']
 
     # Now create test input file and send with job and stage job
     os.system(f"echo hello world > {job1['inputs']['input1']}")
-    job3 = JM.setup_job(job_config=job1.copy(),
+    job3 = JM.deploy_job(job_config=job1.copy(),
             local_job_dir=test_app, stage=True)
     jobs = JM.get_jobs()
     assert job3['job_id'] in jobs
@@ -634,7 +635,7 @@ def test_setup_job():
     assert staged_job==job3
 
     # Setup another job with allocation and email
-    job4 = JM.setup_job(job_config=job1.copy(),
+    job4 = JM.deploy_job(job_config=job1.copy(),
             local_job_dir=test_app, stage=True,
             email='test@test.com', allocation=ALLOCATION)
     jobs = JM.get_jobs()
@@ -653,26 +654,26 @@ def test_setup_job():
     no_params = job1.copy()
     no_params['parameters'] = {}
     with pytest.raises(ValueError):
-        _ = JM.setup_job(job_config=no_inputs, local_job_dir=test_app, stage=True)
+        _ = JM.deploy_job(job_config=no_inputs, local_job_dir=test_app, stage=True)
     with pytest.raises(ValueError):
-        _ = JM.setup_job(job_config=no_params, local_job_dir=test_app, stage=True)
+        _ = JM.deploy_job(job_config=no_params, local_job_dir=test_app, stage=True)
 
     # Error - Staging submit script
     with patch.object(TACCJobManager, '_parse_submit_script',
             side_effect=Exception('Mock parse submit script exception')):
         with pytest.raises(Exception):
-            _ = JM.setup_job(local_job_dir=test_app, stage=True)
+            _ = JM.deploy_job(local_job_dir=test_app, stage=True)
 
     # Error - Failing to stage input
     with patch.object(TACCJobManager, 'upload',
             side_effect=Exception('Mock upload error')):
         with pytest.raises(Exception):
-            _ = JM.setup_job(local_job_dir=test_app, stage=True)
+            _ = JM.deploy_job(local_job_dir=test_app, stage=True)
 
     # Error - Failing to stage app contents (delete job dir)
     _ = JM.remove_job(job3['job_id'])
     with pytest.raises(TJMCommandError):
-        _ = JM.setup_job(job_config=job3,
+        _ = JM.deploy_job(job_config=job3,
                 local_job_dir=test_app, stage=True)
 
     # cleanup
@@ -702,7 +703,7 @@ def test_run_job():
 
     # Now create test input file and send with job and stage job
     os.system(f"echo hello world > {job_config['inputs']['input1']}")
-    job = JM.setup_job(local_job_dir=test_app, stage=True,
+    job = JM.deploy_job(local_job_dir=test_app, stage=True,
             email='test@test.com', allocation=ALLOCATION)
 
     # Error - submit job but mock slurm queue error (FAILED on last line)
@@ -785,7 +786,7 @@ def test_job_files():
 
     # Now create test input file and send with job and stage job
     os.system(f"echo hello world > {job_config['inputs']['input1']}")
-    job = JM.setup_job(local_job_dir=test_app, stage=True,
+    job = JM.deploy_job(local_job_dir=test_app, stage=True,
             email='test@test.com', allocation=ALLOCATION)
 
     # List job files - Run script, input file, and submit script should exist
@@ -890,13 +891,5 @@ def test_scripts():
     _cleanup_local_test_files()
 
 
-# def test_main(capsys):
-#     """CLI Tests"""
-#     # capsys is a pytest fixture that allows asserts agains stdout/stderr
-#     # https://docs.pytest.org/en/stable/capture.html
-#     main(["7"])
-#     captured = capsys.readouterr()
-#     assert "The 7-th Fibonacci number is 13" in captured.out
-
-
-_init()
+# Initialize JM for tests -> will ask for mfa input
+_init_TACCJobManager_tests()

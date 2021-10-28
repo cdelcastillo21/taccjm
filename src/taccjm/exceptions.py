@@ -82,11 +82,14 @@ class TACCJMError(Exception):
         # Get response object
         res = self.res
 
-        # Format errors
-        m =  f"{self.message} - {res.status_code} {res.reason}:\n"
-        m += '\n'.join([f"{k} : {v}" for k,v in res.json()['errors'].items()])
+        # Format errors from result of api call
+        m = '\n'.join([f"{k} : {v}" for k,v in res.json()['errors'].items()])
 
+        return m
+
+    def get_http_str(self):
         # Format HTTP request
+        m =  f"{self.message} - {res.status_code} {res.reason}:\n"
         m += "\n-----------START-----------\n"
         m += f"{res.request.method} {res.request.url}\r\n"
         m += '\r\n'.join('{}: {}'.format(k, v) for k,

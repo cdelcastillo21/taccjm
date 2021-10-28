@@ -231,7 +231,7 @@ def init_jm(jm_id:str, system:str,
     jm : dict
         Dictionary containing info about job manager instance just initialized.
     """
-    if jm_id in list_jms():
+    if jm_id in [j['jm_id'] for j in list_jms()]:
         raise ValueError(f"{jm_id} already exists.")
 
     # Get user credentials/psw/mfa if not provided
@@ -338,7 +338,7 @@ def get_allocations(jm_id:str) -> dict:
     return allocations
 
 
-def list_files(jm_id:str, path:str='~') -> List[str]:
+def list_files(jm_id:str, path:str='.') -> List[str]:
     """
     List Files
 
@@ -348,7 +348,7 @@ def list_files(jm_id:str, path:str='~') -> List[str]:
     ----------
     jm_id : str
         ID of Job Manager instance.
-    path : str, default='~'
+    path : str, default='.'
         Path to get files from. Defaults to user's home path on remote system.
 
     Returns
@@ -654,6 +654,7 @@ def get_app(jm_id:str, app_id:str):
 
     return res
 
+
 def deploy_app(jm_id:str, app_config:dict,
         local_app_dir:str='.', overwrite:bool=False):
     """
@@ -749,28 +750,65 @@ def get_job(jm_id:str, job_id:str):
     return res
 
 
-def deploy_job(jm_id:str, job_config:dict):
+def deploy_job(job_config:dict=None,
+               local_job_dir:str='.',
+               job_config_file:str='job.json',
+               proj_config_file:str='project.ini',
+               stage:bool=True,
+               **kwargs) -> dict:
     """
-    Deploy Job
-
-    Deploy a job to remote system.
+    Setup job directory on supercomputing resources. If job_config is not
+    specified, then it is parsed from the json file found at
+    local_job_dir/job_config_file, with jinja templated values from the
+    local_job_dir/proj_config_file substituted in accordingly. In either
+    case, values found in dictionary or in parsed json file can be
+    overrided by passing keyword arguments. Note for dictionary values,
+    only the specific keys in the dictionary value specified will be
+    overwritten in the existing dictionary value, not the whole dictionary.
 
     Parameters
     ----------
-    jm_id : str
-        ID of Job Manager instance.
-    job_config : dict
-        Dictionary containing configurations for job.
+    job_config : dict, default=None
+        Dictionary containing job config. If None specified, then job
+        config will be read from file at local_job_dir/job_config_file.
+    local_job_dir : str, default='.'
+        Local directory containing job config file and project config file.
+        Defaults to current working directory.
+    job_config_file : str, default='job.json'
+        Path, relative to local_job_dir, to job config json file. File
+        only read if job_config dictionary not given.
+    proj_config_file : str, default='project.ini'
+        Path, relative to local_job_dir, to project config .ini file. Only
+        used if job_config not specified. If used, jinja is used to
+        substitue values found in config file into the job json file.
+        Useful for templating jobs.
+    stage : bool, default=False
+        If set to True, stage job directory by creating it, moving
+        application contents, moving job inputs, and writing submit_script
+        to remote system.
+    kwargs : dict, optional
+        All extra keyword arguments will be used as job config overrides.
 
     Returns
     -------
-    job_config : dictionary
-        Dictionary containing job configuration info of job just deployed.
+    job_config : dict
+        Dictionary containing info about job that was set-up. If stage
+        was set to True, then a successful completion of deploy_job()
+        indicates that the job directory was prepared succesffuly and job
+        is ready to be submit.
+
+    Raises
+    ------
     """
 
     try:
-        res = api_call('POST',
-                f"{jm_id}/jobs/deploy", {'job_config':job_config})
+        res = api_call('POST', f"{jm_id}/jobs/deploy",
+                {'job_config':job_config,
+                 'local_job_dir':local_job_dir,
+                 'job_config_file':job_config_file,
+                 'proj_config_file':proj_config_file,
+                 'stage':stage,
+                 'kwargs': kwargs})
     except TACCJMError as e:
         e.message = f"deploy_job error"
         logger.error(e.message)
@@ -837,11 +875,13 @@ def cancel_job(jm_id:str, job_id:str):
     return res
 
 
-def cleanup_job(jm_id:str, job_id:str):
+def remove_job(jm_id:str, job_id:str) -> str:
     """
-    Cleanup Job
+    Remove Job
 
-    Cancel (if already submitted) and remove a job.
+    Cancels job if it has been submitted to the job queue and deletes the
+    job's directory. Note job can be restored with restore() command called
+    on jobs directory.
 
     Parameters
     ----------
@@ -857,34 +897,70 @@ def cleanup_job(jm_id:str, job_id:str):
     """
 
     try:
-        res = api_call('PUT', f"{jm_id}/jobs/{job_id}/cleanup")
+        res = api_call('DELETE', f"{jm_id}/jobs/{job_id}/remove")
     except TACCJMError as e:
-        e.message = f"cleanup_job error"
+        e.message = f"remove_job error"
         logger.error(e.message)
         raise e
 
     return res
 
 
-def list_job_files(jm_id:str, job_id:str, path:str=''):
+def restore_job(jm_id:str, job_id:str) -> dict:
     """
-    List Job Files
+    Restore Job
 
-    List files in a job's directory.
+    Restores a job that has been previously removed (sent to trash).
 
     Parameters
     ----------
     jm_id : str
-        ID of Job Manager instance.
+        ID of job manager instance where job is deployed.
     job_id : str
-        ID of job.
-    path : str, default=''
-        Path to get files from relative to jobs root directory.
+        ID of job to restore
 
     Returns
     -------
-    files : list of str
-        List of files/folder in job directory
+    job_config : dict
+        Config of job that has just been restored.
+    """
+
+    try:
+        res = api_call('PUT', f"{jm_id}/jobs/{job_id}/restore")
+    except TACCJMError as e:
+        e.message = f"restore_job error"
+        logger.error(e.message)
+        raise e
+
+    return res
+
+
+def list_job_files(jm_id:str, job_id:str, path:str='') -> List[dict]:
+    """
+    Get info on files in job directory.
+
+    Parameters
+    ----------
+    jm_id : str
+        ID of Job Manager.
+    job_id : str
+        ID of job.
+    path: str, default=''
+        Directory, relative to the job directory, to query.
+
+
+    Returns
+    -------
+    files : list of dict
+        List of dictionaries containing file info including:
+            - filename : Filename
+            - st_atime : Last accessed time
+            - st_gid   : Group ID
+            - st_mode  : Type/Permission bits of file. Use stat library.
+            - st_mtime : Last modified time.
+            - st_size  : Size in bytes
+            - st_uid   : UID of owner.
+            - asbytes  : Output from an ls -lat like command on file.
     """
 
     try:
@@ -898,11 +974,12 @@ def list_job_files(jm_id:str, job_id:str, path:str=''):
     return res
 
 
-def download_job_file(jm_id:str, job_id:str, path:str, dest_dir:str='.'):
+def download_job_file(jm_id:str, job_id:str,
+        path:str, dest_dir:str='.', file_filter:str='*') -> str:
     """
-    Download Job File/Folder
-
-    Download a file or folder from a job's directory.
+    Download file/folder at path, relative to job directory, and place it
+    in the specified local destination directory. Note downloaded job data
+    will always be placed within a folder named according to the jobs id.
 
     Parameters
     ----------
@@ -923,6 +1000,9 @@ def download_job_file(jm_id:str, job_id:str, path:str, dest_dir:str='.'):
     local_path : str
         Path on local system to file/folder just downloaded
     """
+
+    # Get absolute path when sending request to taccjm server
+    dest_dir = os.path.abspath(dest_dir)
 
     data = {'path': path, 'dest_dir': dest_dir, 'file_filter': file_filter}
     try:
@@ -1043,7 +1123,8 @@ def write_job_file(jm_id:str, job_id:str, data, path:str):
     return res
 
 
-def peak_job_file(jm_id:str, path:str, head:int=-1, tail:int=-1):
+def peak_job_file(jm_id:str, job_id:str,
+        path:str, head:int=-1, tail:int=-1) -> str:
     """
     Peak Job File
 
@@ -1070,7 +1151,7 @@ def peak_job_file(jm_id:str, path:str, head:int=-1, tail:int=-1):
     txt : str
         Text from first/last lines of job file.
     """
-    data = {'path': path, 'head': head, 'tail': tail}
+    data = {'job_id':job_id, 'path': path, 'head': head, 'tail': tail}
     try:
         res = api_call('GET', f"{jm_id}/jobs/{job_id}/files/peak", data)
     except TACCJMError as e:
@@ -1174,3 +1255,27 @@ def run_script(jm_id:str, script_name:str, job_id:str=None, args:[str]=None):
         raise e
 
     return res
+
+
+def empty_trash(jm_id:str, filter_str:str='*') -> None:
+    """
+    Cleans out trahs directly by permently removing contents with rm -rf
+    command.
+
+    Parameters
+    ----------
+    filter : str, default='*'
+        Filter files in trash directory to remove
+
+    Returns
+    -------
+
+    """
+    data = {'filter_str': filter_str}
+    try:
+        api_call('DELETE', f"{jm_id}/trash/empty", data)
+    except TACCJMError as e:
+        e.message = f"empty_trash - error"
+        logger.error(e.message)
+        raise e
+
