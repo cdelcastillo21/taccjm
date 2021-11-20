@@ -354,7 +354,7 @@ def test_jobs():
         assert response.status == '400 Bad Request'
 
     # Mock deploy_job errors
-    with patch.object(TACCJobManager, 'setup_job',
+    with patch.object(TACCJobManager, 'deploy_job',
             side_effect=ValueError('Mock value error.')):
         response = hug.test.post(taccjm_server, f"{test_jm}/jobs/deploy",
                 {'job_config':job_config})
@@ -464,6 +464,9 @@ def test_scripts():
             {'script_name': 'test-py'})
     assert response.status == '200 OK'
     assert response.data == 'hello world\n'
+
+    # Remove test script
+    os.remove(py_script)
 
 
 # Initialize JM for server tests

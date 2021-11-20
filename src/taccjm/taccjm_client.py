@@ -655,8 +655,8 @@ def get_app(jm_id:str, app_id:str):
     return res
 
 
-def deploy_app(jm_id:str, app_config:dict,
-        local_app_dir:str='.', overwrite:bool=False):
+def deploy_app(jm_id:str, app_config:dict=None,
+        local_app_dir:str='.', overwrite:bool=False, **kwargs):
     """
     Deploy Application
 
@@ -666,14 +666,17 @@ def deploy_app(jm_id:str, app_config:dict,
     ----------
     jm_id : str
         ID of Job Manager instance.
-    app_config : dict
+    app_config : dict, optional
         Dictionary containing configurations for application.
-    local_app_dir : str
+    local_app_dir : str, default='.'
         Local path containing application `assets` directory to send to remote
         system.
     overwrite : bool, default=False
         Whether to overwrite application on remote system if it already exists
         (same application name and version).
+    **kwargs : dict, optional
+        All extra keyword arguments will be interpreted as items to override in
+        override in app config found in json file or app_config passed.
 
     Returns
     -------
@@ -682,9 +685,18 @@ def deploy_app(jm_id:str, app_config:dict,
         just deployed.
     """
 
-    data = {'app_config': app_config,
-            'local_app_dir': local_app_dir,
+    if app_config is not None:
+        # Create temporary json file with app config for sending request
+        temp_json = os.path.abspath(os.path.join(local_app_dir, '.app_json'))
+        with open(temp_json, 'w') as f:
+            json.dump(app_config, f)
+
+    data = {'local_app_dir': local_app_dir,
             'overwrite': overwrite}
+
+    # TODO: Check kwargs are valid app configs to update
+    data.update(kwargs)
+
     try:
         res = api_call('POST', f"{jm_id}/apps/deploy", data)
     except TACCJMError as e:

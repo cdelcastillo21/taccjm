@@ -32,7 +32,9 @@ def handle_custom_exceptions(exception):
     """Handling exceptions when ValueError due to input thrown."""
 
     # Raise 400 Bad Request if invalid data type passed
-    raise falcon.HTTPError(falcon.HTTP_400, "BadRequest", str(exception))
+    err = falcon.HTTPError(falcon.HTTP_400, "BadRequest", str(exception))
+    logger.error(str(err))
+    raise err
 
 
 @hug.exception(FileNotFoundError)
@@ -40,7 +42,9 @@ def handle_custom_exceptions(exception):
     """Handling exceptions when resource can't be found."""
 
     # Raise 404 not found error if local or remoate path don't exist
-    raise falcon.HTTPError(falcon.HTTP_404, "NotFound", str(exception))
+    err = falcon.HTTPError(falcon.HTTP_404, "NotFound", str(exception))
+    logger.error(str(err))
+    raise err
 
 
 @hug.exception(PermissionError)
@@ -48,7 +52,9 @@ def handle_custom_exceptions(exception):
     """Handling exception when don't have access to resource"""
 
     # Raise 403 forbidden if dont have permissions to access either paath
-    raise falcon.HTTPError(falcon.HTTP_403, "Forbidden", str(exception))
+    err = falcon.HTTPError(falcon.HTTP_403, "Forbidden", str(exception))
+    logger.error(str(err))
+    raise err
 
 
 @hug.exception(TJMCommandError)
@@ -62,8 +68,10 @@ def handle_custom_exceptions(exception):
         headers[a] = exception.__getattribute__(a)
 
     # Raise 500 internal server error for unanticipated error
-    raise falcon.HTTPError(falcon.HTTP_500, "Command error", str(exception),
+    err = falcon.HTTPError(falcon.HTTP_500, "Command error", str(exception),
             headers)
+    logger.error(str(err))
+    raise err
 
 
 def _check_init(jm_id):
@@ -258,7 +266,6 @@ def get_app(jm_id:str, app_id:str):
 
 @hug.post('/{jm_id}/apps/deploy')
 def deploy_app(jm_id:str,
-               app_config:str=None,
                local_app_dir:str='.',
                app_config_file:str="app.json",
                proj_config_file:str="project.ini",
@@ -271,12 +278,12 @@ def deploy_app(jm_id:str,
     """
     _check_init(jm_id)
 
-    return JM[jm_id].deploy_app(app_config=app_config,
-            local_app_dir=local_app_dir,
-            app_config_file=app_config_file,
-            proj_config_file=proj_config_file,
-            overwrite=overwrite,
-            **kwargs)
+    return JM[jm_id].deploy_app(
+                local_app_dir=local_app_dir,
+                app_config_file=app_config_file,
+                proj_config_file=proj_config_file,
+                overwrite=overwrite,
+                **kwargs)
 
 
 @hug.get('/{jm_id}/jobs/list')

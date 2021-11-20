@@ -677,6 +677,7 @@ def test_deploy_job():
                 local_job_dir=test_app, stage=True)
 
     # cleanup
+    os.remove(f"{job1['inputs']['input1']}")
     JM._execute_command(f"rm -rf {JM.apps_dir}/*")
     JM._execute_command(f"rm -rf {JM.jobs_dir}/*")
     os.system(f"rm -rf {test_app}")

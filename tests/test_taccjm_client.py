@@ -351,25 +351,30 @@ def test_apps():
 
     # Remove app on remote system if any exist
     deploy_path = posixpath.join(TEST_JM['apps_dir'], app_config['name'])
-    tc.remove(TEST_JM['jm_id'], deploy_path)
+    try:
+        tc.remove(TEST_JM['jm_id'], deploy_path)
+    except TACCJMError as t:
+        if str(t).startswith("NotFound"):
+            pass
+        else:
+            raise t
 
     # Deploy app
     deployed_app = tc.deploy_app(TEST_JM['jm_id'],
-            app_config, local_app_dir=local_app_dir,
-            overwrite=True)
+            app_config=app_config, local_app_dir=local_app_dir)
     assert deployed_app['name']==app_config['name']
 
 
     # Assert App just deployed exists in list of apps
-    apps = tc.get_apps()
+    apps = tc.list_apps(TEST_JM['jm_id'])
     assert deployed_app['name'] in apps
 
     # Get App Config back
-    deployed_config = tc.get_app(deployed_app['name'])
+    deployed_config = tc.get_app(TEST_JM['jm_id'], deployed_app['name'])
     assert deployed_config['name']==app_config['name']
 
     # Deploy app - Local app does not exist
-    with pytest.raises(TACCJMError):
+    with pytest.raises(FileNotFoundError):
         _ = tc.deploy_app(TEST_JM['jm_id'],
                 app_config, local_app_dir='does-not-exst',
                 overwrite=True)
@@ -382,7 +387,7 @@ def test_apps():
     os.system(f"rm -rf {test_app}")
 
     # Cleanup trash
-    tc.empty_trash()
+    tc.empty_trash(TEST_JM['jm_id'])
 
 
 def test_jobs():

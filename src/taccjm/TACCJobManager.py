@@ -1028,7 +1028,7 @@ class TACCJobManager():
 
 
     def deploy_app(self,
-            app_config:str=None,
+            app_config:dict=None,
             local_app_dir:str='.',
             app_config_file:str="app.json",
             proj_config_file:str="project.ini",
