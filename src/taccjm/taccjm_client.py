@@ -9,6 +9,7 @@ import json
 import psutil
 import logging
 import requests
+import tempfile
 import subprocess
 from time import sleep
 from getpass import getpass
@@ -655,8 +656,14 @@ def get_app(jm_id:str, app_id:str):
     return res
 
 
-def deploy_app(jm_id:str, app_config:dict=None,
-        local_app_dir:str='.', overwrite:bool=False, **kwargs):
+def deploy_app(
+        jm_id:str,
+        app_config:dict=None,
+        local_app_dir:str='.',
+        app_config_file:str='app.json',
+        proj_config_file:str='project.ini',
+        overwrite:bool=False,
+        **kwargs):
     """
     Deploy Application
 
@@ -671,6 +678,13 @@ def deploy_app(jm_id:str, app_config:dict=None,
     local_app_dir : str, default='.'
         Local path containing application `assets` directory to send to remote
         system.
+    app_config_file: str, default='app.json'
+        Path relative to local_app_dir containing app config json file.
+    proj_config_file : str, default='project.ini'
+        Path, relative to local_app_dir, to project config .ini file. Only
+        used if job_config not specified. If used, jinja is used to
+        substitue values found in config file into the job json file.
+        Useful for templating jobs.
     overwrite : bool, default=False
         Whether to overwrite application on remote system if it already exists
         (same application name and version).
@@ -685,17 +699,20 @@ def deploy_app(jm_id:str, app_config:dict=None,
         just deployed.
     """
 
-    if app_config is not None:
-        # Create temporary json file with app config for sending request
-        temp_json = os.path.abspath(os.path.join(local_app_dir, '.app_json'))
-        with open(temp_json, 'w') as f:
-            json.dump(app_config, f)
+    # Build data for request. Some of these may be None/default
+    data = {'local_app_dir':local_app_dir,
+            'app_config_file':app_config_file,
+            'proj_config_file':proj_config_file,
+            'overwrite':overwrite}
 
-    data = {'local_app_dir': local_app_dir,
-            'overwrite': overwrite}
-
-    # TODO: Check kwargs are valid app configs to update
+    # TODO: Check for valid kwargs params to update for app
     data.update(kwargs)
+
+    if app_config is not None:
+        # Temp file with app config dict for sending request - deleted when closed
+        temp = tempfile.NamedTemporaryFile(mode='w', dir=local_app_dir)
+        json.dump(app_config, temp)
+        data['app_config_file'] = os.path.basename(temp.name)
 
     try:
         res = api_call('POST', f"{jm_id}/apps/deploy", data)
@@ -813,14 +830,23 @@ def deploy_job(job_config:dict=None,
     ------
     """
 
+    # Build data for request. Some of these may be None/default
+    data = {'local_job_dir':local_job_dir,
+            'job_config_file':job_config_file,
+            'proj_config_file':proj_config_file,
+            'stage':stage}
+
+    # TODO: Check for valid kwargs params to update for job
+    data.update(kwargs)
+
+    if job_config is not None:
+        # Temp file with job config dict for sending request - deleted when closed
+        temp = tempfile.NamedTemporaryFile(mode='w', dir=local_job_dir)
+        json.dump(job_config, temp)
+        data['job_config_file'] = os.path.basename(temp.name)
+
     try:
-        res = api_call('POST', f"{jm_id}/jobs/deploy",
-                {'job_config':job_config,
-                 'local_job_dir':local_job_dir,
-                 'job_config_file':job_config_file,
-                 'proj_config_file':proj_config_file,
-                 'stage':stage,
-                 'kwargs': kwargs})
+        res = api_call('POST', f"{jm_id}/jobs/deploy", data)
     except TACCJMError as e:
         e.message = f"deploy_job error"
         logger.error(e.message)
