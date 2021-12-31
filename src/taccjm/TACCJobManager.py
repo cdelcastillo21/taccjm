@@ -92,7 +92,7 @@ class TACCJobManager():
     """
 
     ROOT = 'tacc.utexas.edu'
-    SYSTEMS = ['stampede2', 'ls5', 'frontera', 'maverick2']
+    SYSTEMS = ['stampede2', 'ls6', 'frontera', 'maverick2']
     USER_PROMPT = "Username:"
     PSW_PROMPT = "Password:"
     MFA_PROMPT ="TACC Token Code:"
@@ -1078,7 +1078,10 @@ class TACCJobManager():
             app_config_path = os.path.join(local_app_dir, app_config_file)
             proj_config_path = os.path.join(local_app_dir, proj_config_file)
             app_config = load_templated_json_file(app_config_path,
-                    proj_config_path, **kwargs)
+                    proj_config_path)
+
+        # Update with kwargs
+        app_config.update(kwargs)
 
         # Get current apps already deployed
         cur_apps = self.get_apps()
