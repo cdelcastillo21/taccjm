@@ -456,7 +456,7 @@ def test_scripts():
     response = hug.test.get(taccjm_server,
             f"{test_jm}/scripts/list",{})
     assert response.status == '200 OK'
-    assert 'test_script' in response.data
+    assert 'test-py' in response.data
 
     # Run script
     response = hug.test.put(taccjm_server,
