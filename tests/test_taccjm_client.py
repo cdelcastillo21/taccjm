@@ -406,7 +406,7 @@ def test_jobs():
 
     # Deploy app
     deployed_app = tc.deploy_app(TEST_JM['jm_id'],
-            app_config, local_app_dir=local_app_dir,
+            app_config=app_config, local_app_dir=local_app_dir,
             overwrite=True)
 
     # Set-up test job using app - Place job input file in local app dir
@@ -419,7 +419,7 @@ def test_jobs():
     assert deployed_job['desc']=='Test Job'
 
     # Check for job in list of jobs
-    jobs = tc.get_jobs()
+    jobs = tc.list_jobs(TEST_JM['jm_id'])
     assert deployed_job['job_id'] in jobs
 
     # Write some data to a job file
@@ -433,7 +433,7 @@ def test_jobs():
     assert data==text
 
     # Download file just written
-    downloaded_file = os.path.join(local_app_dir, test_fname)
+    downloaded_file = os.path.join(local_app_dir, 'downloaded.txt')
     downloaded_file = tc.download_job_file(TEST_JM['jm_id'],
             deployed_job['job_id'],
             'hello.txt', dest_dir=local_app_dir)
@@ -441,7 +441,8 @@ def test_jobs():
         assert f.read()==text
 
     # Rename it and Upload it back to job directory
-    upload_file = os.path.join(local_app_dir, job_id,'goodbye.txt')
+    upload_file = os.path.join(local_app_dir,
+            deployed_job['job_id'],'goodbye.txt')
     with open(upload_file, 'w') as f:
         f.write('goodbye world\n')
     tc.upload_job_file(TEST_JM['jm_id'], deployed_job['job_id'], upload_file)
@@ -478,8 +479,8 @@ def test_jobs():
     with pytest.raises(TACCJMError):
         _ = tc.get_job(TEST_JM['jm_id'], 'bad_job')
 
-    # Error - Deploy job with no input file (bad local job dir):
-    with pytest.raises(TACCJMError):
+    # Error - Deploy job with bad path specified
+    with pytest.raises(FileNotFoundError):
         _ = tc.deploy_job(TEST_JM['jm_id'], job_config=job_config,
                 local_job_dir='/bad/path', stage=False, desc='Test Job')
 
@@ -516,14 +517,6 @@ def test_jobs():
     # Error - Cancel invalid job
     with pytest.raises(TACCJMError):
         _ = tc.cancel_job(TEST_JM['jm_id'], 'bad-id')
-
-    # Error - Remove a job that does not exist
-    with pytest.raises(TACCJMError):
-        _ = tc.remove_job(TEST_JM['jm_id'], 'bad-id')
-
-    # Error - Restore a job that does not exist
-    with pytest.raises(TACCJMError):
-        _ = tc.restore_job(TEST_JM['jm_id'], 'bad-id')
 
     # Cleanup local app dir
     os.system(f"rm -rf {local_app_dir}")

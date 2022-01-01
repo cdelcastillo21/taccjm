@@ -61,6 +61,9 @@ def handle_custom_exceptions(exception):
 def handle_custom_exceptions(exception):
     """Handling other command errors"""
 
+    # Log TCJMCommandError message
+    logger.error(f"{str(exception)}")
+
     headers = {}
     # Add extra to HTTP error
     attrs = ['system', 'user', 'command' ,'rc', 'stderr', 'stdout']
@@ -269,8 +272,7 @@ def deploy_app(jm_id:str,
                local_app_dir:str='.',
                app_config_file:str="app.json",
                proj_config_file:str="project.ini",
-               overwrite:bool=False,
-               **kwargs) -> dict:
+               overwrite:bool=False) -> dict:
     """Deploy App
 
     Deploy an application from local directory to TACC system
@@ -278,12 +280,13 @@ def deploy_app(jm_id:str,
     """
     _check_init(jm_id)
 
+    logger.info(f"{jm_id} - deploying app - {local_app_dir}/{app_config_file}")
+
     return JM[jm_id].deploy_app(
                 local_app_dir=local_app_dir,
                 app_config_file=app_config_file,
                 proj_config_file=proj_config_file,
-                overwrite=overwrite,
-                **kwargs)
+                overwrite=overwrite)
 
 
 @hug.get('/{jm_id}/jobs/list')
@@ -308,7 +311,6 @@ def get_job(jm_id:str, job_id:str):
 
 @hug.post('/{jm_id}/jobs/deploy')
 def deploy_job(jm_id:str,
-               job_config:dict=None,
                local_job_dir:str='.',
                job_config_file:str='job.json',
                proj_config_file:str='project.ini',
@@ -317,8 +319,10 @@ def deploy_job(jm_id:str,
     """ Deploy a job to TACC system. """
     _check_init(jm_id)
 
-    return JM[jm_id].deploy_job(job_config=job_config,
-                                local_job_dir=local_job_dir,
+    msg = f"{jm_id} - deploying job at path {local_job_dir}/{job_config_file}"
+    logger.info(msg)
+
+    return JM[jm_id].deploy_job(local_job_dir=local_job_dir,
                                 job_config_file=job_config_file,
                                 proj_config_file=proj_config_file,
                                 stage=stage,
