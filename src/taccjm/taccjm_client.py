@@ -700,7 +700,7 @@ def deploy_app(
     """
 
     # Build data for request. Some of these may be None/default
-    data = {'local_app_dir':local_app_dir,
+    data = {'local_app_dir':os.path.abspath(local_app_dir),
             'app_config_file':app_config_file,
             'proj_config_file':proj_config_file,
             'overwrite':overwrite}
@@ -710,8 +710,9 @@ def deploy_app(
 
     if app_config is not None:
         # Temp file with app config dict for sending request - deleted when closed
-        temp = tempfile.NamedTemporaryFile(mode='w', dir=local_app_dir)
+        temp = tempfile.NamedTemporaryFile(mode='w+', dir=local_app_dir)
         json.dump(app_config, temp)
+        temp.flush()
         data['app_config_file'] = os.path.basename(temp.name)
 
     try:
@@ -779,12 +780,14 @@ def get_job(jm_id:str, job_id:str):
     return res
 
 
-def deploy_job(job_config:dict=None,
-               local_job_dir:str='.',
-               job_config_file:str='job.json',
-               proj_config_file:str='project.ini',
-               stage:bool=True,
-               **kwargs) -> dict:
+def deploy_job(
+        jm_id:str,
+        job_config:dict=None,
+        local_job_dir:str='.',
+        job_config_file:str='job.json',
+        proj_config_file:str='project.ini',
+        stage:bool=True,
+        **kwargs) -> dict:
     """
     Setup job directory on supercomputing resources. If job_config is not
     specified, then it is parsed from the json file found at
@@ -796,7 +799,7 @@ def deploy_job(job_config:dict=None,
     overwritten in the existing dictionary value, not the whole dictionary.
 
     Parameters
-    ----------
+   ----------
     job_config : dict, default=None
         Dictionary containing job config. If None specified, then job
         config will be read from file at local_job_dir/job_config_file.
@@ -841,8 +844,9 @@ def deploy_job(job_config:dict=None,
 
     if job_config is not None:
         # Temp file with job config dict for sending request - deleted when closed
-        temp = tempfile.NamedTemporaryFile(mode='w', dir=local_job_dir)
+        temp = tempfile.NamedTemporaryFile(mode='w+', dir=local_job_dir)
         json.dump(job_config, temp)
+        temp.flush()
         data['job_config_file'] = os.path.basename(temp.name)
 
     try:
@@ -964,7 +968,7 @@ def restore_job(jm_id:str, job_id:str) -> dict:
     """
 
     try:
-        res = api_call('PUT', f"{jm_id}/jobs/{job_id}/restore")
+        res = api_call('POST', f"{jm_id}/jobs/{job_id}/restore")
     except TACCJMError as e:
         e.message = f"restore_job error"
         logger.error(e.message)
@@ -1310,10 +1314,5 @@ def empty_trash(jm_id:str, filter_str:str='*') -> None:
 
     """
     data = {'filter_str': filter_str}
-    try:
-        api_call('DELETE', f"{jm_id}/trash/empty", data)
-    except TACCJMError as e:
-        e.message = f"empty_trash - error"
-        logger.error(e.message)
-        raise e
 
+    api_call('DELETE', f"{jm_id}/trash/empty", data)
