@@ -1,30 +1,21 @@
 """
-This is a skeleton file that can serve as a starting point for a Python
-console script. To run this script uncomment the following lines in the
-``[options.entry_points]`` section in ``setup.cfg``::
+TACCJM CLI
 
-    console_scripts =
-         fibonacci = taccjm.skeleton:run
-
-Then run ``pip install .`` (or ``pip install -e .`` for editable mode)
-which will install the command ``fibonacci`` inside your current environment.
-
-Besides console scripts, the header (i.e. until ``_logger``...) of this file can
-also be used as template for Python modules.
+Command line interface wrapper around main functions in taccjm_client.
 
 Note:
-    This skeleton file can be safely removed if not needed!
 
 References:
     - https://setuptools.readthedocs.io/en/latest/userguide/entry_point.html
     - https://pip.pypa.io/en/stable/reference/pip_install
 """
 
-import argparse
-import logging
 import sys
+import logging
+import argparse
 
 from taccjm import __version__
+from taccjm import taccjm_client as tc
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -33,33 +24,43 @@ __license__ = "MIT"
 _logger = logging.getLogger(__name__)
 
 
-# ---- Python API ----
-# The functions defined in this section can be imported by users in their
-# Python scripts/interactive interpreter, e.g. via
-# `from taccjm.skeleton import fib`,
-# when using this Python module as a library.
-
-
-def fib(n):
-    """Fibonacci example function
-
-    Args:
-      n (int): integer
-
-    Returns:
-      int: n-th Fibonacci number
-    """
-    assert n > 0
-    a, b = 1, 1
-    for i in range(n - 1):
-        a, b = b, a + b
-    return a
-
-
 # ---- CLI ----
 # The functions defined in this section are wrappers around the main Python
 # API allowing them to be called directly from the terminal as a CLI
 # executable/script.
+
+# List of CLI entry-points
+cli_ops = ("jm list",
+           "jm init",
+           "jm get",
+           "jm queue",
+           "jm allocation",
+           "files list",
+           "files peak",
+           "files upload",
+           "files download",
+           "files read",
+           "files write",
+           "files remove",
+           "files restore",
+           "apps list",
+           "apps get",
+           "apps deploy",
+           "jobs list",
+           "jobs get",
+           "jobs deploy",
+           "jobs submit",
+           "jobs cancel",
+           "jobs cleanup",
+           "jobs files list",
+           "jobs files peak",
+           "jobs files upload",
+           "jobs files download",
+           "jobs files read",
+           "jobs files write",
+           "scripts list",
+           "scripts deploy",
+           "scripts run")
 
 
 def parse_args(args):
@@ -72,13 +73,15 @@ def parse_args(args):
     Returns:
       :obj:`argparse.Namespace`: command line parameters namespace
     """
-    parser = argparse.ArgumentParser(description="Just a Fibonacci demonstration")
+    parser = argparse.ArgumentParser(description="TACC Job Manager CLI")
     parser.add_argument(
         "--version",
         action="version",
         version="taccjm {ver}".format(ver=__version__),
     )
-    parser.add_argument(dest="n", help="n-th Fibonacci number", type=int, metavar="INT")
+    parser.add_argument(dest="op",
+            help="TACC Job Manger CLI operation to perform",
+            type=str, nargs='+', metavar="STR", choices=['init'])
     parser.add_argument(
         "-v",
         "--verbose",
@@ -123,7 +126,9 @@ def main(args):
     args = parse_args(args)
     setup_logging(args.loglevel)
     _logger.debug("Starting crazy calculations...")
-    print("The {}-th Fibonacci number is {}".format(args.n, fib(args.n)))
+
+    if args.op=='init':
+        print("Initializing Job Manager Instance")
     _logger.info("Script ends here")
 
 
