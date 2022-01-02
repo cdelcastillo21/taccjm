@@ -759,6 +759,7 @@ def test_run_job():
         _ = JM.restore_job('foo')
 
     # cleanup
+    os.remove(f"{job_config['inputs']['input1']}")
     JM._execute_command(f"rm -rf {JM.apps_dir}/*")
     JM._execute_command(f"rm -rf {JM.jobs_dir}/*")
     os.system(f"rm -rf {test_app}")

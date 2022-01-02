@@ -11,7 +11,8 @@ import pytest
 
 
 def pytest_addoption(parser):
-    parser.addoption("--mfa", action="store", default="012345", help="MFA token. Must be provided")
+    parser.addoption("--mfa", action="store",
+            default="012345", help="MFA token. Must be provided")
 
 
 @pytest.fixture
