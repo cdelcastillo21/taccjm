@@ -82,8 +82,11 @@ class TACCJMError(Exception):
         # Get response object
         res = self.res
 
-        # Format errors from result of api call
-        m = '\n'.join([f"{k} : {v}" for k,v in res.json()['errors'].items()])
+        try:
+            m = '\n'.join(
+                    [f"{k} : {v}" for k,v in res.json()['errors'].items()])
+        except Exception as e:
+            m = str(res) + " unable to parse json errors"
 
         return m
 
