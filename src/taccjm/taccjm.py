@@ -177,43 +177,44 @@ def api_call(http_method:str, end_point:str, data:dict=None) -> dict:
         raise TACCJMError(res)
 
 
-def list_jms() -> List[str]:
+def list_conns() -> List[str]:
     """
-    List JMs
+    List Connections
 
-    List available job managers managed by job manager server.
+    List available Connections to systems
 
     Parameters
     ----------
 
     Returns
     -------
-    jms : list of str
-        List of job managers avaiable.
+    conns : list of str
+        List of connections established to TACC systems.
     """
     try:
         res = api_call('GET', 'list')
     except TACCJMError as e:
-        e.message = "list_jm error"
+        e.message = "list_conns error"
         logger.error(e.message)
         raise e
 
     return res
 
 
-def init_jm(jm_id:str, system:str,
+def init_conn(cid:str, system:str,
         user:str=None, psw:str=None, mfa:str=None) -> dict:
     """
-    Init JM
+    Init Connection
 
-    Initialize a JM instance on TACCJM server. If no TACCJM server is found
-    to connect to, then starts the server.
+    Initialize a paramiko ssh instance to a desired system. If no server to
+    manage connections is found to connect to, then starts the server.
 
     Parameters
     ----------
-    jm_id : str
-        ID to give to Job Manager instance on TACCJM server. Must be unique and
-        not exist already in TACCJM when executing `list_jms()`.
+    cid : str
+        ID to give to Connection instance on TACCJM server. Must be unique and
+        not exist already available connections avialable when executing
+        `list_conns()`.
     system : str
         Name of tacc system to connect to. Must be one of stampede2, ls5,
         frontera, or maverick2.
@@ -229,11 +230,11 @@ def init_jm(jm_id:str, system:str,
 
     Returns
     -------
-    jm : dict
-        Dictionary containing info about job manager instance just initialized.
+    conn: dict
+        Dictionary containing info about connection instance just initialized.
     """
-    if jm_id in [j['jm_id'] for j in list_jms()]:
-        raise ValueError(f"{jm_id} already exists.")
+    if cid in [c['cid'] for c in list_conns()]:
+        raise ValueError(f"{cid} already exists.")
 
     # Get user credentials/psw/mfa if not provided
     user = input("Username: ") if user is None else user
@@ -253,16 +254,16 @@ def init_jm(jm_id:str, system:str,
     return res
 
 
-def get_jm(jm_id:str) -> dict:
+def get_conn(cid:str) -> dict:
     """
-    Get JM
+    Get Connection
 
-    Get info about a Job Manager initialized on server.
+    Get info about a Connection initialized on server.
 
     Parameters
     ----------
-    jm_id : str
-        ID of Job Manager instance.
+    cid: str
+        ID of Connection instance.
 
     Returns
     -------
@@ -280,11 +281,11 @@ def get_jm(jm_id:str) -> dict:
     return res
 
 
-def get_queue(jm_id:str, user:str=None) -> dict:
+def conn_execute(cid:str, command:str) -> dict:
     """
-    Get Queue
+    Execute Command
 
-    Get job queue info for system job manager is connected to.
+    Execute command on given server
 
     Parameters
     ----------
