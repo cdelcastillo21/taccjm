@@ -21,9 +21,9 @@ __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
-# Initialize logger
+# Make log dirs and initialize logger
+make_taccjm_dir()
 logger = logging.getLogger(__name__)
-
 
 def set_host(host:str=TACCJM_HOST, port:int=TACCJM_PORT) -> Tuple[str, int]:
     """
