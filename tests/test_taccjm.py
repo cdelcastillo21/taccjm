@@ -1,5 +1,5 @@
 """
-Tests for taccjm_client
+Tests for taccjm
 
 
 """
@@ -147,7 +147,7 @@ def test_list_jms():
     assert jms[0]['jm_id'] == TEST_JM['jm_id']
 
     # Error in api call
-    with patch('taccjm.taccjm_client.api_call') as mock_api_call:
+    with patch('taccjm.taccjm.api_call') as mock_api_call:
         mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
         with pytest.raises(TACCJMError):
             jms = tc.list_jms()
@@ -188,7 +188,7 @@ def test_get_queue():
     queue = tc.get_queue(TEST_JM['jm_id'], user='all')
 
     # Error
-    with patch('taccjm.taccjm_client.api_call') as mock_api_call:
+    with patch('taccjm.taccjm.api_call') as mock_api_call:
         mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
         with pytest.raises(TACCJMError):
             queue = tc.get_queue(TEST_JM['jm_id'])
@@ -201,7 +201,7 @@ def test_get_allocations():
     alloc = tc.get_allocations(TEST_JM['jm_id'])
 
     # Error
-    with patch('taccjm.taccjm_client.api_call') as mock_api_call:
+    with patch('taccjm.taccjm.api_call') as mock_api_call:
         mock_api_call.side_effect = TACCJMError('Mock TACCJMError')
         with pytest.raises(TACCJMError):
             alloc = tc.get_allocations(TEST_JM['jm_id'])
