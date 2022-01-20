@@ -1245,10 +1245,10 @@ class TACCJobManager():
         job_config['entry_script'] = _get_attr('entry_script', 'entry_script')
         job_config['desc'] = _get_attr('desc','short_desc')
         job_config['queue'] = _get_attr('queue','default_queue')
-        job_config['node_count'] = _get_attr('node_count',
-                'default_node_count')
-        job_config['processors_per_node'] = _get_attr('processors_per_node',
-                'default_processors_per_node')
+        job_config['node_count'] = int(_get_attr('node_count',
+                'default_node_count'))
+        job_config['processors_per_node'] = int(_get_attr('processors_per_node',
+                'default_processors_per_node'))
         job_config['max_run_time'] = _get_attr('max_run_time',
                 'default_max_run_time')
 

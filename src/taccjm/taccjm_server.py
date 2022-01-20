@@ -64,15 +64,9 @@ def handle_custom_exceptions(exception):
     # Log TCJMCommandError message
     logger.error(f"{str(exception)}")
 
-    headers = {}
-    # Add extra to HTTP error
-    attrs = ['system', 'user', 'command' ,'rc', 'stderr', 'stdout']
-    for a in attrs:
-        headers[a] = exception.__getattribute__(a)
-
     # Raise 500 internal server error for unanticipated error
-    err = falcon.HTTPError(falcon.HTTP_500, "Command error", str(exception),
-            headers)
+    err = falcon.HTTPError(falcon.HTTP_500, "Command error", str(exception))
+
     logger.error(str(err))
     raise err
 

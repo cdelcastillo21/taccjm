@@ -86,7 +86,8 @@ class TACCJMError(Exception):
             m = '\n'.join(
                     [f"{k} : {v}" for k,v in res.json()['errors'].items()])
         except Exception as e:
-            m = str(res) + " unable to parse json errors"
+          m = str(res) + "Unable to parse json errors. Raw content:"
+          m += res.content.decode('utf-8')
 
         return m
 
