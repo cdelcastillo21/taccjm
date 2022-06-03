@@ -844,10 +844,11 @@ def deploy_job(
 
     if job_config is not None:
         # Temp file with job config dict for sending request - deleted when closed
-        temp = tempfile.NamedTemporaryFile(mode='w+', dir=local_job_dir)
-        json.dump(job_config, temp)
-        temp.flush()
-        data['job_config_file'] = os.path.basename(temp.name)
+        #temp = tempfile.NamedTemporaryFile(mode='w+', dir=local_job_dir)
+        #json.dump(job_config, temp)
+        #temp.flush()
+        #data['job_config_file'] = os.path.basename(temp.name)
+        data['job_config'] = json.dumps(job_config)
 
     try:
         res = api_call('POST', f"{jm_id}/jobs/deploy", data)
