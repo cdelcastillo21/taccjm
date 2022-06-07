@@ -157,7 +157,12 @@ def list_files(jm_id:str, path:str="."):
     """List files on system"""
     _check_init(jm_id)
 
-    return JM[jm_id].list_files(path=path)
+
+    logger.info(f'Getting files from {path}')
+    files = JM[jm_id].list_files(path=path)
+    _ = [f.pop('ls_str') for f in files]
+
+    return files
 
 
 @hug.get('/{jm_id}/files/peak')
@@ -379,7 +384,11 @@ def list_job_files(jm_id:str, job_id:str, path:str=''):
     """
     _check_init(jm_id)
 
-    return JM[jm_id].ls_job(job_id, path=path)
+    logger.info(f'Getting files from {path}')
+    files = JM[jm_id].ls_job(job_id, path=path)
+    _ = [f.pop('ls_str') for f in files]
+
+    return files
 
 
 @hug.get('/{jm_id}/jobs/{job_id}/files/download')
@@ -466,7 +475,7 @@ def deploy_script(jm_id:str, script_name:str, local_file:str=None):
 
 @hug.put('/{jm_id}/scripts/run')
 def run_script(jm_id:str, script_name:str,
-        job_id:str=None, args:[str]=[]):
+        job_id:str=None, args:hug.types.multiple=[]):
     """Run Script
 
     """
