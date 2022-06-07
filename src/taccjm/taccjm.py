@@ -5,6 +5,8 @@ Client for managing TACCJM hug servers and accessing TACCJM API end points.
 """
 import os
 import pdb
+import re
+from prettytable import PrettyTable
 import json
 import psutil
 import logging
@@ -24,6 +26,70 @@ __license__ = "MIT"
 # Make log dirs and initialize logger
 make_taccjm_dir()
 logger = logging.getLogger(__name__)
+
+def _print_res(res, fields, search=None, match=r'.'):
+    """
+    Print results
+
+    Prints dictionary keys in list `fields` for each dictionary in res,
+    filtering on the search column if specified with regular expression
+    if desired.
+
+    Parameters
+    ----------
+    res : List[dict]
+        List of dictionaries containing response of an AgavePy call
+    fields : List[string]
+        List of strings containing names of fields to extract for each element.
+    search : string, optional
+        String containing column to perform string patter matching on to
+        filter results.
+    match : str, default='.'
+        Regular expression to match strings in search column.
+
+    """
+    # Initialize Table
+    x = PrettyTable()
+    x.field_names = fields
+
+    # Build table from results
+    for r in res:
+        if search is not None:
+            if re.search(match, r[search]) is not None:
+                x.add_row([r[f] for f in fields])
+        else:
+            x.add_row([r[f] for f in fields])
+
+    # Print Table
+    print(x)
+
+def _validate_file_attrs(attrs:List[str]):
+    """list_files utility function to parse valid file attribute lists."""
+    avail_attrs = ['filename', 'st_atime', 'st_gid', 'st_mode', 'st_mtime', 'st_size', 'st_uid']
+    invalid_attrs = [a for a in attrs if a not in avail_attrs]
+    if len(invalid_attrs) > 0:
+        raise ValueError(f'Requested Invalid file attrs {invalid_attrs}')
+    if 'filename' not in attrs:
+        attrs = ['filename'] + attrs
+
+    return attrs
+
+def _filter_files(files, attrs:List[str]=['filename','st_size'], hidden:bool=False,
+        search:str=None, match:str=r'.'):
+    """list_files utility function to filter results"""
+
+    # Filter hidden files
+    if not hidden:
+        files = [f for f in files if not f['filename'].startswith('.')]
+
+    # Filter attrs
+    files = [{ a : f[a] for a in attrs } for f in files]
+
+    if search is not None:
+        files = [f for f in files if re.search(match, f[search]) is not None]
+
+    return files
+
 
 def set_host(host:str=TACCJM_HOST, port:int=TACCJM_PORT) -> Tuple[str, int]:
     """
@@ -339,7 +405,8 @@ def get_allocations(jm_id:str) -> dict:
     return allocations
 
 
-def list_files(jm_id:str, path:str='.') -> List[str]:
+def list_files(jm_id:str, path:str=".", attrs:List[str]=['filename'],
+        hidden:bool=False, search:str=None, match:str=r'.') -> List[dict]:
     """
     List Files
 
@@ -354,18 +421,23 @@ def list_files(jm_id:str, path:str='.') -> List[str]:
 
     Returns
     -------
-    files : list of str
+    files : dict
         List of files/folder in directory
     """
+    attrs = _validate_file_attrs(attrs)
+    if search is not None and search not in attrs:
+        raise ValueError(f'search must be one of attrs {attrs}')
 
     try:
-        res = api_call('GET', f"{jm_id}/files/list", {'path': path})
+        files = api_call('GET', f"{jm_id}/files/list", {'path': path})
     except TACCJMError as e:
         e.message = "list_files error"
         logger.error(e.message)
         raise e
 
-    return res
+    files = _filter_files(files, attrs=attrs, hidden=hidden, search=search, match=match)
+
+    return files
 
 
 def peak_file(jm_id:str, path:str, head:int=-1, tail:int=-1) -> str:
@@ -978,7 +1050,8 @@ def restore_job(jm_id:str, job_id:str) -> dict:
     return res
 
 
-def list_job_files(jm_id:str, job_id:str, path:str='') -> List[dict]:
+def list_job_files(jm_id:str, job_id:str, path:str=".", attrs:List[str]=['filename'],
+        hidden:bool=False, search:str=None, match:str=r'.') -> List[dict]:
     """
     Get info on files in job directory.
 
@@ -1005,16 +1078,21 @@ def list_job_files(jm_id:str, job_id:str, path:str='') -> List[dict]:
             - st_uid   : UID of owner.
             - asbytes  : Output from an ls -lat like command on file.
     """
+    attrs = _validate_file_attrs(attrs)
+    if search is not None and search not in attrs:
+        raise ValueError(f'search must be one of attrs {attrs}')
 
     try:
-        res = api_call('GET',
+        files = api_call('GET',
                 f"{jm_id}/jobs/{job_id}/files/list", {'path': path})
     except TACCJMError as e:
         e.message = "list_job_files error"
         logger.error(e.message)
         raise e
 
-    return res
+    files = _filter_files(files, attrs=attrs, hidden=hidden, search=search, match=match)
+
+    return files
 
 
 def download_job_file(jm_id:str, job_id:str,
@@ -1265,7 +1343,7 @@ def deploy_script(jm_id:str, script_name:str, local_file:str=None):
     return res
 
 
-def run_script(jm_id:str, script_name:str, job_id:str=None, args:[str]=None):
+def run_script(jm_id:str, script_name:str, job_id:str=None, args:List[str]=None):
     """
     Run Script
 

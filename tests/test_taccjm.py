@@ -213,7 +213,8 @@ def test_list_files():
     # Successful return - Get files in parent dir of jobs/apps/trash dir
     dirs = ['jobs', 'apps', 'trash']
     root_jm_dir = posixpath.dirname(TEST_JM['apps_dir'])
-    files = tc.list_files(TEST_JM['jm_id'], path=root_jm_dir)
+    files = tc.list_files(TEST_JM['jm_id'], path=root_jm_dir,
+            attrs=['filename','st_mode'])
     assert [d in [f['filename'] for f in files] for d in dirs]
     assert all([stat.S_ISDIR(f['st_mode']) for f in files])
 
