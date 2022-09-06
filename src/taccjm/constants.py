@@ -17,40 +17,14 @@ TACCJM_HOST = 'localhost'
 
 # Basic HPC Application Template
 
-# Example Project Config (.ini) file. Values to be added into app/job configs
-CONFIG_TEMPLATE = """[app]
-# These values will be templated into app json file.
-name = template-app
-version = 0.0.0
-short_desc = Template Application
-long_description = Template to build HPC apps.
-
-# Assume we are using this app on TACC stampede2
-queue = development
-
-[job]
-# Can also specify job parameters here
-desc = A test run of the template hpc application
-
-# Note job queue may change depending on what system application is on
-queue = development
-
-# Test input file from local system to send to job
-input = input.txt
-
-# Test job parameter to be passed to job run
-parameter = 1
-"""
-
-# Example APP and JOB configs, with jinja template string patterns
-APP_TEMPLATE = {'name': '{{ app.name }}--{{ app.version }}',
-                'short_desc': '{{ app.short_desc }}',
-                'long_desc':  '{{ app.long_desc }}',
+# Example APP and JOB configs
+APP_TEMPLATE = {'name': 'template-app',
+                'short_desc': 'Template Application',
+                'long_desc':  'Template to build HPC Apps',
                 'default_node_count': 1,
                 'default_processors_per_node': 10,
-                'default_memory_per_node': '1',
                 'default_max_run_time': '00:10:00',
-                'default_queue': '{{ app.queue }}',
+                'default_queue': 'development',
                 'entry_script': 'run.sh',
                 'inputs': [{'name': 'input1',
                             'label': 'Input argument',
@@ -61,16 +35,16 @@ APP_TEMPLATE = {'name': '{{ app.name }}--{{ app.version }}',
                 'outputs': [{'name': 'output1',
                              'label': 'Output',
                              'desc': 'Output produced by application.'}]}
-JOB_TEMPLATE = {'name': '{{ app.name }}-job-test',
-                'app': '{{ app.name }}--{{ app.version}}',
-                'desc': '{{ job.desc }}',
-                'queue': '{{ job.queue }}',
+JOB_TEMPLATE = {'name': 'template-app-job-test',
+                'app': 'template-app',
+                'desc': 'A test run of the tempalte hpc application.',
+                'queue': 'development',
                 'node_count': 1,
                 'processors_per_node': 2,
                 'memory_per_node': '1',
                 'max_run_time': '00:01:00',
-                'inputs': {'input1': '{{ job.input }}'},
-                'parameters': {'param1': '{{ job.parameter }}'}}
+                'inputs': {'input1': 'input.txt'},
+                'parameters': {'param1': '1'}}
 
 # Example of an application entry point script.
 APP_SCRIPT_TEMPLATE = """#### BEGIN SCRIPT LOGIC

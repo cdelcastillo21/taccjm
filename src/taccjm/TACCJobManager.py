@@ -73,7 +73,7 @@ class TACCJobManager():
     deploy_app
     get_jobs
     get_job
-    deploy_job 
+    deploy_job
     submit_job
     cancel_job
     remove_job
@@ -161,7 +161,7 @@ class TACCJobManager():
         self.python_path = self._execute_command('which python')
 
 
-    def _execute_command(self, cmnd) -> None:
+    def _execute_command(self, cmnd, wait=True) -> None:
         """
         Executes a shell command through ssh on a TACC resource.
 
@@ -181,17 +181,20 @@ class TACCJobManager():
         TJMCommandError
             If command executed on TACC resource returns non-zero return code.
         """
+
+        transport = self._client.get_transport()
         try:
-            stdin, stdout, stderr = self._client.exec_command(cmnd)
+            channel = transport.open_session()
         except SSHException as ssh_error:
             # Will only occur if ssh connection is broken
             msg = "TACCJM ssh connection error: {ssh_error.__str__()}"
             logger.error(msg)
             raise ssh_error
 
-        out = stdout.read().decode('utf-8')
-        err = stderr.read().decode('utf-8')
-        rc = stdout.channel.recv_exit_status()
+        channel.exec_command(cmnd)
+        rc = channel.recv_exit_status()
+        out = channel.recv(1000000).decode('utf-8')
+        err = channel.recv_stderr(1000000).decode('utf-8')
 
         if rc!=0:
             # Build base TJMCommand Error, only place this should be done
@@ -278,14 +281,14 @@ class TACCJobManager():
 
         # Add paths of job inputs (transferred to job dir) as argument
         for arg, path in job_config['inputs'].items():
-            job_args[arg] = '/'.join([job_config['job_dir'],
+            job_args[arg] = '/'.join([job_config['job_dir'], 'inputs',
                                       os.path.basename(path)])
 
         # Add on parameters passed to job
         job_args.update(job_config['parameters'])
 
         # Create list of arguments to pass as env variables to job
-        export_list = [""]
+        export_list = [f"export TACCJM_APPID={job_config['app']}"]
         for arg, value in job_args.items():
             # wrap with single quotes if needed
             value = str(value)
@@ -294,7 +297,8 @@ class TACCJobManager():
             export_list.append(f"export {arg}={value}")
 
         # Parse final submit script
-        entry_path = f"{job_config['job_dir']}/{job_config['entry_script']}"
+        entry_path = f"{job_config['job_dir']}/{job_config['app']}"
+        entry_path += f"/{job_config['entry_script']}"
         submit_script = (
             header                                 # set SBATCH params
             + f"\ncd {job_config['job_dir']}\n\n"  # cd to job directory
@@ -1031,7 +1035,6 @@ class TACCJobManager():
             app_config:dict=None,
             local_app_dir:str='.',
             app_config_file:str="app.json",
-            proj_config_file:str="project.ini",
             overwrite:bool=False,
             **kwargs) -> dict:
         """
@@ -1046,14 +1049,11 @@ class TACCJobManager():
         app_config : dict, default=None
             Dictionary containing app config. If None specified, then app
             config will be read from file specified at
-            local_app_dir/app_config_file, with templated arguments filled in
-            from the project config file at local_app_dir/proj_config_file
+            local_app_dir/app_config_file.
         local_app_dir: str, default='.'
             Directory containing application to deploy.
         app_config_file: str, default='app.json'
             Path relative to local_app_dir containing app config json file.
-        proj_config_file: str, default="project.ini"
-            Path relative to local_app_dir containing project .ini config file.
         overwrite: bool, default=False
             Whether to overwrite application if it already exists in
             application directory.
@@ -1075,13 +1075,12 @@ class TACCJobManager():
 
         # Load templated app configuration
         if app_config is None:
-            app_config_path = os.path.join(local_app_dir, app_config_file)
-            proj_config_path = os.path.join(local_app_dir, proj_config_file)
-            app_config = load_templated_json_file(app_config_path,
-                    proj_config_path)
+            with open(os.path.join(local_app_dir, app_config_file), 'r') as fp:
+                app_config = json.load(fp)
+
 
         # Update with kwargs
-        app_config.update(kwargs)
+        app_config.update(**kwargs)
 
         # Get current apps already deployed
         cur_apps = self.get_apps()
@@ -1175,18 +1174,16 @@ class TACCJobManager():
             job_config:dict=None,
             local_job_dir:str='.',
             job_config_file:str='job.json',
-            proj_config_file:str='project.ini',
             stage:bool=True,
             **kwargs) -> dict:
         """
         Setup job directory on supercomputing resources. If job_config is not
         specified, then it is parsed from the json file found at
-        local_job_dir/job_config_file, with jinja templated values from the
-        local_job_dir/proj_config_file substituted in accordingly. In either
-        case, values found in dictionary or in parsed json file can be
-        overrided by passing keyword arguments. Note for dictionary values,
-        only the specific keys in the dictionary value specified will be
-        overwritten in the existing dictionary value, not the whole dictionary.
+        local_job_dir/job_config_file. In either case, values found in
+        dictionary or in parsed json file can be overrided by passing keyword
+        arguments. Note for dictionary values, only the specific keys in the
+        dictionary value specified will be overwritten in the existing
+        dictionary value, not the whole dictionary.
 
         Parameters
         ----------
@@ -1199,11 +1196,6 @@ class TACCJobManager():
         job_config_file : str, default='job.json'
             Path, relative to local_job_dir, to job config json file. File
             only read if job_config dictionary not given.
-        proj_config_file : str, default='project.ini'
-            Path, relative to local_job_dir, to project config .ini file. Only
-            used if job_config not specified. If used, jinja is used to
-            substitue values found in config file into the job json file.
-            Useful for templating jobs.
         stage : bool, default=False
             If set to True, stage job directory by creating it, moving
             application contents, moving job inputs, and writing submit_script
@@ -1223,14 +1215,12 @@ class TACCJobManager():
         ------
         """
         # Load from json file if job conf dictionary isn't specified
-        # Overwrite job_config loaded with kwargs keyword arguments if specified
         if job_config is None:
-            job_config_path = os.path.join(local_job_dir, job_config_file)
-            proj_config_path = os.path.join(local_job_dir, proj_config_file)
-            job_config = load_templated_json_file(
-                    job_config_path, proj_config_path, **kwargs)
-        else:
-            job_config = update_dic_keys(job_config, **kwargs)
+            with open(os.path.join(local_job_dir, job_config_file), 'r') as fp:
+                job_config = json.load(fp)
+
+        # Overwrite job_config loaded with kwargs keyword arguments if specified
+        job_config = update_dic_keys(job_config, **kwargs)
 
         # Get default arguments from deployed application
         app_config = self.get_app(job_config['app'])
@@ -1283,7 +1273,7 @@ class TACCJobManager():
                 raise e
 
             # Copy app contents to job directory
-            cmnd = 'cp -r {apps_dir}/{app}/* {job_dir}/'.format(
+            cmnd = 'cp -r {apps_dir}/{app} {job_dir}/{app}'.format(
                     apps_dir=self.apps_dir,
                     app=job_config['app'],
                     job_dir=job_dir)
@@ -1293,13 +1283,16 @@ class TACCJobManager():
                 err(t, "Error copying app assets to job dir")
 
             # Send job input data to job directory
-            for arg, path in job_config['inputs'].items():
-                arg_dest_path = posixpath.join(job_dir,
-                        posixpath.basename(path))
-                try:
-                    self.upload(path, arg_dest_path)
-                except Exception as e:
-                    err(e, f"Error staging input {arg} with path {path}")
+            if len(job_config['inputs'])>0:
+                inputs_path = posixpath.join(job_dir, 'inputs')
+                self._mkdir(inputs_path)
+                for arg, path in job_config['inputs'].items():
+                    arg_dest_path = posixpath.join(inputs_path,
+                            posixpath.basename(path))
+                    try:
+                        self.upload(path, arg_dest_path)
+                    except Exception as e:
+                        err(e, f"Error staging input {arg} with path {path}")
 
             # Parse and write submit_script to job_directory, and chmod it
             submit_script_path = f"{job_dir}/submit_script.sh"

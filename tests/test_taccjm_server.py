@@ -281,7 +281,7 @@ def test_jobs():
     job_config['inputs']['input1'] = os.path.join(local_app_dir, 'input.txt')
     os.system(f"echo hello world > {job_config['inputs']['input1']}")
     response = hug.test.post(taccjm_server, f"{test_jm}/jobs/deploy",
-            {'job_config':job_config, 'local_job_dir':local_app_dir})
+            {'job_config':json.dumps(job_config), 'local_job_dir':local_app_dir})
     assert response.status == '200 OK'
     job_id = response.data['job_id']
 
@@ -357,7 +357,7 @@ def test_jobs():
     with patch.object(TACCJobManager, 'deploy_job',
             side_effect=ValueError('Mock value error.')):
         response = hug.test.post(taccjm_server, f"{test_jm}/jobs/deploy",
-                {'job_config':job_config})
+                {'job_config':json.dumps(job_config)})
         assert response.status == '400 Bad Request'
 
     # Mock write job data errors

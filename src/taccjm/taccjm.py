@@ -733,7 +733,6 @@ def deploy_app(
         app_config:dict=None,
         local_app_dir:str='.',
         app_config_file:str='app.json',
-        proj_config_file:str='project.ini',
         overwrite:bool=False,
         **kwargs):
     """
@@ -752,11 +751,6 @@ def deploy_app(
         system.
     app_config_file: str, default='app.json'
         Path relative to local_app_dir containing app config json file.
-    proj_config_file : str, default='project.ini'
-        Path, relative to local_app_dir, to project config .ini file. Only
-        used if job_config not specified. If used, jinja is used to
-        substitue values found in config file into the job json file.
-        Useful for templating jobs.
     overwrite : bool, default=False
         Whether to overwrite application on remote system if it already exists
         (same application name and version).
@@ -774,7 +768,6 @@ def deploy_app(
     # Build data for request. Some of these may be None/default
     data = {'local_app_dir':os.path.abspath(local_app_dir),
             'app_config_file':app_config_file,
-            'proj_config_file':proj_config_file,
             'overwrite':overwrite}
 
     # TODO: Check for valid kwargs params to update for app
@@ -857,14 +850,12 @@ def deploy_job(
         job_config:dict=None,
         local_job_dir:str='.',
         job_config_file:str='job.json',
-        proj_config_file:str='project.ini',
         stage:bool=True,
         **kwargs) -> dict:
     """
     Setup job directory on supercomputing resources. If job_config is not
     specified, then it is parsed from the json file found at
-    local_job_dir/job_config_file, with jinja templated values from the
-    local_job_dir/proj_config_file substituted in accordingly. In either
+    local_job_dir/job_config_file. In either
     case, values found in dictionary or in parsed json file can be
     overrided by passing keyword arguments. Note for dictionary values,
     only the specific keys in the dictionary value specified will be
@@ -881,11 +872,6 @@ def deploy_job(
     job_config_file : str, default='job.json'
         Path, relative to local_job_dir, to job config json file. File
         only read if job_config dictionary not given.
-    proj_config_file : str, default='project.ini'
-        Path, relative to local_job_dir, to project config .ini file. Only
-        used if job_config not specified. If used, jinja is used to
-        substitue values found in config file into the job json file.
-        Useful for templating jobs.
     stage : bool, default=False
         If set to True, stage job directory by creating it, moving
         application contents, moving job inputs, and writing submit_script
@@ -908,7 +894,6 @@ def deploy_job(
     # Build data for request. Some of these may be None/default
     data = {'local_job_dir':local_job_dir,
             'job_config_file':job_config_file,
-            'proj_config_file':proj_config_file,
             'stage':stage}
 
     # TODO: Check for valid kwargs params to update for job

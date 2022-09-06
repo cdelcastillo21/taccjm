@@ -481,8 +481,8 @@ def test_jobs():
         _ = tc.get_job(TEST_JM['jm_id'], 'bad_job')
 
     # Error - Deploy job with bad path specified
-    with pytest.raises(FileNotFoundError):
-        _ = tc.deploy_job(TEST_JM['jm_id'], job_config=job_config,
+    with pytest.raises(TACCJMError):
+        _ = tc.deploy_job(TEST_JM['jm_id'], job_config=None,
                 local_job_dir='/bad/path', stage=False, desc='Test Job')
 
     # Error - Write job file to bad dest_dir

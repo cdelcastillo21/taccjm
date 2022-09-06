@@ -90,7 +90,7 @@ def test_init():
     assert JM._execute_command('echo test') == 'test\n'
 
      # Tests command that fails due to SSH error, which we mock
-    with patch.object(SSHClient2FA, 'exec_command',
+    with patch.object(SSHClient2FA, 'get_transport',
             side_effect=SSHException('Mock ssh exception')):
         with pytest.raises(SSHException):
              JM._execute_command('echo test')
@@ -791,11 +791,20 @@ def test_job_files():
     job = JM.deploy_job(local_job_dir=test_app, stage=True,
             email='test@test.com', allocation=ALLOCATION)
 
-    # List job files - Run script, input file, and submit script should exist
+    # List job files - Structure should have job config, submit script, and
+    # folders for app contents and inputs in folders
     files = [f['filename'] for f in JM.ls_job(job['job_id'])]
-    input_file = os.path.basename(job['inputs']['input1'])
-    job_files = ['run.sh', 'submit_script.sh', input_file]
+    job_files = ['job.json', 'submit_script.sh', app['name'], 'inputs']
     assert all([j in files for j in job_files])
+
+    # Assert inputs in input directory
+    files = [f['filename'] for f in JM.ls_job(f"{job['job_id']}/inputs")]
+    input_file = os.path.basename(job['inputs']['input1'])
+    assert input_file in files
+
+    # Assert app entry script in job directory
+    files = [f['filename'] for f in JM.ls_job(f"{job['job_id']}/{app['name']}")]
+    assert app['entry_script'] in files
 
     # Peak at submit script
     submit_script = JM.peak_job_file(job['job_id'], 'submit_script.sh', head=1)
