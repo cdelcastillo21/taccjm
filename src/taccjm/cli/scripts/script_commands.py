@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 
 import click
-import pandas as pd
 from prettytable import PrettyTable
 
 import taccjm.taccjm_client as tjm
