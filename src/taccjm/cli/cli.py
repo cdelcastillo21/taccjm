@@ -11,7 +11,7 @@ from pathlib import Path
 import click
 import pandas as pd
 
-import taccjm.taccjm as tjm
+import taccjm.taccjm_client as tjm
 from taccjm.utils import filter_res
 
 from .files import file_commands as files_cli

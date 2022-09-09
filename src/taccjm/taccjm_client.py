@@ -4,6 +4,7 @@ TACCJM Client
 Client for managing TACCJM hug servers and accessing TACCJM API end points.
 """
 import os
+import sys
 import pdb
 import re
 from prettytable import PrettyTable
@@ -15,7 +16,7 @@ import tempfile
 import subprocess
 from time import sleep
 from getpass import getpass
-from taccjm.constants import *
+from taccjm.constants import make_taccjm_dir, TACCJM_HOST, TACCJM_PORT, TACCJM_SOURCE, TACCJM_DIR
 from typing import List, Tuple
 from taccjm.exceptions import TACCJMError
 
@@ -153,7 +154,7 @@ def find_tjm_processes(start:bool=False, kill:bool=False) -> dict:
     # Strings defining commands
     srv_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f "
     srv_cmd += os.path.join(TACCJM_SOURCE, 'taccjm_server.py')
-    hb_cmd = "python "+os.path.join(TACCJM_SOURCE, 'taccjm_server_heartbeat.py')
+    hb_cmd = f"python {os.path.join(TACCJM_SOURCE, 'taccjm_server_heartbeat.py')}"
     hb_cmd += f" --host={TACCJM_HOST} --port={TACCJM_PORT}"
 
     for proc in psutil.process_iter(['name', 'pid', 'cmdline']):

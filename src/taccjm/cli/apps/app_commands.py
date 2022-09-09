@@ -9,7 +9,7 @@ import click
 import pandas as pd
 from prettytable import PrettyTable
 
-import taccjm.taccjm as tjm
+import taccjm.taccjm_client as tjm
 from taccjm.exceptions import TACCJMError
 from taccjm.utils import create_template_app, filter_res, format_app_dict, format_job_dict
 

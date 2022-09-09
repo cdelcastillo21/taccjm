@@ -10,7 +10,7 @@ import click
 import pandas as pd
 from prettytable import PrettyTable
 
-import taccjm.taccjm as tjm
+import taccjm.taccjm_client as tjm
 from taccjm.utils import filter_res
 
 __author__ = "Carlos del-Castillo-Negrete"

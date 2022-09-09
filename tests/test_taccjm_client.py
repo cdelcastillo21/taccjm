@@ -12,8 +12,8 @@ import posixpath
 from dotenv import load_dotenv
 from unittest.mock import patch
 
-from taccjm import taccjm as tc
-from taccjm.taccjm import TACCJMError
+from taccjm import taccjm_client as tc
+from taccjm.exceptions import TACCJMError
 from taccjm.utils import *
 from taccjm.constants import *
 
