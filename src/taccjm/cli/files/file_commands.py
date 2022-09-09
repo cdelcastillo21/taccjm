@@ -7,8 +7,8 @@ from stat import S_ISDIR
 from pathlib import Path
 
 import click
-import pandas as pd
 from prettytable import PrettyTable
+from datetime import datetime
 
 import taccjm.taccjm_client as tjm
 from taccjm.utils import filter_res
@@ -64,8 +64,10 @@ def _get_files_str(
         o['name'] = x['filename']
         o['is_dir'] = True if S_ISDIR(x['st_mode']) else False
         o['size_bytes'] = x['st_size']
-        o['access_time'] = pd.to_datetime(x["st_atime"], unit="s")
-        o['modified_time'] = pd.to_datetime(x["st_mtime"], unit="s")
+        o['access_time'] = datetime.utcfromtimestamp(
+                x["st_atime"]).strftime('%Y-%m-%d %H:%M:%S')
+        o['modified_time'] = datetime.utcfromtimestamp(
+                x["st_mtime"]).strftime('%Y-%m-%d %H:%M:%S')
         o['uid'] = x['st_uid']
         o['gid'] = x['st_gid']
         return o
@@ -314,6 +316,6 @@ def read(ctx, remote_path, data_type):
     if job_id is None:
         res = tjm.read(jm_id, remote_path, data_type)
     else:
-        res = tjm.read_job_file(jm_id, job_id, path, data_type)
+        res = tjm.read_job_file(jm_id, job_id, remote_path, data_type)
     click.echo(res)
 

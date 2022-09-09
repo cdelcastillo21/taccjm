@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 import click
-import pandas as pd
+from datetime import datetime
 
 import taccjm.taccjm_client as tjm
 from taccjm.utils import filter_res
@@ -183,7 +183,7 @@ def find_server(start, kill):
     res = [{
         "type": x,
         "pid": res[x].info["pid"],
-        "create_time": pd.to_datetime(res[x]._create_time, unit="s"),
+        "create_time": datetime.utcfromtimestamp(res[x]._create_time).strftime('%Y-%m-%d %H:%M:%S'),
     } for x in res.keys()]
     str_res = filter_res(res, ["type", "pid", "create_time"])
     click.echo(str_res)
