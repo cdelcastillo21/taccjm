@@ -1380,3 +1380,4 @@ def empty_trash(jm_id:str, filter_str:str='*') -> None:
     data = {'filter_str': filter_str}
 
     api_call('DELETE', f"{jm_id}/trash/empty", data)
+

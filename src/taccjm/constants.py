@@ -31,10 +31,7 @@ APP_TEMPLATE = {'name': 'template-app',
                             'desc': 'Input to be copied to job dir.'}],
                 'parameters': [{'name': 'param1',
                                 'label': 'Parameter argument',
-                                'desc': 'value to be parsed into run script'}],
-                'outputs': [{'name': 'output1',
-                             'label': 'Output',
-                             'desc': 'Output produced by application.'}]}
+                                'desc': 'value to be parsed into run script'}]}
 JOB_TEMPLATE = {'name': 'template-app-job-test',
                 'app': 'template-app',
                 'desc': 'A test run of the tempalte hpc application.',

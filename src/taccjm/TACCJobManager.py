@@ -145,9 +145,9 @@ class TACCJobManager():
         logger.info(f"Succesfuly connected to {system}")
 
         # Get taccjm working directory, relative to users scratch directory
-        logger.info("Resolving path ${self.SCRATCH_DIR} for user {self.user}")
         self.SCRATCH_DIR = scratch_dir = self._execute_command(
                 f"echo {self.SCRATCH_DIR}").strip()
+        logger.info("Resolved scratch path  to ${self.SCRATCH_DIR} for user {self.user}")
         taccjm_dir = posixpath.join(self.SCRATCH_DIR, working_dir)
 
         # Initialze jobs, apps, scripts, and trash dirs
@@ -155,6 +155,7 @@ class TACCJobManager():
         for d in zip(['jobs_dir', 'apps_dir', 'scripts_dir', 'trash_dir'],
                       ['jobs', 'apps', 'scripts', 'trash']):
             setattr(self, d[0], posixpath.join(taccjm_dir,d[1]))
+            logger.info(f"Initializing directory {getattr(self, d[0])}")
             self._mkdir(getattr(self, d[0]), parents=True)
 
         # Get python path and home dir
@@ -228,7 +229,7 @@ class TACCJobManager():
         try:
             ret = self._execute_command(cmnd)
         except TJMCommandError as tjm_error:
-            tjm_error.message = "_mkdir - Could not create directory"
+            tjm_error.message = f"_mkdir - Could not create directory {path}"
             logger.error(tjm_error.message)
             raise tjm_error
 
