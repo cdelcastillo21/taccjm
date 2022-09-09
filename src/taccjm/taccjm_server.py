@@ -271,7 +271,6 @@ def get_app(jm_id:str, app_id:str):
 def deploy_app(jm_id:str,
                local_app_dir:str='.',
                app_config_file:str="app.json",
-               proj_config_file:str="project.ini",
                overwrite:bool=False) -> dict:
     """Deploy App
 
@@ -285,7 +284,6 @@ def deploy_app(jm_id:str,
     return JM[jm_id].deploy_app(
                 local_app_dir=local_app_dir,
                 app_config_file=app_config_file,
-                proj_config_file=proj_config_file,
                 overwrite=overwrite)
 
 
@@ -314,7 +312,6 @@ def deploy_job(jm_id:str,
                job_config:str=None,
                local_job_dir:str='.',
                job_config_file:str='job.json',
-               proj_config_file:str='project.ini',
                stage:bool=True,
                **kwargs):
     """ Deploy a job to TACC system. """
@@ -326,7 +323,6 @@ def deploy_job(jm_id:str,
     return JM[jm_id].deploy_job(job_config = None if job_config is None else json.loads(job_config),
                                 local_job_dir=local_job_dir,
                                 job_config_file=job_config_file,
-                                proj_config_file=proj_config_file,
                                 stage=stage,
                                 **kwargs)
 

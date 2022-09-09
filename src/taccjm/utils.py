@@ -4,13 +4,15 @@ TACCJobManager Utility Function
 
 """
 
+import pdb
 import os                       # OS system utility functions
+import re
 import json                     # For reading/writing dictionary<->json
 import errno                    # For error messages
 import configparser             # For reading configs
-from jinja2 import Template     # For templating input json files
 from typing import Tuple        # For type hinting
-from taccjm.constants import *  # Library constants
+from taccjm.constants import JOB_TEMPLATE, APP_TEMPLATE, APP_SCRIPT_TEMPLATE
+from prettytable import PrettyTable
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -45,59 +47,10 @@ def update_dic_keys(d:dict, **kwargs) -> dict:
 
     return d
 
-
-def load_templated_json_file(path:str, config_path:str, **kwargs) -> dict:
-    """
-    Loads a local json config found at path and templates it using jinja with
-    the values found in config ini file found at config_path . For example, if
-    json file contains `{{ a.b }}`, and `config={'a':{'b':1}}`, then `1` would
-    be substituted in (note nesting). All extra keyword arguments will be
-    interpreted as job config overrides.
-
-    Parameters
-    ----------
-    path : str
-        Local path to json file.
-    config_path : str
-        Path to config file (.ini)
-    **kwargs : dict, optional
-        Any extra keyword arguments will be interpreted as items to override in
-        from the loaded json config file.
-
-    Returns
-    -------
-    json_config : dict
-        json config from file templated appropriately.
-
-    Raises
-    ------
-    FileNotFoundError
-        if json or config file do not exist.
-
-    """
-    # Check if it exists - If it doesn't config parser won't error
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT),
-                config_path)
-
-    # Read project config file
-    config_parse = configparser.ConfigParser()
-    config_parse.read(config_path)
-    config = config_parse._sections
-
-    with open(path) as file_:
-        json_config = json.loads(Template(file_.read()).render(config))
-
-    # Treat kwargs as override parameters
-    json_config = update_dic_keys(json_config, **kwargs)
-
-    # Return json_config
-    return json_config
-
-
 def create_template_app(name:str,
         dest_dir:str='.',
-        app_template:dict=APP_TEMPLATE,
+        app_config:dict=APP_TEMPLATE,
+        job_config:dict=JOB_TEMPLATE,
         script:str=APP_SCRIPT_TEMPLATE,
         **kwargs) -> Tuple[dict, dict]:
     """
@@ -126,7 +79,10 @@ def create_template_app(name:str,
         If application with given name already exists in local directory.
     """
     # Update app template dictionary with passed in arguments
-    app_template.update(kwargs)
+    app_config.update(kwargs)
+    app_config['name'] = name
+    job_config['app'] = name
+    job_config['name'] = f'{name}-test-job'
 
     # Create application directory - Fails if already exists
     app_dir = os.path.join(dest_dir, name)
@@ -136,29 +92,84 @@ def create_template_app(name:str,
     assets_dir = os.path.join(app_dir, 'assets')
     os.mkdir(assets_dir)
 
-    # Write project config file
-    config_path = os.path.join(app_dir, 'project.ini')
-    with open(config_path, 'w') as f:
-        f.write(CONFIG_TEMPLATE)
-
     # Write app config json file
     app_config_path = os.path.join(app_dir, 'app.json')
     with open(app_config_path, 'w') as f:
-        json.dump(app_template, f)
+        json.dump(app_config, f)
 
     # Write job config json file
     job_config_path = os.path.join(app_dir, 'job.json')
     with open(job_config_path, 'w') as f:
-        json.dump(JOB_TEMPLATE, f)
+        json.dump(job_config, f)
 
     # Write entry point script
     with open(os.path.join(assets_dir, 'run.sh'), 'w') as f:
-        f.write(APP_SCRIPT_TEMPLATE)
-
-    # Load in app and job config from templates as they were created
-    app_config = load_templated_json_file(app_config_path, config_path)
-    job_config = load_templated_json_file(job_config_path, config_path)
+        f.write(script)
 
     return (app_config, job_config)
 
+
+def filter_res(res, fields, search=None, match=r".", filter_fun=None):
+    """
+    Print results
+
+    Prints dictionary keys in list `fields` for each dictionary in res,
+    filtering on the search column if specified with regular expression
+    if desired.
+
+    Parameters
+    ----------
+    res : List[dict]
+        List of dictionaries containing response of an AgavePy call
+    fields : List[string]
+        List of strings containing names of fields to extract for each element.
+    search : string, optional
+        String containing column to perform string patter matching on to
+        filter results.
+    match : str, default='.'
+        Regular expression to match strings in search column.
+    output_file : str, optional
+        Path to file to output result table to.
+
+    """
+    # Initialize Table
+    x = PrettyTable(float_format="0.2")
+    x.field_names = fields
+
+    # Build table from results
+    filtered_res = []
+    for r in res:
+        if filter_fun is not None:
+            r = filter_fun(r)
+        if search is not None:
+            if re.search(match, r[search]) is not None:
+                x.add_row([r[f] for f in fields])
+                filtered_res.append(dict([(f, r[f]) for f in fields]))
+        else:
+            x.add_row([r[f] for f in fields])
+            filtered_res.append(dict([(f, r[f]) for f in fields]))
+
+    return str(x)
+
+def format_app_dict(app):
+    res = [{'attr':x, 'val': app[x]} for x in app.keys()]
+    def _filter_fun(x):
+        if x['attr'] in ['inputs', 'parameters', 'outputs']:
+            if len(x['val']) > 0:
+                x['val'] = filter_res(x['val'], ['name', 'desc'])
+            else:
+                x['val'] = ''
+        return x
+    str_res = filter_res(res, ['attr', 'val'], filter_fun=_filter_fun)
+    return str_res
+
+def format_job_dict(job):
+    res = [{'attr':x, 'val': job[x]} for x in job.keys()]
+    def _filter_fun(x):
+        if x['attr'] in ['inputs', 'parameters']:
+            val_list = [{'name': x[0], 'value':x[1]} for x in x['val'].items()]
+            x['val'] = filter_res(val_list, ['name', 'value'])
+        return x
+    str_res = filter_res(res, ['attr', 'val'], filter_fun=_filter_fun)
+    return str_res
 

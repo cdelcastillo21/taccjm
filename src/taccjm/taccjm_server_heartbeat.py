@@ -4,22 +4,27 @@ import begin
 import logging
 import datetime
 import numpy as np
-from taccjm import taccjm_client as tc
+from pathlib import Path
 from threading import Timer
 from contextlib import contextmanager
+from pythonjsonlogger import jsonlogger
+import sys
+
+from taccjm import taccjm_client as tc
 
 global stats
 stats = np.array([])
-logger = logging.getLogger()
-
+_logger = None
 
 def get_stats():
     global stats
-    msg = 'HEARTBEAT STATS\n'
-    msg += '  Num calls = ' + str(len(stats)) + '\n'
-    msg += '  Average time per call= ' + str(stats.mean()) + ' s\n'
-    msg += '  Std Dev time = ' + str(stats.std()) + ' s\n'
-    return msg
+    num_calls = len(stats)
+    avg_time = stats.mean()
+    std_dev = stats.std()
+    msg = f'HEARTBEAT STATS\n\rNum calls = {num_calls}\n\t'
+    msg += f'Average time per call= {avg_time}s\n\tStd Dev time = {std_dev}s\n'
+    _logger.info(msg, extra={'num_calls':num_calls,
+                             'avg_time':avg_time, 'std_dev':std_dev})
 
 
 @contextmanager
@@ -40,22 +45,21 @@ def heartbeat():
     try:
         global stats
         heartbeat_ts = datetime.datetime.fromtimestamp(time.time()).strftime('%Y%m%d_%H%M%S')
-        logger.info('Heartbeat call at ' + heartbeat_ts)
+        _logger.info('Stearting heartbeat list_jm call')
         with timing('list_jm') as api_time:
-            res = tc.list_jm()
+            res = tc.list_jms()
         stats = np.append(stats, api_time()[1])
-        logger.info('Succesful call with response ' + res.text)
-        logger.info('    Timing [%s]: %.6f s' % api_time())
-        logger.info(get_stats())
+        _logger.info('%s Done in %.6f s' % api_time(), extra={'api_time':api_time()[1], 'jms':res})
+        get_stats()
     except Exception as e:
-        msg = 'Heartbeat failed to make list_jm call'
-        logger.error(msg)
+        msg = f'Heartbeat failed to make list_jm call {e}'
+        _logger.error(msg)
 
 
 @begin.start(auto_convert=True)
 def run(host: 'Host where server is running' = 'localhost',
         port: 'Port on which server is listening on' = '8221',
-        hearbeat_interval: 'Time in minutes between heartbeats' = 5.0):
+        heartbeat_interval: 'Time in minutes between heartbeats' = 5.0):
     """
     Run
 
@@ -74,12 +78,24 @@ def run(host: 'Host where server is running' = 'localhost',
     -------
 
     """
-    # Turn on logging
-    logging.basicConfig(level=logging.INFO)
+    global _logger
+    _log_path = Path.home() / ".taccjm" / f"taccjm_heartbeat_{host}_{port}.log"
+    _logger = logging.getLogger(__name__)
+    _logHandler = logging.FileHandler(_log_path)
+    _formatter = jsonlogger.JsonFormatter(
+            '%(asctime)s %(name)s - %(levelname)s:%(message)s')
+    _logHandler.setFormatter(_formatter)
+    _logger.addHandler(_logHandler)
+    _logger.setLevel(logging.DEBUG)
 
     # Set endpoint for taccjm server
+    _logger.info(f"Setting host and port to ({host}, {port})",
+                 extra={'host': host, 'port':port})
     tc.set_host(host=host, port=port)
 
     # Start heartbeat timer
-    t = RepeatingTimer(hearbeat_interval*60.0, heartbeat)
+    h_int = heartbeat_interval*60.0
+    _logger.info(f"Starting heartbeat every {h_int}s = {heartbeat_interval}m",
+                 extra={'host': host, 'port':port})
+    t = RepeatingTimer(h_int, heartbeat)
     t.start()
