@@ -30,7 +30,7 @@ on TACC systems as well, you will need a valid allocation associated with your u
 Installation
 ============
 
-To install use pip:
+To install use `pip <https://pypi.org/project/taccjm/>`_:
 
 .. code-block:: shell
 
