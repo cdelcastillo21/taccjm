@@ -17,31 +17,41 @@ Requirements
 ============
 
 Using taccjm requires a TACC account enable with 2-fa. In order to run jobs
-on TACC systems as well, you will need a valid allocation associated with your
-user ID. Finally, your TACC user account needs to have 2-factor authentication
-enabled. See the `TACC user portal <https://portal.tacc.utexas.edu/>`_
-
-Installation
-============
-
-To install use pip:
-
-.. code-block:: python
-
-        pip install taccjm
-
-A docker image for taccjm is in development and will hopefully be available in a future release.
-
-Requirements
-============
-
-A `TACC user portal <https://portal.tacc.utexas.edu/>`_ is required to use the TACC Job Manager library. Furthermore allocations on one of the available TACC HPC systems is required to run jobs.
+on TACC systems as well, you will need a valid allocation associated with your user ID enabled. See the `TACC user portal <https://portal.tacc.utexas.edu/>`_
 
 .. warning::
 
         TACC Job Manager allows you to programmatically access TACC resources.
         Please be responsible in your access and usage of TACC resources.
-        Review the [TACC Usage Policy](https://portal.tacc.utexas.edu/tacc-usage-policy) carefully before using any TACC resources.
+        Review the `TACC Usage Policy <https://portal.tacc.utexas.edu/tacc-usage-policy>`_ carefully before using any TACC resources.
+
+
+
+Installation
+============
+
+To install use `pip <https://pypi.org/project/taccjm/>`_:
+
+.. code-block:: shell
+
+        pip install taccjm
+
+Alternatively the `latest docker image <https://hub.docker.com/r/clos21/taccjm>`_ can be pulled using 
+
+.. code-block:: shell
+
+        docker pull clos21/taccjm
+
+CLI
+===
+
+The easiest way to use TACC Job Manager is through the Command Line Interface (CLI). 
+
+.. image:: docs/vids/help.gif
+  :width: 700
+  :alt: Navigating the CLI with help menus.
+
+===
 
 This project has been set up using PyScaffold 4.0.2. For details and usage
 information on PyScaffold see https://pyscaffold.org/.
