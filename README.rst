@@ -26,7 +26,6 @@ on TACC systems as well, you will need a valid allocation associated with your u
         Review the `TACC Usage Policy <https://portal.tacc.utexas.edu/tacc-usage-policy>` carefully before using any TACC resources.
 
 
-
 Installation
 ============
 
@@ -47,7 +46,33 @@ CLI
 
 The easiest way to use TACC Job Manager is through the Command Line Interface (CLI). 
 
+--------
+CLI Help
+--------
+
+The CLI provides a useful set of help menus to navigate the commands available and how to use them.
+
 .. image:: docs/vids/help.gif
+  :width: 700
+  :alt: Navigating the CLI with help menus.
+
+------------
+Initializing 
+------------
+
+Initializing a TACC connection requires logging in, but once logged, the connection is kept alive by the TACC Job Manager server that runs locally on your machine.
+
+.. image:: docs/vids/init.gif
+  :width: 700
+  :alt: Navigating the CLI with help menus.
+
+--------------------
+Multiple Connections
+---------------------
+
+Multiple connections to TACC resources can be established, however note that if more than one job manager is available, all subsequent commands will require an ID to be passed to specify which Job Manager needs to execute a command.
+
+.. image:: docs/vids/multiple.gif
   :width: 700
   :alt: Navigating the CLI with help menus.
 
