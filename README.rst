@@ -23,19 +23,19 @@ on TACC systems as well, you will need a valid allocation associated with your u
 
         TACC Job Manager allows you to programmatically access TACC resources.
         Please be responsible in your access and usage of TACC resources.
-        Review the `TACC Usage Policy <https://portal.tacc.utexas.edu/tacc-usage-policy>` carefully before using any TACC resources.
+        Review the `TACC Usage Policy <https://portal.tacc.utexas.edu/tacc-usage-policy>`_ carefully before using any TACC resources.
 
 
 Installation
 ============
 
-To install use pip:
+To install use `pip <https://pypi.org/project/taccjm/>`_:
 
 .. code-block:: shell
 
         pip install taccjm
 
-Alternatively the `latest docker image <https://hub.docker.com/r/clos21/taccjm>` can be pulled using 
+Alternatively the `latest docker image <https://hub.docker.com/r/clos21/taccjm>`_ can be pulled using 
 
 .. code-block:: shell
 
