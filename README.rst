@@ -68,7 +68,7 @@ Initializing a TACC connection requires logging in, but once logged, the connect
 
 --------------------
 Multiple Connections
----------------------
+--------------------
 
 Multiple connections to TACC resources can be established, however note that if more than one job manager is available, all subsequent commands will require an ID to be passed to specify which Job Manager needs to execute a command.
 
