@@ -60,7 +60,7 @@ The CLI provides a useful set of help menus to navigate the commands available a
 Initializing 
 ------------
 
-Initializing a TACC connection requires logging in, but once logged, the connection is kept alive by the TACC Job Manager server that runs locally on your machine.
+Initializing a TACC connection requires logging in, but once logged, the connection is kept alive by the TACC Job Manager server that runs locally on your machine. Note the JM_ID is a user specified value (to be made an optional parameter in later versions).
 
 .. image:: docs/vids/init.gif
   :width: 700
