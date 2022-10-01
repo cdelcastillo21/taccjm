@@ -9,11 +9,14 @@ TODO: Add more extensive logging
 import pdb
 import os
 import hug
+import sys
 import falcon
 import logging
 import json
+from pythonjsonlogger import jsonlogger
 from typing import Union, List, Tuple
 from taccjm.TACCJobManager import TACCJobManager, TJMCommandError
+
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -21,7 +24,13 @@ __license__ = "MIT"
 
 # Initialize server logger
 logger = logging.getLogger()
-logging.basicConfig(level=logging.DEBUG)
+logHandler = logging.StreamHandler(sys.stdout)
+formatter = jsonlogger.JsonFormatter('%(asctime)s %(name)s - %(levelname)s:%(message)s')
+logHandler.setFormatter(formatter)
+logger.addHandler(logHandler)
+logger.setLevel(logging.DEBUG)
+logger.info('TACC Job Manager Server started.')
+
 
 # Dictionary containing all job manager instances being managed
 # Note there could be multiple instance if managing more than one system

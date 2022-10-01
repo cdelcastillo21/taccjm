@@ -8,7 +8,6 @@ import os
 import pdb
 import json
 import stat
-import psutil
 import pytest
 import posixpath
 from dotenv import load_dotenv

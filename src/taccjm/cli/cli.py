@@ -78,8 +78,6 @@ def list(search, match):
     res = tjm.list_jms()
     str_res = filter_res(res, _jm_fields, search=search, match=match)
     click.echo(str_res)
-
-
 @cli.command(short_help="Initialize a TACC connection.")
 @click.argument("jm_id", )
 @click.argument("system")
@@ -182,10 +180,11 @@ def find_server(start, kill):
     res = tjm.find_tjm_processes(start, kill)
     res = [{
         "type": x,
-        "pid": res[x].info["pid"],
-        "create_time": datetime.utcfromtimestamp(res[x]._create_time).strftime('%Y-%m-%d %H:%M:%S'),
+        "pid": res[x].pid,
     } for x in res.keys()]
-    str_res = filter_res(res, ["type", "pid", "create_time"])
+        # "create_time": datetime.utcfromtimestamp(res[x]._create_time).strftime('%Y-%m-%d %H:%M:%S'),
+    # str_res = filter_res(res, ["type", "pid", "create_time"])
+    str_res = filter_res(res, ["type", "pid"])
     click.echo(str_res)
 
 

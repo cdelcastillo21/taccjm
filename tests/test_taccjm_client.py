@@ -6,7 +6,6 @@ Tests for taccjm
 import os
 import pdb
 import stat
-import psutil
 import pytest
 import posixpath
 from dotenv import load_dotenv

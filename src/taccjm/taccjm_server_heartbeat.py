@@ -48,6 +48,16 @@ def heartbeat():
         _logger.info('Stearting heartbeat list_jm call')
         with timing('list_jm') as api_time:
             res = tc.list_jms()
+            for jm_id in [j['jm_id'] for j in res]:
+                _logger.info(f'Checking JM {jm_id} allocations.')
+                try:
+                    allocs = tc.get_allocations(jm_id)
+                    for a in allocs:
+                        _logger.info(f"Found allocation {a['name']}",
+                                     extra={'SUs':a['service_units'],
+                                            'expiration':a['exp_date']})
+                except Exception as e:
+                    _logger.info(f'Error checking allocations {e}')
         stats = np.append(stats, api_time()[1])
         _logger.info('%s Done in %.6f s' % api_time(), extra={'api_time':api_time()[1], 'jms':res})
         get_stats()
@@ -59,7 +69,7 @@ def heartbeat():
 @begin.start(auto_convert=True)
 def run(host: 'Host where server is running' = 'localhost',
         port: 'Port on which server is listening on' = '8221',
-        heartbeat_interval: 'Time in minutes between heartbeats' = 5.0):
+        heartbeat_interval: 'Time in minutes between heartbeats' = 0.5):
     """
     Run
 
