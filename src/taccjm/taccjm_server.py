@@ -28,7 +28,7 @@ logHandler = logging.StreamHandler(sys.stdout)
 formatter = jsonlogger.JsonFormatter('%(asctime)s %(name)s - %(levelname)s:%(message)s')
 logHandler.setFormatter(formatter)
 logger.addHandler(logHandler)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 logger.info('TACC Job Manager Server started.')
 
 
