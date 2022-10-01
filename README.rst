@@ -1,3 +1,5 @@
+.. image:: https://coveralls.io/repos/github/cdelcastillo21/taccjm/badge.svg?branch=master
+
 ======
 taccjm
 ======
