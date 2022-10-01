@@ -16,6 +16,7 @@ import shutil
 from click.testing import CliRunner
 
 from taccjm.cli.cli import cli
+from conftest import mfa
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -43,41 +44,9 @@ TEST_JM_ID = 'test-taccjm'
 # TEST JM  to use throughout tests
 TEST_JM = None
 
-def_test_dir = Path(__file__).parent / ".test_dir"
-
-@pytest.fixture()
-def test_dir():
-    if def_test_dir.exists():
-        shutil.rmtree(def_test_dir)
-    def_test_dir.mkdir(exist_ok=True)
-    test_dir_path = Path(def_test_dir).absolute()
-    yield test_dir_path
-    try:
-        shutil.rmtree(test_dir_path)
-    except:
-        pass
-
-@pytest.fixture()
-def test_script(test_dir):
-    script_path = str(test_dir.absolute() / 'test_script.sh')
-    with open(script_path, 'w') as fp:
-        fp.write('#!/bin/bash\nsleep 5\necho foo\n')
-    yield script_path
-
-@pytest.fixture()
-def test_file(test_dir):
-    file_path = f'{test_dir}/hello.txt'
-    with open(file_path, 'w') as f:
-        f.write('Hello World!')
-    yield file_path
-
 def pytest_addoption(parser):
     parser.addoption("--mfa", action="store",
             default="012345", help="MFA token. Must be provided")
-
-@pytest.fixture
-def mfa(request):
-    return request.config.getoption("--mfa")
 
 def test_init(mfa):
   runner = CliRunner()

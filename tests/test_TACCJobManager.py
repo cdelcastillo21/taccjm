@@ -7,14 +7,16 @@ import os
 import pdb
 import time
 import pytest
+import shutil
 import posixpath
+from pathlib import Path
 from dotenv import load_dotenv
 from unittest.mock import patch
-from taccjm.utils import create_template_app
 
 from taccjm.TACCJobManager import TACCJobManager, TJMCommandError
 from taccjm.SSHClient2FA import SSHClient2FA
 from paramiko import SSHException
+from conftest import test_file, test_dir, test_app
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -540,21 +542,19 @@ def test_read():
     JM.empty_trash()
 
 
-def test_apps():
+def test_apps(test_dir, test_app):
     """Test getting and deploying applications"""
 
+    app_config, job_config = test_app
+
     # Name of test app directory locally
-    test_app = '.test-app'
+    app_dir = str(Path(f"{test_dir}") / f"{app_config['name']}")
 
     # Remove all apps in apps dir remotely and remove app locally if exists
     JM._execute_command(f"rm -rf {JM.apps_dir}/*")
-    os.system(f"rm -rf {test_app}")
-
-    # Create template app locally
-    app_config = create_template_app(test_app)
 
     # Deploy app from files
-    app1 = JM.deploy_app(local_app_dir=test_app)
+    app1 = JM.deploy_app(app_config=app_config, local_app_dir=app_dir)
     apps = JM.get_apps()
     assert len(apps)==1
     assert apps[0]==app1['name']
@@ -575,7 +575,7 @@ def test_apps():
     # Now deploy app from dictionary with same name but change node-count
     app1['default_node_count'] = 2*app1['default_node_count']
     app1_up= JM.deploy_app(app_config=app1,
-            local_app_dir=test_app, overwrite=True)
+            local_app_dir=app_dir, overwrite=True)
     assert app1_up['default_node_count']==2*dep_app['default_node_count']
 
     # error - overwrite not set
@@ -591,44 +591,39 @@ def test_apps():
     with patch.object(TACCJobManager, 'upload',
             side_effect=Exception('Mock upload file error')):
         with pytest.raises(Exception) as e:
-            bad_app = JM.deploy_app(local_app_dir=test_app, name='bad_app')
+            bad_app = JM.deploy_app(local_app_dir=app_dir, name='bad_app')
 
     # Clean app dir to conclude and remove local app
     JM._execute_command(f"rm -rf {JM.apps_dir}/*")
-    os.system(f"rm -rf {test_app}")
 
 
-def test_deploy_job():
+def test_deploy_job(test_file, test_dir, test_app):
     """Test setting up jobs"""
+    app_config, job_config = test_app
 
     # Name of test app directory locally
-    test_app = '.test-app'
+    app_dir = str(Path(f"{test_dir}") / f"{app_config['name']}")
 
     # Remove all apps and jobs  in apps/jobs dir remotely
     JM._execute_command(f"rm -rf {JM.apps_dir}/*")
     JM._execute_command(f"rm -rf {JM.jobs_dir}/*")
 
-    # Remove app locally if exists
-    os.system(f"rm -rf {test_app}")
-
-    # Create template app locally
-    app_config, job_config = create_template_app(test_app)
-
     # Deploy app from files
-    app1 = JM.deploy_app(local_app_dir=test_app)
+    app1 = JM.deploy_app(app_config=app_config, local_app_dir=app_dir)
 
     # Setup a test job from the configs in default app directory, dont stage
-    job1 = JM.deploy_job(local_job_dir=test_app, stage=False)
+    job1 = JM.deploy_job(local_job_dir=app_dir, stage=False)
     assert job1['app']==app_config['name']
 
     # Setup a test job from dictioanry just loaded, dont stage
-    job2 = JM.deploy_job(job_config=job1, local_job_dir=test_app, stage=False)
+    job2 = JM.deploy_job(job_config=job1, local_job_dir=app_dir, stage=False)
     assert job2['app']==app_config['name']
 
     # Now create test input file and send with job and stage job
-    os.system(f"echo hello world > {job1['inputs']['input1']}")
+    os.system(f"echo hello world > {test_file}")
     job3 = JM.deploy_job(job_config=job1.copy(),
-            local_job_dir=test_app, stage=True)
+            local_job_dir=app_dir, stage=True,
+                         inputs={'input1': test_file})
     jobs = JM.get_jobs()
     assert job3['job_id'] in jobs
     staged_job = JM.get_job(job3['job_id'])
@@ -636,7 +631,7 @@ def test_deploy_job():
 
     # Setup another job with allocation and email
     job4 = JM.deploy_job(job_config=job1.copy(),
-            local_job_dir=test_app, stage=True,
+            local_job_dir=app_dir, stage=True,
             email='test@test.com', allocation=ALLOCATION)
     jobs = JM.get_jobs()
     assert job4['job_id'] in jobs
@@ -654,58 +649,52 @@ def test_deploy_job():
     no_params = job1.copy()
     no_params['parameters'] = {}
     with pytest.raises(ValueError):
-        _ = JM.deploy_job(job_config=no_inputs, local_job_dir=test_app, stage=True)
+        _ = JM.deploy_job(job_config=no_inputs, local_job_dir=app_dir, stage=True)
     with pytest.raises(ValueError):
-        _ = JM.deploy_job(job_config=no_params, local_job_dir=test_app, stage=True)
+        _ = JM.deploy_job(job_config=no_params, local_job_dir=app_dir, stage=True)
 
     # Error - Staging submit script
     with patch.object(TACCJobManager, '_parse_submit_script',
             side_effect=Exception('Mock parse submit script exception')):
         with pytest.raises(Exception):
-            _ = JM.deploy_job(local_job_dir=test_app, stage=True)
+            _ = JM.deploy_job(local_job_dir=app_dir, stage=True)
 
     # Error - Failing to stage input
     with patch.object(TACCJobManager, 'upload',
             side_effect=Exception('Mock upload error')):
         with pytest.raises(Exception):
-            _ = JM.deploy_job(local_job_dir=test_app, stage=True)
+            _ = JM.deploy_job(local_job_dir=app_dir, stage=True)
 
     # Error - Failing to stage app contents (delete job dir)
     _ = JM.remove_job(job3['job_id'])
     with pytest.raises(TJMCommandError):
         _ = JM.deploy_job(job_config=job3,
-                local_job_dir=test_app, stage=True)
+                local_job_dir=app_dir, stage=True)
 
     # cleanup
-    os.remove(f"{job1['inputs']['input1']}")
     JM._execute_command(f"rm -rf {JM.apps_dir}/*")
     JM._execute_command(f"rm -rf {JM.jobs_dir}/*")
-    os.system(f"rm -rf {test_app}")
 
 
-def test_run_job():
+def test_run_job(test_file, test_dir, test_app):
     """Test submitting, canceling, and removing/restoring jobs"""
 
+    app_config, job_config = test_app
+
     # Name of test app directory locally
-    test_app = '.test-app'
+    app_dir = str(Path(f"{test_dir}") / f"{app_config['name']}")
 
     # Remove all apps and jobs  in apps/jobs dir remotely
     JM._execute_command(f"rm -rf {JM.apps_dir}/*")
     JM._execute_command(f"rm -rf {JM.jobs_dir}/*")
 
-    # Remove app locally if exists
-    os.system(f"rm -rf {test_app}")
-
-    # Create template app locally
-    app_config, job_config = create_template_app(test_app)
-
     # Deploy app from files
-    app = JM.deploy_app(local_app_dir=test_app)
+    app = JM.deploy_app(local_app_dir=app_dir)
 
     # Now create test input file and send with job and stage job
-    os.system(f"echo hello world > {job_config['inputs']['input1']}")
-    job = JM.deploy_job(local_job_dir=test_app, stage=True,
-            email='test@test.com', allocation=ALLOCATION)
+    job = JM.deploy_job(local_job_dir=app_dir, stage=True,
+            email='test@test.com', allocation=ALLOCATION,
+                        inputs={'input1': test_file})
 
     # Error - submit job but mock slurm queue error (FAILED on last line)
     with patch.object(TACCJobManager, '_execute_command',
@@ -759,11 +748,10 @@ def test_run_job():
         _ = JM.restore_job('foo')
 
     # cleanup
-    os.remove(f"{job_config['inputs']['input1']}")
     JM._execute_command(f"rm -rf {JM.apps_dir}/*")
     JM._execute_command(f"rm -rf {JM.jobs_dir}/*")
-    os.system(f"rm -rf {test_app}")
 
+# TODO: Fix this test
 def test_job_files():
     """Test job file operations"""
 
@@ -771,7 +759,7 @@ def test_job_files():
     test_fname, test_file, test_folder = _setup_local_test_files()
 
     # Name of test app directory locally
-    test_app = '.test-app'
+    test_app = 'test-app'
 
     # Remove all apps and jobs  in apps/jobs dir remotely
     JM._execute_command(f"rm -rf {JM.apps_dir}/*")
