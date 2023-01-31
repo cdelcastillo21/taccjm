@@ -113,6 +113,25 @@ def init_jm(jm_id:str, system:str, user:str, psw:str, mfa:str):
                 "jm_error", f"TACCJM {jm_id} already exists.")
 
 
+# @hug.put('/{jm_id}/exec')
+# def exec(self, jm_id:str, cmnd:str='pwd', wait:bool=True) -> str:
+#     """Show initialized job managers"""
+# 
+#     _check_init(jm_id)
+# 
+#     try:
+#         ret = JM[jm_id]._execute_command(cmnd)
+#     except TJMCommandError as tjm_error:
+#         tjm_error.message = f"_mkdir - Could not create directory {path}"
+#         logger.error(tjm_error.message)
+#         raise tjm_error
+# 
+#     for jm in JM.keys():
+#         out.append({'jm_id':jm, 'sys':JM[jm].system, 'user':JM[jm].user,
+#             'apps_dir':JM[jm].apps_dir, 'jobs_dir':JM[jm].jobs_dir})
+#     return out
+
+
 @hug.get('/list')
 def list_jm():
     """Show initialized job managers"""
