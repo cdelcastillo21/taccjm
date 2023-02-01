@@ -85,14 +85,15 @@ def list(search, match):
 @click.option("-p", "--password", envvar='TACC_PW', default=None,
               help='If not passed in and environment variable TACC_PW is not set, will be prompted.')
 @click.option("-m", "--mfa", default=None, help='TACC 2fa Code')
-def init(jm_id, system, user, password, mfa):
+@click.option("-r/-nr", "--restart/--no-restart", default=False, type=bool, help='Restart the job manager or not.')
+def init(jm_id, system, user, password, mfa, restart):
     """
     Initialize TACC Job Manager
 
     Logs in USER via an ssh connection to SYSTEM and labels it with job manager
     id JM_ID. JM_ID must be unique and not present in a `taccjm list`.
     """
-    res = tjm.init_jm(jm_id, system, user, password, mfa)
+    res = tjm.init_jm(jm_id, system, user, password, mfa, restart)
     str_res = filter_res([res], _jm_fields)
     click.echo(str_res)
 

@@ -16,6 +16,7 @@ import json
 from pythonjsonlogger import jsonlogger
 from typing import Union, List, Tuple
 from taccjm.TACCJobManager import TACCJobManager, TJMCommandError
+from paramiko import SSHException, AuthenticationException, BadHostKeyException
 
 
 __author__ = "Carlos del-Castillo-Negrete"
@@ -67,6 +68,16 @@ def handle_custom_exceptions(exception):
     raise err
 
 
+@hug.exception(SSHException)
+def handle_custom_exceptions(exception):
+    """Handling exception when don't have access to resource"""
+
+    # Raise 403 forbidden if dont have permissions to access either paath
+    err = falcon.HTTPError(falcon.HTTP_408, "Request Timeout", str(exception))
+    logger.error(str(err))
+    raise err
+
+
 @hug.exception(TJMCommandError)
 def handle_custom_exceptions(exception):
     """Handling other command errors"""
@@ -89,11 +100,11 @@ def _check_init(jm_id):
 
 
 @hug.post('/init')
-def init_jm(jm_id:str, system:str, user:str, psw:str, mfa:str):
+def init_jm(jm_id:str, system:str, user:str, psw:str, mfa:str, restart:bool=False):
     """Initialize Job Manager Instances"""
     global JM
 
-    if jm_id not in JM.keys():
+    if jm_id not in JM.keys() or restart:
         try:
             logger.info(f"INIT - Initializing TACCJM {jm_id}.")
             JM[jm_id] = TACCJobManager(system, user=user, psw=psw, mfa=mfa,
@@ -169,7 +180,11 @@ def list_files(jm_id:str, path:str="."):
 
 
     logger.info(f'Getting files from {path}')
-    files = JM[jm_id].list_files(path=path)
+    try:
+        files = JM[jm_id].list_files(path=path)
+    except TJMCommandError as tjm_err:
+        logger
+
     _ = [f.pop('ls_str') for f in files]
 
     return files
@@ -483,13 +498,26 @@ def deploy_script(jm_id:str, script_name:str, local_file:str=None):
 
 @hug.put('/{jm_id}/scripts/run')
 def run_script(jm_id:str, script_name:str,
-        job_id:str=None, args:hug.types.multiple=[]):
+        job_id:str=None, args:hug.types.multiple=[],
+               wait:bool = False):
     """Run Script
 
     """
     _check_init(jm_id)
 
-    return JM[jm_id].run_script(script_name, job_id=job_id, args=args)
+    if wait:
+        logger.info(f'Waiting for {script_name} to execute.')
+        res = JM[jm_id].run_script(script_name, job_id=job_id, args=args, wait=wait)
+        logger.info(f'Script {script_name} done executing.')
+    else:
+        logger.info(f'Executing script {script_name} in background.')
+        script_config = JM[jm_id].run_script(script_name, job_id=job_id,
+                                             args=args, wait=wait)
+        res = {f"{i}":script_config[i] for i in script_config if i not in ['channel', 'history', 'cmd']}
+        log_config = {f"script_{i}":res[i] for i in res}
+        logger.info(f'Script {script_name} started', extra=log_config)
+
+    return res
 
 
 @hug.delete('/{jm_id}/trash/empty')
@@ -498,3 +526,23 @@ def empty_trash(jm_id:str, filter_str:str='*'):
     _check_init(jm_id)
 
     return JM[jm_id].empty_trash(filter_str=filter_str)
+
+
+@hug.get('/{jm_id}/scripts/status')
+def get_script_status(jm_id:str, script_id:int = None):
+    """Get Running Script
+    """
+    _check_init(jm_id)
+
+    scripts = []
+    if script_id is not None:
+        script_config = JM[jm_id].get_script_status(script_id)
+        scripts.append(script_config)
+    else:
+        scripts = JM[jm_id].scripts
+
+    res = []
+    for s in scripts:
+        res.append({f"{i}":s[i] for i in s if i not in ['channel', 'history', 'cmd']})
+
+    return res

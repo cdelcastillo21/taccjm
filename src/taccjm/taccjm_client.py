@@ -232,9 +232,9 @@ def api_call(http_method:str, end_point:str, data:dict=None) -> dict:
     try:
         res = s.send(prepared)
     except requests.exceptions.ConnectionError as c:
-        logger.info('Cannot connect to server. Restarting and waiting 5s.')
+        logger.info('Cannot connect to server. Restarting and waiting 10s.')
         _ = find_tjm_processes(start=True)
-        sleep(5)
+        sleep(10)
         res = s.send(prepared)
 
     # Return content if success, else raise error
@@ -269,7 +269,8 @@ def list_jms() -> List[str]:
 
 
 def init_jm(jm_id:str, system:str,
-        user:str=None, psw:str=None, mfa:str=None) -> dict:
+        user:str=None, psw:str=None, mfa:str=None,
+            restart=False) -> dict:
     """
     Init JM
 
@@ -307,7 +308,7 @@ def init_jm(jm_id:str, system:str,
     psw = getpass("psw: ") if psw is None else psw
     mfa = input("mfa: ") if mfa is None else mfa
     data = {'jm_id':jm_id, 'system': system,
-            'user': user, 'psw': psw, 'mfa':mfa}
+            'user': user, 'psw': psw, 'mfa':mfa, 'restart':restart}
 
     # Make API call
     try:
@@ -1329,7 +1330,8 @@ def deploy_script(jm_id:str, script_name:str, local_file:str=None):
     return res
 
 
-def run_script(jm_id:str, script_name:str, job_id:str=None, args:List[str]=None):
+def run_script(jm_id:str, script_name:str, job_id:str=None, args:List[str]=None,
+               wait:bool=False):
     """
     Run Script
 
@@ -1354,10 +1356,42 @@ def run_script(jm_id:str, script_name:str, job_id:str=None, args:List[str]=None)
     """
 
     data = {'script_name': script_name, 'job_id': job_id,  'args': args}
+    if wait:
+        data['wait'] = wait
     try:
         res = api_call('PUT', f"{jm_id}/scripts/run", data)
     except TACCJMError as e:
         e.message = f"run_script error"
+        logger.error(e.message)
+        raise e
+
+    return res
+
+
+def get_script(jm_id:str, script_name:str):
+    """
+    Get running scripts
+    """
+    data = {'script_name': script_name}
+    try:
+        res = api_call('GET', f"{jm_id}/scripts/get", data)
+    except TACCJMError as e:
+        e.message = f"get_script error"
+        logger.error(e.message)
+        raise e
+
+    return res
+
+
+def get_script_status(jm_id:str, script_id:int = None):
+    """
+    Get running scripts
+    """
+    data = {'script_id': script_id}
+    try:
+        res = api_call('GET', f"{jm_id}/scripts/status", data)
+    except TACCJMError as e:
+        e.message = f"get_script_status error"
         logger.error(e.message)
         raise e
 

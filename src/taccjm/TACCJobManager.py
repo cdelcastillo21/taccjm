@@ -161,6 +161,8 @@ class TACCJobManager():
         # Get python path and home dir
         self.python_path = self._execute_command('which python')
 
+        self.scripts = []
+
 
     def _execute_command(self, cmnd, wait=True) -> None:
         """
@@ -193,11 +195,23 @@ class TACCJobManager():
             raise ssh_error
 
         channel.exec_command(cmnd)
+        if wait:
+            return self._process_command(cmnd, channel)
+        else:
+            return channel
+
+    def _process_command(self, cmnd, channel):
+        """
+        Process command
+
+        Wait until a command finishes and read stdout and stderr. Raise error if
+        anything in stderr, else return stdout.
+        """
         rc = channel.recv_exit_status()
         out = channel.recv(1000000).decode('utf-8')
         err = channel.recv_stderr(1000000).decode('utf-8')
 
-        if rc!=0:
+        if rc != 0:
             # Build base TJMCommand Error, only place this should be done
             t = TJMCommandError(self.system, self.user, cmnd, rc, out, err)
 
@@ -486,6 +500,10 @@ class TACCJobManager():
             msg = f"list_files - Permission denied"
             logger.error(msg)
             raise PermissionError(errno.EACCES, msg, path)
+        except SSHException as s:
+            msg = f"list_files - Session is stale. Restart job manager."
+            logger.error(msg)
+            raise s
         except Exception as e:
             msg = f"list_files - Unknown error trying to access {path}: {e}"
             logger.error(msg)
@@ -1770,7 +1788,8 @@ class TACCJobManager():
     def run_script(self,
             script_name:str,
             job_id:str=None,
-            args:List[str]=[]) -> str:
+            args:List[str]=[],
+            wait:bool=True) -> str:
         """
         Run a pre-deployed script on TACC.
 
@@ -1792,8 +1811,23 @@ class TACCJobManager():
         if job_id is not None: args.insert(0, '/'.join([self.jobs_dir,job_id]))
 
         run_cmd = f"{self.scripts_dir}/{script_name} {' '.join(args)}"
-        return self._execute_command(run_cmd)
-
+        if wait:
+            return self._execute_command(run_cmd)
+        else:
+            ts = datetime.fromtimestamp(time.time()).strftime('%Y%m%d_%H%M%S')
+            # logfile = f"{self.scripts_dir}/{script_name}_log_{ts}"
+            # run_cmd += f" > {logfile}.txt 2> {logfile}-err.txt &"
+            channel = self._execute_command(run_cmd, wait=False)
+            script_id = len(self.scripts) + 1
+            script_config = {'id': script_id,
+                             'name': script_name,
+                             'ts': ts,
+                             'status': 'STARTED',
+                             'cmd': run_cmd,
+                             'channel': channel,
+                             'history': []}
+            self.scripts.append(script_config)
+            return script_config
 
     def list_scripts(self) -> List[str]:
         """
@@ -1810,3 +1844,36 @@ class TACCJobManager():
         sc = [f['filename'] for f in self.list_files(path=self.scripts_dir)]
         return sc
 
+    def get_script_status(self, script_id):
+        """
+        Poll a running script for its status.
+
+        """
+        if script_id <= len(self.scripts):
+            script_config = self.scripts[script_id - 1]
+            if script_config['status'] not in ['COMPLETE', 'FAILED']:
+                script_config['history'].append({'ts': script_config['ts'],
+                                                 'stats': script_config['status']})
+                if script_config['channel'].exit_status_ready():
+                    try:
+                        out = self._process_command(script_config['cmd'],
+                                                    script_config['channel'])
+                        script_config['ts'] = datetime.fromtimestamp(
+                                time.time()).strftime('%Y%m%d_%H%M%S')
+                        script_config['status'] = 'COMPLETE'
+                        script_config['ret'] = out
+                    except TJMCommandError as t:
+                        script_config['ts'] = datetime.fromtimestamp(
+                                time.time()).strftime('%Y%m%d_%H%M%S')
+                        script_config['status'] = 'FAILED'
+                        script_config['err'] = t
+                else:
+                    script_config['ts'] = datetime.fromtimestamp(
+                            time.time()).strftime('%Y%m%d_%H%M%S')
+                    script_config['status'] = 'RUNNING'
+                self.scripts[script_id - 1] = script_config
+        else:
+            raise ValueError(f'Invalid script_id {script_id}.')
+
+        ret = {f"script_{i}":script_config[i] for i in script_config if i not in ['channel', 'history']}
+        return ret
