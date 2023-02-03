@@ -498,24 +498,18 @@ def deploy_script(jm_id:str, script_name:str, local_file:str=None):
 
 @hug.put('/{jm_id}/scripts/run')
 def run_script(jm_id:str, script_name:str,
-        job_id:str=None, args:hug.types.multiple=[],
-               wait:bool = False):
+        job_id:str=None, args:hug.types.multiple=[]):
     """Run Script
 
     """
     _check_init(jm_id)
 
-    if wait:
-        logger.info(f'Waiting for {script_name} to execute.')
-        res = JM[jm_id].run_script(script_name, job_id=job_id, args=args, wait=wait)
-        logger.info(f'Script {script_name} done executing.')
-    else:
-        logger.info(f'Executing script {script_name} in background.')
-        script_config = JM[jm_id].run_script(script_name, job_id=job_id,
-                                             args=args, wait=wait)
-        res = {f"{i}":script_config[i] for i in script_config if i not in ['channel', 'history', 'cmd']}
-        log_config = {f"script_{i}":res[i] for i in res}
-        logger.info(f'Script {script_name} started', extra=log_config)
+    logger.info(f'Executing script {script_name} in background.')
+    script_config = JM[jm_id].run_script(script_name, job_id=job_id,
+                                         args=args, wait=False)
+    res = {f"{i}":script_config[i] for i in script_config if i not in ['channel', 'history', 'cmd']}
+    log_config = {f"script_{i}":res[i] for i in res}
+    logger.info(f'Script {script_name} started', extra=log_config)
 
     return res
 
@@ -529,20 +523,25 @@ def empty_trash(jm_id:str, filter_str:str='*'):
 
 
 @hug.get('/{jm_id}/scripts/status')
-def get_script_status(jm_id:str, script_id:int = None):
+def get_script_status(jm_id:str, script_id:int = None, nbytes:int = None):
     """Get Running Script
     """
     _check_init(jm_id)
 
     scripts = []
     if script_id is not None:
-        script_config = JM[jm_id].get_script_status(script_id)
+        script_config = JM[jm_id].get_script_status(script_id, nbytes=nbytes)
         scripts.append(script_config)
     else:
         scripts = JM[jm_id].scripts
 
     res = []
+    to_rem = ['channel', 'history', 'cmd']
     for s in scripts:
-        res.append({f"{i}":s[i] for i in s if i not in ['channel', 'history', 'cmd']})
+        res.append({f"{i}":s[i] for i in s if i not in to_rem})
+
+    if script_id is not None:
+        res = res[0]
 
     return res
+

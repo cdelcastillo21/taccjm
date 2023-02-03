@@ -4,19 +4,27 @@ TACCJobManager Utility Function
 
 """
 
+import sys
 import pdb
 import os                       # OS system utility functions
 import re
 import json                     # For reading/writing dictionary<->json
-import errno                    # For error messages
-import configparser             # For reading configs
 from typing import Tuple        # For type hinting
 from taccjm.constants import JOB_TEMPLATE, APP_TEMPLATE, APP_SCRIPT_TEMPLATE
 from prettytable import PrettyTable
+from pathlib import Path
+import logging
+from pythonjsonlogger import jsonlogger
+import math
+from datetime import timedelta
+
+
+DEFAULT_SCRIPTS_PATH = Path(__file__).parent / 'scripts'
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
+
 
 def update_dic_keys(d:dict, **kwargs) -> dict:
     """
@@ -165,11 +173,109 @@ def format_app_dict(app):
 
 def format_job_dict(job):
     res = [{'attr':x, 'val': job[x]} for x in job.keys()]
+
     def _filter_fun(x):
         if x['attr'] in ['inputs', 'parameters']:
             val_list = [{'name': x[0], 'value':x[1]} for x in x['val'].items()]
             x['val'] = filter_res(val_list, ['name', 'value'])
         return x
+
     str_res = filter_res(res, ['attr', 'val'], filter_fun=_filter_fun)
+
     return str_res
+
+def get_default_script(script_name, ret='path'):
+    """
+    Get a pre-configured TACC script to run from this repo
+    """
+    script_path = DEFAULT_SCRIPTS_PATH / script_name
+    if not script_path.exists():
+        raise ValueError(f'Script {script_name} not a default taccjm script')
+    if ret == 'path':
+        return str(script_path.resolve())
+    else:
+        with open(str(script_path), 'r') as fp:
+            script_text = fp.read()
+        return script_text
+
+
+def init_logger(name, output=sys.stdout, fmt='json', loglevel=logging.INFO):
+    """
+    Format a logger instance
+    """
+#     if output is None:
+# 
+#         def empty_logger(msg, **kwargs):
+#             pass
+# 
+#         return empty_logger
+# 
+    logger = logging.getLogger(name)
+    if isinstance(output, str):
+        output = open(output, 'w')
+    logHandler = logging.StreamHandler(output)
+    if fmt == 'json':
+        formatter = jsonlogger.JsonFormatter(
+                '%(asctime)s %(name)s - %(levelname)s:%(message)s')
+    else:
+        formatter = logging.Formatter(
+                '%(asctime)s | %(name)s | %(levelname)s | %(message)s')
+
+    logHandler.setFormatter(formatter)
+    logger.addHandler(logHandler)
+    logger.setLevel(loglevel)
+
+    return logger
+
+def format_hours(hours):
+    """
+    Format an integer or float amount of hours into a string for slurm scripts.
+
+    Example
+    -------
+    >>> from taccjm.utils import format_hours
+    >>> print(format_hours(2.5))
+    02:30:00
+    """
+    runtime = timedelta(hours=hours)
+    return runtime.strftime("%H:%M:%S")
+
+def hours_to_runtime_str(hours):
+    """
+    Convert an int/float amount of hours to a runtime string for SLURM scripts.
+    """
+    days = math.floor(hours / 24)
+    hours = hours - 24 * days
+    minutes = int(60 * (hours - math.floor(hours)))
+    hours = int(hours)
+    if days:
+        return f"{days}-{hours:02}:{minutes:02}:00"
+    return f"{hours:02}:{minutes:02}:00"
+
+def validate_file_attrs(attrs:List[str]):
+    """list_files utility function to parse valid file attribute lists."""
+    avail_attrs = ['filename', 'st_atime', 'st_gid', 'st_mode', 'st_mtime', 'st_size', 'st_uid']
+    invalid_attrs = [a for a in attrs if a not in avail_attrs]
+    if len(invalid_attrs) > 0:
+        raise ValueError(f'Requested Invalid file attrs {invalid_attrs}')
+    if 'filename' not in attrs:
+        attrs = ['filename'] + attrs
+
+    return attrs
+
+def filter_files(files, attrs:List[str]=['filename','st_size'], hidden:bool=False,
+        search:str=None, match:str=r'.'):
+    """list_files utility function to filter results"""
+
+    # Filter hidden files
+    if not hidden:
+        files = [f for f in files if not f['filename'].startswith('.')]
+
+    # Filter attrs
+    files = [{ a : f[a] for a in attrs } for f in files]
+
+    if search is not None:
+        files = [f for f in files if re.search(match, f[search]) is not None]
+
+    return files
 

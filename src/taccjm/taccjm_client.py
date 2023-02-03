@@ -19,6 +19,7 @@ from getpass import getpass
 from taccjm.constants import make_taccjm_dir, TACCJM_HOST, TACCJM_PORT, TACCJM_SOURCE, TACCJM_DIR
 from typing import List, Tuple
 from taccjm.exceptions import TACCJMError
+from taccjm.utils import validate_file_attrs, filter_files
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -63,33 +64,6 @@ def _print_res(res, fields, search=None, match=r'.'):
 
     # Print Table
     print(x)
-
-def _validate_file_attrs(attrs:List[str]):
-    """list_files utility function to parse valid file attribute lists."""
-    avail_attrs = ['filename', 'st_atime', 'st_gid', 'st_mode', 'st_mtime', 'st_size', 'st_uid']
-    invalid_attrs = [a for a in attrs if a not in avail_attrs]
-    if len(invalid_attrs) > 0:
-        raise ValueError(f'Requested Invalid file attrs {invalid_attrs}')
-    if 'filename' not in attrs:
-        attrs = ['filename'] + attrs
-
-    return attrs
-
-def _filter_files(files, attrs:List[str]=['filename','st_size'], hidden:bool=False,
-        search:str=None, match:str=r'.'):
-    """list_files utility function to filter results"""
-
-    # Filter hidden files
-    if not hidden:
-        files = [f for f in files if not f['filename'].startswith('.')]
-
-    # Filter attrs
-    files = [{ a : f[a] for a in attrs } for f in files]
-
-    if search is not None:
-        files = [f for f in files if re.search(match, f[search]) is not None]
-
-    return files
 
 
 def set_host(host:str=TACCJM_HOST, port:int=TACCJM_PORT) -> Tuple[str, int]:
@@ -426,7 +400,7 @@ def list_files(jm_id:str, path:str=".", attrs:List[str]=['filename'],
     files : dict
         List of files/folder in directory
     """
-    attrs = _validate_file_attrs(attrs)
+    attrs = validate_file_attrs(attrs)
     if search is not None and search not in attrs:
         raise ValueError(f'search must be one of attrs {attrs}')
 
@@ -437,7 +411,7 @@ def list_files(jm_id:str, path:str=".", attrs:List[str]=['filename'],
         logger.error(e.message)
         raise e
 
-    files = _filter_files(files, attrs=attrs, hidden=hidden, search=search, match=match)
+    files = filter_files(files, attrs=attrs, hidden=hidden, search=search, match=match)
 
     return files
 
@@ -1065,7 +1039,7 @@ def list_job_files(jm_id:str, job_id:str, path:str=".", attrs:List[str]=['filena
             - st_uid   : UID of owner.
             - asbytes  : Output from an ls -lat like command on file.
     """
-    attrs = _validate_file_attrs(attrs)
+    attrs = validate_file_attrs(attrs)
     if search is not None and search not in attrs:
         raise ValueError(f'search must be one of attrs {attrs}')
 
@@ -1077,7 +1051,7 @@ def list_job_files(jm_id:str, job_id:str, path:str=".", attrs:List[str]=['filena
         logger.error(e.message)
         raise e
 
-    files = _filter_files(files, attrs=attrs, hidden=hidden, search=search, match=match)
+    files = filter_files(files, attrs=attrs, hidden=hidden, search=search, match=match)
 
     return files
 
@@ -1318,6 +1292,7 @@ def deploy_script(jm_id:str, script_name:str, local_file:str=None):
     Returns
     -------
     """
+    # TODO: Add type checking to inputs
 
     data = {'script_name': script_name, 'local_file': local_file}
     try:
@@ -1331,7 +1306,7 @@ def deploy_script(jm_id:str, script_name:str, local_file:str=None):
 
 
 def run_script(jm_id:str, script_name:str, job_id:str=None, args:List[str]=None,
-               wait:bool=False):
+               wait:bool=False, refresh_rate:int=5):
     """
     Run Script
 
@@ -1356,14 +1331,25 @@ def run_script(jm_id:str, script_name:str, job_id:str=None, args:List[str]=None,
     """
 
     data = {'script_name': script_name, 'job_id': job_id,  'args': args}
-    if wait:
-        data['wait'] = wait
     try:
         res = api_call('PUT', f"{jm_id}/scripts/run", data)
     except TACCJMError as e:
-        e.message = f"run_script error"
+        e.message = "run_script error"
         logger.error(e.message)
         raise e
+
+    data = {'script_id': res['id']}
+    if wait:
+        while True:
+            try:
+                res = api_call('GET', f"{jm_id}/scripts/status", data)
+            except TACCJMError as e:
+                e.message = "Error waiting for script"
+                logger.error(e.message)
+                raise e
+            if res['status'] in ['COMPLETE', 'FAILED']:
+                break
+            sleep(refresh_rate)
 
     return res
 
@@ -1383,11 +1369,12 @@ def get_script(jm_id:str, script_name:str):
     return res
 
 
-def get_script_status(jm_id:str, script_id:int = None):
+def get_script_status(jm_id:str, script_id:int = None, nbytes:int = None):
     """
     Get running scripts
     """
-    data = {'script_id': script_id}
+    # TODO validate inputs
+    data = {'script_id': script_id, 'nbytes': nbytes}
     try:
         res = api_call('GET', f"{jm_id}/scripts/status", data)
     except TACCJMError as e:

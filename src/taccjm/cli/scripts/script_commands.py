@@ -82,9 +82,10 @@ def deploy(ctx, path, rename):
 
 @scripts.command(short_help="Run deployed script.")
 @click.argument("script", type=str)
+@click.argument("wait", type=bool, default=True)
 @click.argument("args", nargs=-1, default=None)
 @click.pass_context
-def run(ctx, script, args):
+def run(ctx, script, args, wait):
     """
     Run Deployed Script
 
@@ -94,6 +95,6 @@ def run(ctx, script, args):
     file and for that to be downloaded seperately.
     """
     jm_id = ctx.obj['jm_id']
-    res = tjm.run_script(jm_id, script, args=args)
+    res = tjm.run_script(jm_id, script, args=args, wait=wait)
     click.echo(res)
 
