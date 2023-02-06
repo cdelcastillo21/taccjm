@@ -41,7 +41,12 @@ def test_list_jm():
 def test_init_jm(connect, execute_command):
 
     # Call the endpoint
-    response = client.post(f"/{ID}?system={SYSTEM}&user={USER}&psw={PSW}&mfa={MFA}")
+    # response = client.post(f"/{ID}?system={SYSTEM}&user={USER}&psw={PSW}&mfa={MFA}")
+    response = client.post(f"/{ID}",
+                           json={'system': SYSTEM,
+                                 'user': USER,
+                                 'psw': PSW,
+                                 'mfa': MFA})
 
     # Check the response status code
     assert response.status_code == 200

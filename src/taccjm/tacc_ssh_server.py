@@ -22,14 +22,9 @@ __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
 # Initialize server logger
-# logger = init_logger()
-# logger = logging.getLogger()
-# logHandler = logging.StreamHandler(sys.stdout)
-# formatter = jsonlogger.JsonFormatter("%(asctime)s %(name)s - %(levelname)s:%(message)s")
-# logHandler.setFormatter(formatter)
-# logger.addHandler(logHandler)
-# logger.setLevel(logging.INFO)
-# logger.info("TACC SSH Server started.")
+if not os.path.exists(TACCJM_DIR):
+    os.makedirs(TACCJM_DIR)
+logger = init_logger(__name__, output=f"{TACCJM_DIR}/ssh_server_log.json", fmt='json')
 
 app = FastAPI()
 
@@ -46,6 +41,12 @@ class Connection(BaseModel):
     up_time: float
     trash_dir: str
 
+class ConnectionRequest(BaseModel):
+    system: str
+    user: str
+    psw: str
+    mfa: str
+    restart: Union[bool, None] = False
 
 @app.get("/list")
 def list_jm():
@@ -66,11 +67,7 @@ def list_jm():
 @app.post("/{connection_id}", response_model=Connection)
 def init(
     connection_id: str,
-    system: str,
-    user: str,
-    psw: str,
-    mfa: str,
-    restart: bool = False,
+    req: ConnectionRequest
 ):
     global CONNECTIONS
 
@@ -78,17 +75,17 @@ def init(
         try:
             logger.info(f"INIT - Initializing TACCJM {connection_id}.")
             CONNECTIONS[connection_id] = TACCSSHClient(
-                system, user=user, psw=psw, mfa=mfa, working_dir=connection_id
+                req.system, user=req.user, psw=req.psw, mfa=req.mfa, working_dir=connection_id
             )
             logger.info(f"SUCCESS - TACCJM {connection_id} initialized successfully.")
         except ValueError as v:
-            msg = f"Unable to initialize {connection_id} on {system} for {user}: {v}"
-            raise HTTPException(status_code=404, detail=f"jm_error: {msg}")
+            msg = f"Unable to initialize {connection_id} on {req.system} for {req.user}: {v}"
+            raise HTTPException(status_code=404, detail=f"ssh_error: {msg}")
         except Exception as e:
-            msg = f"Unable to initialize {connection_id} on {system} for {user}: {e}"
-            raise HTTPException(status_code=401, detail="jm_error: {msg}")
+            msg = f"Unable to initialize {connection_id} on {req.system} for {req.user}: {e}"
+            raise HTTPException(status_code=401, detail=f"ssh_error: {msg}")
     else:
-        raise HTTPException(status_code=409, detail="jm_error: {msg}")
+        raise HTTPException(status_code=409, detail=f"ssh_error: {msg}")
 
     ret = {
         "id": connection_id,
@@ -144,7 +141,7 @@ def process(connection_id: str, req: CommandRequest):
 
 class PathInfo(BaseModel):
     path: Union[str, None] = '.'
-    filename: Union[int, None] = None
+    filename: Union[str, None] = None
     st_gid: Union[int, None] = None
     st_mode: Union[int, None] = None
     st_mtime: Union[int, None] = None
@@ -170,9 +167,6 @@ if __name__ == '__main__':
     host = sys.argv[1] if len(sys.argv) > 1 else "0.0.0.0"
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 8000
 
-    if not os.path.exists(TACCJM_DIR):
-        os.makedirs(TACCJM_DIR)
-    logger = init_logger(output=f"{TACCJM_DIR}/ssh_server_log.json", fmt='json')
     logger.info("Starting TACC SSH Server.")
     uvicorn.run(app, host=host, port=port)
     logger.info("TACC SSH Server started.")

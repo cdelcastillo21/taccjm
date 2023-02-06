@@ -133,7 +133,7 @@ def find_tjm_processes(start: bool = False, kill: bool = False) -> dict:
     processes_found = {}
 
     # Strings defining commands
-    srv_cmd = f"python3 {TACCJM_SOURCE}/tacc_ssh_server.py"
+    srv_cmd = f"python {TACCJM_SOURCE}/tacc_ssh_server.py"
     srv_cmd += f" {TACC_SSH_HOST} {TACC_SSH_PORT}"
 
     # TODO: implement heartbeat?
@@ -181,7 +181,8 @@ def find_tjm_processes(start: bool = False, kill: bool = False) -> dict:
     return processes_found
 
 
-def api_call(http_method: str, end_point: str, data: dict = None) -> dict:
+def api_call(http_method: str, end_point: str, params: dict = None,
+             data: dict = None, json_data: dict = None) -> dict:
     """
     API Call
 
@@ -209,7 +210,7 @@ def api_call(http_method: str, end_point: str, data: dict = None) -> dict:
 
     # Build http request
     base_url = "http://{host}:{port}".format(host=TACC_SSH_HOST, port=TACC_SSH_PORT)
-    req = requests.Request(http_method, base_url + "/" + end_point, data=data)
+    req = requests.Request(http_method, base_url + "/" + end_point, json=json_data, params=params, data=data)
     prepared = req.prepare()
 
     # Initialize connection and send http request
@@ -223,7 +224,6 @@ def api_call(http_method: str, end_point: str, data: dict = None) -> dict:
         sleep(5)
         res = s.send(prepared)
 
-    pdb.set_trace()
 
     # Return content if success, else raise error
     if res.status_code == 200:
@@ -256,8 +256,8 @@ def list_ssh() -> List[str]:
     return res
 
 
-def init_jm(
-    jm_id: str,
+def init(
+    connection_id: str,
     system: str,
     user: str = None,
     psw: str = None,
@@ -272,9 +272,9 @@ def init_jm(
 
     Parameters
     ----------
-    jm_id : str
-        ID to give to Job Manager instance on TACCJM server. Must be unique and
-        not exist already in TACCJM when executing `list_jms()`.
+    connection_id: str
+        ID to give to TACCSSHClient instance on the ssh server. Must be unique
+        and not exist already in when executing `list_ssh()`.
     system : str
         Name of tacc system to connect to. Must be one of stampede2, ls5,
         frontera, or maverick2.
@@ -290,10 +290,10 @@ def init_jm(
 
     Returns
     -------
-    jm : dict
+    ssh_cnofig : dict
         Dictionary containing info about job manager instance just initialized.
     """
-    if jm_id in [j["jm_id"] for j in list_jms()]:
+    if connection_id in [c["id"] for s in list_ssh()]:
         raise ValueError(f"{jm_id} already exists.")
 
     # Get user credentials/psw/mfa if not provided
@@ -301,7 +301,6 @@ def init_jm(
     psw = getpass("psw: ") if psw is None else psw
     mfa = input("mfa: ") if mfa is None else mfa
     data = {
-        "jm_id": jm_id,
         "system": system,
         "user": user,
         "psw": psw,
@@ -311,7 +310,7 @@ def init_jm(
 
     # Make API call
     try:
-        res = api_call("POST", "init", data)
+        res = api_call("POST", connection_id, json_data=data)
     except TACCJMError as e:
         e.message = "init_jm error"
         logger.error(e.message)

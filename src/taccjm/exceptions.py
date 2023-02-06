@@ -124,6 +124,7 @@ class TACCJMError(Exception):
         except Exception as e:
             m = str(res) + "Unable to parse json errors. Raw content:"
             m += res.content.decode("utf-8")
+            # m += f"HTTP Request: {self.get_http_str()}"
 
         return m
 

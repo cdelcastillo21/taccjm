@@ -12,8 +12,8 @@ TACCJM_SOURCE = os.path.dirname(__file__)
 TACCJM_DIR = os.path.join(os.path.expanduser("~"), ".taccjm")
 
 # Default host and port to start tacc ssh servers on
-TACC_SSH_PORT = 8221
-TACC_SSH_HOST = "localhost"
+TACC_SSH_PORT = 8225
+TACC_SSH_HOST = "0.0.0.0"
 
 # Basic HPC Application Template
 # Example APP and JOB configs
