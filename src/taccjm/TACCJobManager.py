@@ -4,23 +4,23 @@ TACCJobManager Class
 
 """
 
-import os                       # OS system utility functions for local system
-import posixpath                # Paths on remote system (assumed UNIX)
-import errno                    # For error messages
-import tarfile                  # For sending compressed directories
-import re                       # Regular Expressions
-import pdb                      # Debug
+import os  # OS system utility functions for local system
+import posixpath  # Paths on remote system (assumed UNIX)
+import errno  # For error messages
+import tarfile  # For sending compressed directories
+import re  # Regular Expressions
+import pdb  # Debug
 import tempfile
-import json                     # For saving and loading job configs to disk
-import time                     # Time functions
-import logging                  # Used to setup the Paramiko log file
-import stat                     # For reading file stat codes
-from datetime import datetime   # Date time functionality
-from fnmatch import fnmatch     # For unix-style filename pattern matching
-from taccjm.utils import *      # TACCJM Util functions for config files/dicts
+import json  # For saving and loading job configs to disk
+import time  # Time functions
+import logging  # Used to setup the Paramiko log file
+import stat  # For reading file stat codes
+from datetime import datetime  # Date time functionality
+from fnmatch import fnmatch  # For unix-style filename pattern matching
+from taccjm.utils import *  # TACCJM Util functions for config files/dicts
 from taccjm.constants import *  # For application configs
 from typing import Tuple, List  # Type hints
-from typing import Union        # Type hints
+from typing import Union  # Type hints
 from pandas import to_datetime
 
 # Modified paramiko ssh client and common paramiko exceptions
@@ -38,7 +38,7 @@ __license__ = "MIT"
 logger = logging.getLogger(__name__)
 
 
-class TACCJobManager():
+class TACCJobManager:
     """
     Class defining an ssh connection to a TACC system .
 
@@ -93,16 +93,14 @@ class TACCJobManager():
 
     """
 
-    ROOT = 'tacc.utexas.edu'
-    SYSTEMS = ['stampede2', 'ls6', 'frontera', 'maverick2']
+    ROOT = "tacc.utexas.edu"
+    SYSTEMS = ["stampede2", "ls6", "frontera", "maverick2"]
     USER_PROMPT = "Username:"
     PSW_PROMPT = "Password:"
-    MFA_PROMPT ="TACC Token Code:"
+    MFA_PROMPT = "TACC Token Code:"
     SCRATCH_DIR = "$SCRATCH"
 
-
-    def __init__(self, system, user=None,
-            psw=None, mfa=None, working_dir='taccjm'):
+    def __init__(self, system, user=None, psw=None, mfa=None, working_dir="taccjm"):
         """
         Initialize Job Manager connection and directories.
 
@@ -129,42 +127,51 @@ class TACCJobManager():
             m = f"Unrecognized system {system}. Options - {self.SYSTEMS}."
             logger.error(m)
             raise ValueError(m)
-        if any([working_dir.startswith('../'),
-                working_dir.endswith('/..'),
-                '/../' in working_dir ]):
+        if any(
+            [
+                working_dir.startswith("../"),
+                working_dir.endswith("/.."),
+                "/../" in working_dir,
+            ]
+        ):
             msg = f"Inavlid working dir {working_dir} - Contains '..'."
             logger.error(msg)
             raise ValueError(msg)
 
         # Connect to system
         logger.info(f"Connecting {user} to system {system}...")
-        self.system= f"{system}.tacc.utexas.edu"
-        self._client = SSHClient2FA(user_prompt=self.USER_PROMPT,
-                psw_prompt=self.PSW_PROMPT,
-                mfa_prompt=self.MFA_PROMPT)
-        self.user = self._client.connect(self.system,
-                uid=user, pswd=psw, mfa_pswd=mfa)
+        self.system = f"{system}.tacc.utexas.edu"
+        self._client = SSHClient2FA(
+            user_prompt=self.USER_PROMPT,
+            psw_prompt=self.PSW_PROMPT,
+            mfa_prompt=self.MFA_PROMPT,
+        )
+        self.user = self._client.connect(self.system, uid=user, pswd=psw, mfa_pswd=mfa)
         logger.info(f"Succesfuly connected to {system}")
 
         # Get taccjm working directory, relative to users scratch directory
         self.SCRATCH_DIR = scratch_dir = self._execute_command(
-                f"echo {self.SCRATCH_DIR}").strip()
-        logger.info("Resolved scratch path  to ${self.SCRATCH_DIR} for user {self.user}")
+            f"echo {self.SCRATCH_DIR}"
+        ).strip()
+        logger.info(
+            "Resolved scratch path  to ${self.SCRATCH_DIR} for user {self.user}"
+        )
         taccjm_dir = posixpath.join(self.SCRATCH_DIR, working_dir)
 
         # Initialze jobs, apps, scripts, and trash dirs
         logger.info("Creating if jobs, apps, scripts, and trash dirs")
-        for d in zip(['jobs_dir', 'apps_dir', 'scripts_dir', 'trash_dir'],
-                      ['jobs', 'apps', 'scripts', 'trash']):
-            setattr(self, d[0], posixpath.join(taccjm_dir,d[1]))
+        for d in zip(
+            ["jobs_dir", "apps_dir", "scripts_dir", "trash_dir"],
+            ["jobs", "apps", "scripts", "trash"],
+        ):
+            setattr(self, d[0], posixpath.join(taccjm_dir, d[1]))
             logger.info(f"Initializing directory {getattr(self, d[0])}")
             self._mkdir(getattr(self, d[0]), parents=True)
 
         # Get python path and home dir
-        self.python_path = self._execute_command('which python')
+        self.python_path = self._execute_command("which python")
 
         self.scripts = []
-
 
     def _execute_command(self, cmnd, wait=True) -> None:
         """
@@ -211,8 +218,8 @@ class TACCJobManager():
         anything in stderr, else return stdout.
         """
         rc = channel.recv_exit_status()
-        out = channel.recv(1000000).decode('utf-8')
-        err = channel.recv_stderr(1000000).decode('utf-8')
+        out = channel.recv(1000000).decode("utf-8")
+        err = channel.recv_stderr(1000000).decode("utf-8")
 
         if rc != 0 and error:
             # Build base TJMCommand Error, only place this should be done
@@ -224,7 +231,6 @@ class TACCJobManager():
             raise t
 
         return (rc, out, err)
-
 
     def _mkdir(self, path, parents=False) -> None:
         """
@@ -250,8 +256,7 @@ class TACCJobManager():
             logger.error(tjm_error.message)
             raise tjm_error
 
-
-    def _parse_submit_script(self, job_config:dict) -> str:
+    def _parse_submit_script(self, job_config: dict) -> str:
         """
         Parses text to write for a SLURM job submission script on TACC.
 
@@ -271,24 +276,25 @@ class TACCJobManager():
 
         """
         # Format submit scripts with appropriate inputs for job
-        np = job_config['node_count']*job_config['processors_per_node']
+        np = job_config["node_count"] * job_config["processors_per_node"]
         header = SUBMIT_SCRIPT_TEMPLATE.format(
-                name=job_config['name'],
-                desc=job_config['desc'],
-                job_id=job_config['job_id'],
-                queue=job_config['queue'],
-                N=job_config['node_count'],
-                n=np,
-                rt=job_config['max_run_time'])
+            name=job_config["name"],
+            desc=job_config["desc"],
+            job_id=job_config["job_id"],
+            queue=job_config["queue"],
+            N=job_config["node_count"],
+            n=np,
+            rt=job_config["max_run_time"],
+        )
 
         # Add slurm directives for email and allocation if specified for job
-        if 'email' in job_config.keys():
-            email_line =  "\n#SBATCH --mail-user={email} # Email to send to"
-            header += email_line.format(email=job_config['email'])
+        if "email" in job_config.keys():
+            email_line = "\n#SBATCH --mail-user={email} # Email to send to"
+            header += email_line.format(email=job_config["email"])
             header += "\n#SBATCH --mail-type=all     # Email to send to"
-        if 'allocation' in job_config.keys():
-            alloc_line =  "\n#SBATCH -A {allocation} # Allocation name "
-            header += alloc_line.format(allocation=job_config['allocation'])
+        if "allocation" in job_config.keys():
+            alloc_line = "\n#SBATCH -A {allocation} # Allocation name "
+            header += alloc_line.format(allocation=job_config["allocation"])
 
         # End slurm directives
         header += "\n#----------------------------------------------------\n"
@@ -298,12 +304,13 @@ class TACCJobManager():
         job_args = {"NP": np}
 
         # Add paths of job inputs (transferred to job dir) as argument
-        for arg, path in job_config['inputs'].items():
-            job_args[arg] = '/'.join([job_config['job_dir'], 'inputs',
-                                      os.path.basename(path)])
+        for arg, path in job_config["inputs"].items():
+            job_args[arg] = "/".join(
+                [job_config["job_dir"], "inputs", os.path.basename(path)]
+            )
 
         # Add on parameters passed to job
-        job_args.update(job_config['parameters'])
+        job_args.update(job_config["parameters"])
 
         # Create list of arguments to pass as env variables to job
         export_list = [f"export TACCJM_APPID={job_config['app']}"]
@@ -318,16 +325,15 @@ class TACCJobManager():
         entry_path = f"{job_config['job_dir']}/{job_config['app']}"
         entry_path += f"/{job_config['entry_script']}"
         submit_script = (
-            header                                 # set SBATCH params
+            header  # set SBATCH params
             + f"\ncd {job_config['job_dir']}\n\n"  # cd to job directory
-            + "\n".join(export_list)               # set job params
-            + f"\n{entry_path}"                    # run main script
+            + "\n".join(export_list)  # set job params
+            + f"\n{entry_path}"  # run main script
         )
 
         return submit_script
 
-
-    def showq(self, user:str=None) -> List[dict]:
+    def showq(self, user: str = None) -> List[dict]:
         """
         Get information about jobs currently in the job queue.
 
@@ -355,9 +361,9 @@ class TACCJobManager():
             If slurm queue is not accessible for some reason (TACCC error).
         """
         # Build command string
-        cmnd = 'showq'
+        cmnd = "showq"
         slurm_user = self.user if user is None else user
-        if slurm_user!='all':
+        if slurm_user != "all":
             cmnd += f" -U {slurm_user}"
 
         # Query job queue
@@ -370,30 +376,34 @@ class TACCJobManager():
 
         # Loop through lines in output table and parse job information
         jobs = []
-        parse = lambda x : {'job_id':x[0], 'job_name':x[1],
-                            'username':x[2], 'state':x[3],
-                            'nodes':x[4], 'remaining': x[4],
-                            'start_time': x[5]}
-        lines = ret.split('\n')
+        parse = lambda x: {
+            "job_id": x[0],
+            "job_name": x[1],
+            "username": x[2],
+            "state": x[3],
+            "nodes": x[4],
+            "remaining": x[4],
+            "start_time": x[5],
+        }
+        lines = ret.split("\n")
         jobs_line = False
         line_counter = -2
         for l in lines:
-            job_statuses = ['ACTIVE', 'WAITING', 'BLOCKED', 'COMPLETING']
+            job_statuses = ["ACTIVE", "WAITING", "BLOCKED", "COMPLETING"]
             if any([l.startswith(x) for x in job_statuses]):
-                jobs_line=True
+                jobs_line = True
                 continue
-            if jobs_line==True:
-                if l=='':
+            if jobs_line == True:
+                if l == "":
                     jobs_line = False
                     line_counter = -2
                     continue
                 else:
                     line_counter += 1
-                    if line_counter>0:
+                    if line_counter > 0:
                         jobs.append(parse(l.split()))
 
         return jobs
-
 
     def get_allocations(self) -> List[dict]:
         """
@@ -416,7 +426,7 @@ class TACCJobManager():
             If allocations file is not accessible for some reason (TACCC error).
         """
         # Check job allocations
-        cmnd = '/usr/local/etc/taccinfo'
+        cmnd = "/usr/local/etc/taccinfo"
         try:
             ret = self._execute_command(cmnd)
         except TJMCommandError as tjm_error:
@@ -425,17 +435,17 @@ class TACCJobManager():
             raise tjm_error
 
         # Parse allocation info
-        allocations = set([x.strip() for x in ret.split('\n')[2].split('|')])
-        allocations.remove('')
+        allocations = set([x.strip() for x in ret.split("\n")[2].split("|")])
+        allocations.remove("")
         allocations = [x.split() for x in allocations]
-        allocations = [{'name':x[0],
-                        'service_units': int(x[1]),
-                        'exp_date': x[2]} for x in allocations]
+        allocations = [
+            {"name": x[0], "service_units": int(x[1]), "exp_date": x[2]}
+            for x in allocations
+        ]
 
         return allocations
 
-
-    def list_files(self, path:str='.') -> List[dict]:
+    def list_files(self, path: str = ".") -> List[dict]:
         """
         Returns the info on all files/folderes at a given path. If path is a
         file, then returns file info. If path is directory, then returns file
@@ -469,8 +479,7 @@ class TACCJobManager():
         """
         try:
             f_info = []
-            f_attrs = ['st_atime', 'st_gid', 'st_mode',
-                    'st_mtime', 'st_size', 'st_uid']
+            f_attrs = ["st_atime", "st_gid", "st_mode", "st_mtime", "st_size", "st_uid"]
 
             # Open sftp connection
             with self._client.open_sftp() as sftp:
@@ -479,18 +488,18 @@ class TACCJobManager():
 
                 if stat.S_ISDIR(lstat.st_mode):
                     # If directory get info on all files in directory
-                    f_attrs.insert(0, 'filename')
+                    f_attrs.insert(0, "filename")
                     files = sftp.listdir_attr(path)
                     for f in files:
                         # Extract fields from SFTPAttributes object for files
                         d = dict([(x, f.__getattribute__(x)) for x in f_attrs])
-                        d['ls_str'] = f.asbytes()
+                        d["ls_str"] = f.asbytes()
                         f_info.append(d)
                 else:
                     # If file, just get file info
                     d = [(x, lstat.__getattribute__(x)) for x in f_attrs]
-                    d.insert(0, ('filename', path))
-                    d.append(('ls_str', lstat.asbytes()))
+                    d.insert(0, ("filename", path))
+                    d.append(("ls_str", lstat.asbytes()))
                     f_info.append(dict(d))
 
             # Return list of dictionaries with file info
@@ -512,8 +521,7 @@ class TACCJobManager():
             logger.error(msg)
             raise e
 
-
-    def peak_file(self, path:str, head:int=-1, tail:int=-1) -> str:
+    def peak_file(self, path: str, head: int = -1, tail: int = -1) -> str:
         """
         Performs head/tail on file at given path to "peak" at file.
 
@@ -541,24 +549,23 @@ class TACCJobManager():
             If user does not have permission to write to specified remote path
             on TACC system or access to local file/folder and contents.
         """
-        if head>0:
+        if head > 0:
             cmnd = f"head -{head} {path}"
-        elif tail>0:
+        elif tail > 0:
             cmnd = f"tail -{tail} {path}"
         else:
             cmnd = f"head {path}"
         try:
             ret = self._execute_command(cmnd)
         except TJMCommandError as t:
-            f_not_found = ['No such file or directory', 'Not a directory']
-            if 'Permission denied' in t.stderr:
+            f_not_found = ["No such file or directory", "Not a directory"]
+            if "Permission denied" in t.stderr:
                 msg = f"peak_file - Dont have permission to access {path}"
                 raise PermissionError(errno.EACCES, msg, path)
             elif any([x in t.stderr or x in t.stdout for x in f_not_found]):
                 msg = f"peak_file - No such file or directory {path}"
                 logger.error(msg)
-                raise FileNotFoundError(errno.ENOENT,
-                        os.strerror(errno.ENOENT), path)
+                raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), path)
             else:
                 t.message = f"peak_file - Unexpected error."
                 logger.error(t.message)
@@ -566,8 +573,7 @@ class TACCJobManager():
 
         return ret
 
-
-    def upload(self, local:str, remote:str, file_filter:str='*') -> None:
+    def upload(self, local: str, remote: str, file_filter: str = "*") -> None:
         """
         Sends file or folder from local path to remote path. If a file is
         specified, the remote path is the destination path of the file to be
@@ -615,7 +621,7 @@ class TACCJobManager():
         """
         # Unix paths -> Get file remote file name and directory
         remote_dir, remote_fname = os.path.split(remote)
-        remote_dir = '.' if remote_dir=='' else remote_dir
+        remote_dir = "." if remote_dir == "" else remote_dir
 
         try:
             # Sending directory -> Package into tar file
@@ -626,7 +632,7 @@ class TACCJobManager():
 
                 # Package tar file -> Recursive call
                 with tarfile.open(local_tar_file, "w:gz") as tar:
-                    f = lambda x : x if fnmatch(x.name, file_filter) else None
+                    f = lambda x: x if fnmatch(x.name, file_filter) else None
                     tar.add(local, arcname=remote_fname, filter=f)
 
                 # Send tar file
@@ -651,8 +657,7 @@ class TACCJobManager():
                 with self._client.open_sftp() as sftp:
                     res = sftp.put(local, remote)
             else:
-                raise FileNotFoundError(errno.ENOENT,
-                        os.strerror(errno.ENOENT), local)
+                raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), local)
         except FileNotFoundError as f:
             msg = f"upload - No such file or folder {f.filename}."
             logger.error(msg)
@@ -670,8 +675,7 @@ class TACCJobManager():
             logger.error(msg)
             raise e
 
-
-    def download(self, remote:str, local:str, file_filter:str='*') -> None:
+    def download(self, remote: str, local: str, file_filter: str = "*") -> None:
         """
         Downloads file or folder from remote path on TACC resource to local
         path. If a file is specified, the local path is the destination path
@@ -717,8 +721,8 @@ class TACCJobManager():
         all TACC systems are unix.
         """
 
-        local = os.path.abspath(local.rstrip('/'))
-        remote = remote.rstrip('/')
+        local = os.path.abspath(local.rstrip("/"))
+        remote = remote.rstrip("/")
         try:
             with self._client.open_sftp() as sftp:
                 fileattr = sftp.stat(remote)
@@ -736,7 +740,7 @@ class TACCJobManager():
                     try:
                         self._execute_command(cmd)
                     except TJMCommandError as t:
-                        if 'padding with zeros' in t.stdout:
+                        if "padding with zeros" in t.stdout:
                             # Warning message, not an error.
                             pass
                         else:
@@ -775,8 +779,7 @@ class TACCJobManager():
             logger.error(msg)
             raise t
 
-
-    def remove(self, remote_path:str) -> None:
+    def remove(self, remote_path: str) -> None:
         """
         'Removes' a file/folder by moving it to the trash directory. Trash
         should be emptied out preiodically with `empty_trash()` method.
@@ -805,9 +808,9 @@ class TACCJobManager():
 
         """
         # Unix paths -> Get file remote file name and directory
-        file_name = remote_path.replace('/','___')
+        file_name = remote_path.replace("/", "___")
         trash_path = f"{self.trash_dir}/{file_name}"
-        abs_path = './' + remote_path if remote_path[0]!='/' else remote_path
+        abs_path = "./" + remote_path if remote_path[0] != "/" else remote_path
         abs_path = posixpath.normpath(abs_path)
 
         # Check if path is a file or directory
@@ -821,7 +824,7 @@ class TACCJobManager():
             logger.error(msg)
             raise FileNotFoundError(errno.ENOENT, msg, abs_path)
 
-        src_path  = abs_path if not is_dir else abs_path + '/'
+        src_path = abs_path if not is_dir else abs_path + "/"
         cmnd = f"rsync -a {src_path} {trash_path} && rm -rf {abs_path}"
         try:
             ret = self._execute_command(cmnd)
@@ -830,8 +833,7 @@ class TACCJobManager():
             logger.error(tjm_error.message)
             raise tjm_error
 
-
-    def restore(self, remote_path:str) -> None:
+    def restore(self, remote_path: str) -> None:
         """
         Restores a file/folder from the trash directory by moving it back to
         its original path.
@@ -855,9 +857,9 @@ class TACCJobManager():
             be becasue the original path still has data in it/exists.
         """
         # Unix paths -> Get file remote file name and directory
-        file_name = remote_path.replace('/','___')
+        file_name = remote_path.replace("/", "___")
         trash_path = posixpath.join(self.trash_dir, file_name)
-        abs_path = './' + remote_path if remote_path[0]!='/' else remote_path
+        abs_path = "./" + remote_path if remote_path[0] != "/" else remote_path
 
         # Check if trash path is a file or directory
         is_dir = False
@@ -879,8 +881,7 @@ class TACCJobManager():
             logger.error(tjm_error.message)
             raise tjm_error
 
-
-    def empty_trash(self, filter_str:str='*') -> None:
+    def empty_trash(self, filter_str: str = "*") -> None:
         """
         Cleans out trahs directly by permently removing contents with rm -rf
         command.
@@ -896,8 +897,7 @@ class TACCJobManager():
         """
         self._execute_command(f"rm -rf {self.trash_dir}/{filter_str}")
 
-
-    def write(self, data:Union[str, dict], path:str) -> None:
+    def write(self, data: Union[str, dict], path: str) -> None:
         """
         Write `data` directly to path via an sftp file stream. Supported types:
             1. dict -> json file
@@ -928,8 +928,8 @@ class TACCJobManager():
             raise ValueError(f"Data type {d_type} is not supported")
         try:
             with self._client.open_sftp() as sftp:
-                with sftp.open(path, 'w') as jc:
-                    if d_type==dict:
+                with sftp.open(path, "w") as jc:
+                    if d_type == dict:
                         json.dump(data, jc)
                     else:
                         jc.write(data)
@@ -946,8 +946,7 @@ class TACCJobManager():
             logger.error(msg)
             raise e
 
-
-    def read(self, path:str, data_type:str='text') -> Union[str, dict]:
+    def read(self, path: str, data_type: str = "text") -> Union[str, dict]:
         """
         Read data of `data_type` from file `path` on TACC system directly via
         a file stream. Supported data types are:
@@ -975,15 +974,15 @@ class TACCJobManager():
         PermissionError
             If user does not have permission to read specified remote path
         """
-        if data_type not in ['json', 'text']:
+        if data_type not in ["json", "text"]:
             raise ValueError(f"read - data type {data_type} is not supported")
         try:
             with self._client.open_sftp() as sftp:
-                with sftp.open(path, 'r') as fp:
-                    if data_type=='json':
+                with sftp.open(path, "r") as fp:
+                    if data_type == "json":
                         data = json.load(fp)
                     else:
-                        data = fp.read().decode('UTF-8')
+                        data = fp.read().decode("UTF-8")
             return data
         except FileNotFoundError as f:
             msg = f"read - No such file or folder {f.filename}."
@@ -997,7 +996,6 @@ class TACCJobManager():
             msg = f"read - Unknown reading data from {path}: {e}"
             logger.error(msg)
             raise e
-
 
     def get_apps(self) -> List[str]:
         """
@@ -1013,12 +1011,11 @@ class TACCJobManager():
             List of applications deployed.
 
         """
-        apps = [f['filename'] for f in self.list_files(path=self.apps_dir)]
-        apps = [a for a in apps if not a.startswith('.')]
+        apps = [f["filename"] for f in self.list_files(path=self.apps_dir)]
+        apps = [a for a in apps if not a.startswith(".")]
         return apps
 
-
-    def get_app(self, app_id:str) -> dict:
+    def get_app(self, app_id: str) -> dict:
         """
         Get application config for app deployed at TACCJobManager.apps_dir.
 
@@ -1047,18 +1044,19 @@ class TACCJobManager():
             raise ValueError(msg)
 
         # Load application config
-        app_config_path = '/'.join([self.apps_dir, app_id, 'app.json'])
-        app_config = self.read(app_config_path, data_type='json')
+        app_config_path = "/".join([self.apps_dir, app_id, "app.json"])
+        app_config = self.read(app_config_path, data_type="json")
 
         return app_config
 
-
-    def deploy_app(self,
-            app_config:dict=None,
-            local_app_dir:str='.',
-            app_config_file:str="app.json",
-            overwrite:bool=False,
-            **kwargs) -> dict:
+    def deploy_app(
+        self,
+        app_config: dict = None,
+        local_app_dir: str = ".",
+        app_config_file: str = "app.json",
+        overwrite: bool = False,
+        **kwargs,
+    ) -> dict:
         """
         Deploy local application to TACCJobManager.apps_dir. Values in project
         config file are substituted in where needed in the app config file to
@@ -1097,9 +1095,8 @@ class TACCJobManager():
 
         # Load templated app configuration
         if app_config is None:
-            with open(os.path.join(local_app_dir, app_config_file), 'r') as fp:
+            with open(os.path.join(local_app_dir, app_config_file), "r") as fp:
                 app_config = json.load(fp)
-
 
         # Update with kwargs
         app_config.update(**kwargs)
@@ -1109,25 +1106,25 @@ class TACCJobManager():
 
         # Required parameters for application configuration
         missing = set(APP_TEMPLATE.keys()) - set(app_config.keys())
-        if len(missing)>0:
+        if len(missing) > 0:
             msg = f"deploy_app - missing required app configs {missing}"
             logger.error(msg)
             raise ValueError(msg)
 
         # Only overwrite previous version of app if overwrite is set.
-        if (app_config['name'] in cur_apps) and (not overwrite):
+        if (app_config["name"] in cur_apps) and (not overwrite):
             msg = f"deploy_app - {app_config['name']} already exists."
             logger.info(msg)
             raise ValueError(msg)
 
         try:
             # Now try and send application data and config to system
-            local_app_dir = os.path.join(local_app_dir, 'assets')
-            remote_app_dir = '/'.join([self.apps_dir, app_config['name']])
+            local_app_dir = os.path.join(local_app_dir, "assets")
+            remote_app_dir = "/".join([self.apps_dir, app_config["name"]])
             self.upload(local_app_dir, remote_app_dir)
 
             # Put app config in deployed app folder
-            app_config_path = '/'.join([remote_app_dir, 'app.json'])
+            app_config_path = "/".join([remote_app_dir, "app.json"])
             self.write(app_config, app_config_path)
 
             # Make entry point script executable
@@ -1140,7 +1137,6 @@ class TACCJobManager():
             raise e
 
         return app_config
-
 
     def get_jobs(self) -> List[str]:
         """
@@ -1156,12 +1152,11 @@ class TACCJobManager():
             List of jobs contained deployed.
 
         """
-        jobs = [f['filename'] for f in self.list_files(path=self.jobs_dir)]
-        jobs = [j for j in jobs if not j.startswith('.')]
+        jobs = [f["filename"] for f in self.list_files(path=self.jobs_dir)]
+        jobs = [j for j in jobs if not j.startswith(".")]
         return jobs
 
-
-    def get_job(self, job_id:str) -> dict:
+    def get_job(self, job_id: str) -> dict:
         """
         Get job config for job in TACCJobManager jobs_dir.
 
@@ -1183,21 +1178,22 @@ class TACCJobManager():
 
         """
         try:
-            job_config_path = '/'.join([self.jobs_dir, job_id, 'job.json'])
-            return self.read(job_config_path, data_type='json')
+            job_config_path = "/".join([self.jobs_dir, job_id, "job.json"])
+            return self.read(job_config_path, data_type="json")
         except FileNotFoundError as e:
             # Invalid job ID because job doesn't exist
             msg = f"get_job - {job_id} does not exist."
             logger.error(msg)
             raise ValueError(msg)
 
-
-    def deploy_job(self,
-            job_config:dict=None,
-            local_job_dir:str='.',
-            job_config_file:str='job.json',
-            stage:bool=True,
-            **kwargs) -> dict:
+    def deploy_job(
+        self,
+        job_config: dict = None,
+        local_job_dir: str = ".",
+        job_config_file: str = "job.json",
+        stage: bool = True,
+        **kwargs,
+    ) -> dict:
         """
         Setup job directory on supercomputing resources. If job_config is not
         specified, then it is parsed from the json file found at
@@ -1238,14 +1234,15 @@ class TACCJobManager():
         """
         # Load from json file if job conf dictionary isn't specified
         if job_config is None:
-            with open(os.path.join(local_job_dir, job_config_file), 'r') as fp:
+            with open(os.path.join(local_job_dir, job_config_file), "r") as fp:
                 job_config = json.load(fp)
 
         # Overwrite job_config loaded with kwargs keyword arguments if specified
         job_config = update_dic_keys(job_config, **kwargs)
 
         # Get default arguments from deployed application
-        app_config = self.get_app(job_config['app'])
+        app_config = self.get_app(job_config["app"])
+
         def _get_attr(j, a):
             # Helper function to get app defatults for job configs
             if j in job_config.keys():
@@ -1254,63 +1251,64 @@ class TACCJobManager():
                 return app_config[a]
 
         # Default in job arguments if they are not specified
-        job_config['entry_script'] = _get_attr('entry_script', 'entry_script')
-        job_config['desc'] = _get_attr('desc','short_desc')
-        job_config['queue'] = _get_attr('queue','default_queue')
-        job_config['node_count'] = int(_get_attr('node_count',
-                'default_node_count'))
-        job_config['processors_per_node'] = int(_get_attr('processors_per_node',
-                'default_processors_per_node'))
-        job_config['max_run_time'] = _get_attr('max_run_time',
-                'default_max_run_time')
+        job_config["entry_script"] = _get_attr("entry_script", "entry_script")
+        job_config["desc"] = _get_attr("desc", "short_desc")
+        job_config["queue"] = _get_attr("queue", "default_queue")
+        job_config["node_count"] = int(_get_attr("node_count", "default_node_count"))
+        job_config["processors_per_node"] = int(
+            _get_attr("processors_per_node", "default_processors_per_node")
+        )
+        job_config["max_run_time"] = _get_attr("max_run_time", "default_max_run_time")
 
         # Verify appropriate inputs and arguments are passed
-        for i in app_config['inputs']:
-            if i['name'] not in job_config['inputs']:
+        for i in app_config["inputs"]:
+            if i["name"] not in job_config["inputs"]:
                 raise ValueError(f"deploy_job - missing input {i['name']}")
-        for i in app_config['parameters']:
-            if i['name'] not in job_config['parameters']:
+        for i in app_config["parameters"]:
+            if i["name"] not in job_config["parameters"]:
                 raise ValueError(f"deploy_job - missing parameter {i['name']}")
 
         if stage:
             # Stage job inputs
-            if not any([job_config.get(x) for x in ['job_id', 'job_dir']]):
+            if not any([job_config.get(x) for x in ["job_id", "job_dir"]]):
                 # If job_id/job_dir has not been assigned, job hasn't been
                 # set up before, so must create job directory.
-                ts = datetime.fromtimestamp(
-                        time.time()).strftime('%Y%m%d_%H%M%S')
-                job_config['job_id'] = '{job_name}_{ts}'.format(
-                        job_name=job_config['name'], ts=ts)
-                job_config['job_dir'] = '{job_dir}/{job_id}'.format(
-                        job_dir=self.jobs_dir, job_id=job_config['job_id'])
+                ts = datetime.fromtimestamp(time.time()).strftime("%Y%m%d_%H%M%S")
+                job_config["job_id"] = "{job_name}_{ts}".format(
+                    job_name=job_config["name"], ts=ts
+                )
+                job_config["job_dir"] = "{job_dir}/{job_id}".format(
+                    job_dir=self.jobs_dir, job_id=job_config["job_id"]
+                )
 
                 # Make job directory
-                self._mkdir(job_config['job_dir'])
+                self._mkdir(job_config["job_dir"])
 
             # Utility function to clean-up job directory and raise error
-            job_dir = job_config['job_dir']
+            job_dir = job_config["job_dir"]
+
             def err(e, msg):
                 self._execute_command(f"rm -rf {job_dir}")
                 logger.error(f"deploy_job - {msg}")
                 raise e
 
             # Copy app contents to job directory
-            cmnd = 'cp -r {apps_dir}/{app} {job_dir}/{app}'.format(
-                    apps_dir=self.apps_dir,
-                    app=job_config['app'],
-                    job_dir=job_dir)
+            cmnd = "cp -r {apps_dir}/{app} {job_dir}/{app}".format(
+                apps_dir=self.apps_dir, app=job_config["app"], job_dir=job_dir
+            )
             try:
                 ret = self._execute_command(cmnd)
             except TJMCommandError as t:
                 err(t, "Error copying app assets to job dir")
 
             # Send job input data to job directory
-            if len(job_config['inputs'])>0:
-                inputs_path = posixpath.join(job_dir, 'inputs')
+            if len(job_config["inputs"]) > 0:
+                inputs_path = posixpath.join(job_dir, "inputs")
                 self._mkdir(inputs_path)
-                for arg, path in job_config['inputs'].items():
-                    arg_dest_path = posixpath.join(inputs_path,
-                            posixpath.basename(path))
+                for arg, path in job_config["inputs"].items():
+                    arg_dest_path = posixpath.join(
+                        inputs_path, posixpath.basename(path)
+                    )
                     try:
                         self.upload(path, arg_dest_path)
                     except Exception as e:
@@ -1331,8 +1329,7 @@ class TACCJobManager():
 
         return job_config
 
-
-    def submit_job(self, job_id:str) -> dict:
+    def submit_job(self, job_id: str) -> dict:
         """
         Submit job to remote system job queue.
 
@@ -1351,10 +1348,10 @@ class TACCJobManager():
         ------
         """
         # Load job config
-        job_config =  self.get_job(job_id)
+        job_config = self.get_job(job_id)
 
         # Check if this job isn't currently in the queue
-        if 'slurm_id' in job_config.keys():
+        if "slurm_id" in job_config.keys():
             msg = f"submit_job - {job_id} exists : {job_config['slurm_id']}"
             raise ValueError(msg)
 
@@ -1362,19 +1359,19 @@ class TACCJobManager():
         cmnd = f"cd {job_config['job_dir']}; "
         cmnd += f"sbatch {job_config['job_dir']}/submit_script.sh"
         ret = self._execute_command(cmnd)
-        if '\nFAILED\n' in ret:
-            raise TJMCommandError(self.system, self.user, cmnd, 0, '', ret,
-                                  f"submit_job - SLURM error")
-        job_config['slurm_id'] = ret.split('\n')[-2].split(' ')[-1]
+        if "\nFAILED\n" in ret:
+            raise TJMCommandError(
+                self.system, self.user, cmnd, 0, "", ret, f"submit_job - SLURM error"
+            )
+        job_config["slurm_id"] = ret.split("\n")[-2].split(" ")[-1]
 
         # Save job config
-        job_config_path = job_config['job_dir'] + '/job.json'
+        job_config_path = job_config["job_dir"] + "/job.json"
         self.write(job_config, job_config_path)
 
         return job_config
 
-
-    def cancel_job(self, job_id:str) -> dict:
+    def cancel_job(self, job_id: str) -> dict:
         """
         Cancel job on remote system job queue.
 
@@ -1393,23 +1390,23 @@ class TACCJobManager():
             also updated in the jobs directory.
         """
         # Load job config
-        job_config =  self.get_job(job_id)
+        job_config = self.get_job(job_id)
 
-        if 'slurm_id' in job_config.keys():
+        if "slurm_id" in job_config.keys():
             cmnd = f"scancel {job_config['slurm_id']}"
             try:
                 self._execute_command(cmnd)
             except TJMCommandError as e:
-                e.message= f"cancel_job - Failed to cancel job {job_id}."
+                e.message = f"cancel_job - Failed to cancel job {job_id}."
                 logger.error(e.message)
                 raise e
 
             # Remove slurm ID and store into job hist
-            job_config['slurm_hist'] = job_config.get('slurm_hist',[])
-            job_config['slurm_hist'].append(job_config.pop('slurm_id'))
+            job_config["slurm_hist"] = job_config.get("slurm_hist", [])
+            job_config["slurm_hist"].append(job_config.pop("slurm_id"))
 
             # Save updated job config
-            job_config_path = job_config['job_dir'] + '/job.json'
+            job_config_path = job_config["job_dir"] + "/job.json"
             self.write(job_config, job_config_path)
         else:
             msg = f"Job {job_id} has not been submitted yet."
@@ -1418,8 +1415,7 @@ class TACCJobManager():
 
         return job_config
 
-
-    def remove_job(self, job_id:str) -> str:
+    def remove_job(self, job_id: str) -> str:
         """
         Remove Job
 
@@ -1444,7 +1440,7 @@ class TACCJobManager():
             pass
 
         # Remove job directory, if it still exists
-        job_dir = '/'.join([self.jobs_dir, job_id])
+        job_dir = "/".join([self.jobs_dir, job_id])
         try:
             self.remove(job_dir)
         except:
@@ -1452,8 +1448,7 @@ class TACCJobManager():
 
         return job_id
 
-
-    def restore_job(self, job_id:str) -> dict:
+    def restore_job(self, job_id: str) -> dict:
         """
         Restores a job that has been previously removed (sent to trash).
 
@@ -1474,7 +1469,7 @@ class TACCJobManager():
             not exist.
         """
         # Unix paths -> Get file remote file name and directory
-        job_dir = '/'.join([self.jobs_dir, job_id])
+        job_dir = "/".join([self.jobs_dir, job_id])
 
         try:
             self.restore(job_dir)
@@ -1488,8 +1483,7 @@ class TACCJobManager():
 
         return job_config
 
-
-    def ls_job(self, job_id:str, path:str='') -> List[dict]:
+    def ls_job(self, job_id: str, path: str = "") -> List[dict]:
         """
         Get info on files in job directory.
 
@@ -1515,14 +1509,14 @@ class TACCJobManager():
                 - asbytes  : Output from an ls -lat like command on file.
         """
         # Get files from particular directory in job
-        fpath ='/'.join([self.jobs_dir, job_id, path])
+        fpath = "/".join([self.jobs_dir, job_id, path])
         files = self.list_files(path=fpath)
 
         return files
 
-
-    def download_job_file(self, job_id:str,
-            path:str, dest_dir:str='.', file_filter:str='*') -> str:
+    def download_job_file(
+        self, job_id: str, path: str, dest_dir: str = ".", file_filter: str = "*"
+    ) -> str:
         """
         Download file/folder at path, relative to job directory, and place it
         in the specified local destination directory. Note downloaded job data
@@ -1548,16 +1542,16 @@ class TACCJobManager():
             Local path of file/folder downloaded.
         """
         # Downlaod to local job dir
-        path = path[:-1] if path[-1]=='/' else path
-        fname = '/'.join(path.split('/')[-1:])
-        job_folder = '/'.join(path.split('/')[:-1])
+        path = path[:-1] if path[-1] == "/" else path
+        fname = "/".join(path.split("/")[-1:])
+        job_folder = "/".join(path.split("/")[:-1])
 
         # Make local data directory if it doesn't exist already
         local_data_dir = os.path.join(dest_dir, job_id)
         os.makedirs(local_data_dir, exist_ok=True)
 
         # Get file
-        src_path = '/'.join([self.jobs_dir, job_id, path])
+        src_path = "/".join([self.jobs_dir, job_id, path])
         dest_path = os.path.join(local_data_dir, fname)
         try:
             self.download(src_path, dest_path, file_filter=file_filter)
@@ -1567,9 +1561,9 @@ class TACCJobManager():
             raise e
         return dest_path
 
-
-    def read_job_file(self, job_id:str, path:str,
-            data_type:str='text') -> Union[str, dict]:
+    def read_job_file(
+        self, job_id: str, path: str, data_type: str = "text"
+    ) -> Union[str, dict]:
         """
         Read data of `data_type` from file `path` relative to a job's directory
         via an sftp file stream. Supported data types are:
@@ -1598,12 +1592,12 @@ class TACCJobManager():
             If invalid data type specified.
         """
         # Downlaod to local job dir
-        path = path[:-1] if path[-1]=='/' else path
-        fname = '/'.join(path.split('/')[-1:])
-        job_folder = '/'.join(path.split('/')[:-1])
+        path = path[:-1] if path[-1] == "/" else path
+        fname = "/".join(path.split("/")[-1:])
+        job_folder = "/".join(path.split("/")[:-1])
 
         # Get data
-        src_path = '/'.join([self.jobs_dir, job_id, path])
+        src_path = "/".join([self.jobs_dir, job_id, path])
         try:
             data = self.read(src_path, data_type=data_type)
         except Exception as e:
@@ -1613,9 +1607,9 @@ class TACCJobManager():
 
         return data
 
-
-    def upload_job_file(self, job_id:str, path:str,
-            dest_dir:str='.', file_filter:str='*') -> None:
+    def upload_job_file(
+        self, job_id: str, path: str, dest_dir: str = ".", file_filter: str = "*"
+    ) -> None:
         """
         Upload file/folder at local `path` to `dest_dir`, relative to job
         directory on remote TACC system.
@@ -1655,7 +1649,7 @@ class TACCJobManager():
         try:
             # Get destination directory in job path to send file to
             fname = os.path.basename(os.path.normpath(path))
-            dest_path = '/'.join([self.jobs_dir, job_id, dest_dir, fname])
+            dest_path = "/".join([self.jobs_dir, job_id, dest_dir, fname])
 
             self.upload(path, dest_path, file_filter=file_filter)
         except Exception as e:
@@ -1664,9 +1658,7 @@ class TACCJobManager():
             raise e
         return dest_path
 
-
-    def write_job_file(self, job_id:str,
-            data:Union[dict,str], path:str) -> None:
+    def write_job_file(self, job_id: str, data: Union[dict, str], path: str) -> None:
         """
         Write `data` to `path`, relative to `job_id`'s job directory on remote
         TACC system, via an sftp file stream. Supported types for `data` are:
@@ -1704,16 +1696,16 @@ class TACCJobManager():
         """
         try:
             # Get destination directory in job path to send file to
-            dest_path = '/'.join([self.jobs_dir, job_id, path])
+            dest_path = "/".join([self.jobs_dir, job_id, path])
             self.write(data, dest_path)
         except Exception as e:
             msg = f"write_job_file - Unable to write file {path}."
             logger.error(msg)
             raise e
 
-
-    def peak_job_file(self, job_id:str,
-            path:str, head:int=-1, tail:int=-1) -> str:
+    def peak_job_file(
+        self, job_id: str, path: str, head: int = -1, tail: int = -1
+    ) -> str:
         """
         Performs head/tail on file at given path to "peak" at job file.
 
@@ -1739,7 +1731,7 @@ class TACCJobManager():
             is invalid does not exist.
         """
         # Load job config
-        path = '/'.join([self.jobs_dir, job_id, path])
+        path = "/".join([self.jobs_dir, job_id, path])
 
         try:
             return self.peak_file(path, head=head, tail=tail)
@@ -1748,8 +1740,7 @@ class TACCJobManager():
             logger.error(msg)
             raise e
 
-
-    def deploy_script(self, script_name:str, local_file:str=None) -> None:
+    def deploy_script(self, script_name: str, local_file: str = None) -> None:
         """
         Deploy a script to TACC
 
@@ -1778,7 +1769,7 @@ class TACCJobManager():
         # If python file, add directive to python3 path on TACC system
         if ext == ".py":
             script = "#!" + self.python_path + "\n"
-            with open(local_fname, 'r') as fp:
+            with open(local_fname, "r") as fp:
                 script += fp.read()
             self.write(script, remote_path)
         else:
@@ -1787,14 +1778,15 @@ class TACCJobManager():
         # Make remote script executable
         self._execute_command(f"chmod +x {remote_path}")
 
-
-    def run_script(self,
-                   script_name:str,
-                   job_id:str=None,
-                   args:List[str]=[],
-                   wait:bool=False,
-                   logfile:bool=False,
-                   errfile:bool=True) -> str:
+    def run_script(
+        self,
+        script_name: str,
+        job_id: str = None,
+        args: List[str] = [],
+        wait: bool = False,
+        logfile: bool = False,
+        errfile: bool = True,
+    ) -> str:
         """
         Run a pre-deployed script on TACC.
 
@@ -1814,37 +1806,39 @@ class TACCJobManager():
             The standard output of the script.
         """
         if job_id is not None:
-            args.insert(0, '/'.join([self.jobs_dir, job_id]))
+            args.insert(0, "/".join([self.jobs_dir, job_id]))
 
-        ts = datetime.fromtimestamp(time.time()).strftime('%Y%m%d_%H%M%S')
+        ts = datetime.fromtimestamp(time.time()).strftime("%Y%m%d_%H%M%S")
         run_cmd = f"{self.scripts_dir}/{script_name} {' '.join(args)}"
         if logfile:
             logfile = f"{self.scripts_dir}/{script_name}_{ts}_log"
             run_cmd += f" > {logfile}.txt"
         else:
-            logfile = ''
+            logfile = ""
         if errfile:
             errfile = f"{self.scripts_dir}/{script_name}_{ts}_err"
             run_cmd += f" 2> {errfile}.txt"
-            errfile = ''
+            errfile = ""
 
         if wait:
             return self._execute_command(run_cmd)
         else:
             channel = self._execute_command(run_cmd, wait=False)
             script_id = len(self.scripts) + 1
-            script_config = {'id': script_id,
-                             'name': script_name,
-                             'ts': ts,
-                             'status': 'STARTED',
-                             'cmd': run_cmd,
-                             'path': f"{self.scripts_dir}/{script_name}",
-                             'channel': channel,
-                             'stdout': '',
-                             'stderr': '',
-                             'logfile': logfile,
-                             'errfile': errfile,
-                             'history': []}
+            script_config = {
+                "id": script_id,
+                "name": script_name,
+                "ts": ts,
+                "status": "STARTED",
+                "cmd": run_cmd,
+                "path": f"{self.scripts_dir}/{script_name}",
+                "channel": channel,
+                "stdout": "",
+                "stderr": "",
+                "logfile": logfile,
+                "errfile": errfile,
+                "history": [],
+            }
             self.scripts.append(script_config)
             return script_config
 
@@ -1860,71 +1854,78 @@ class TACCJobManager():
         scripts : list of str
             List of scripts in TACC Job Manager's scripts directory.
         """
-        sc = [f['filename'] for f in self.list_files(path=self.scripts_dir)]
+        sc = [f["filename"] for f in self.list_files(path=self.scripts_dir)]
         return sc
 
-    def get_script_status(self, script_id, nbytes:int=None):
+    def get_script_status(self, script_id, nbytes: int = None):
         """
         Poll a running script for its status.
 
         """
         if script_id <= len(self.scripts):
             script_config = self.scripts[script_id - 1]
-            if script_config['status'] not in ['COMPLETE', 'FAILED']:
-                script_config['history'].append({'ts': script_config['ts'],
-                                                 'stats': script_config['status']})
-                if script_config['channel'].exit_status_ready():
-                    rc, out, error = self._process_command(script_config['cmd'],
-                                                           script_config['channel'],
-                                                           error=False)
-                    ts = datetime.fromtimestamp(time.time()).strftime('%Y%m%d_%H%M%S')
-                    script_config['ts'] = ts
-                    script_config['status'] = 'FAILED' if rc != 0 else 'COMPLETE'
-                    script_config['stdout'] += out
-                    script_config['stderr'] += error
-                    script_config['rc'] = rc
-                    script_config['rt'] = (to_datetime(' '.join(ts.split('_'))) -
-                                           to_datetime(' '.join(
-                                               script_config['history'][0]['ts'].split(
-                                                   '_')))).seconds
-                    script_config['channel'].close()
+            if script_config["status"] not in ["COMPLETE", "FAILED"]:
+                script_config["history"].append(
+                    {"ts": script_config["ts"], "stats": script_config["status"]}
+                )
+                if script_config["channel"].exit_status_ready():
+                    rc, out, error = self._process_command(
+                        script_config["cmd"], script_config["channel"], error=False
+                    )
+                    ts = datetime.fromtimestamp(time.time()).strftime("%Y%m%d_%H%M%S")
+                    script_config["ts"] = ts
+                    script_config["status"] = "FAILED" if rc != 0 else "COMPLETE"
+                    script_config["stdout"] += out
+                    script_config["stderr"] += error
+                    script_config["rc"] = rc
+                    script_config["rt"] = (
+                        to_datetime(" ".join(ts.split("_")))
+                        - to_datetime(
+                            " ".join(script_config["history"][0]["ts"].split("_"))
+                        )
+                    ).seconds
+                    script_config["channel"].close()
                 else:
                     if nbytes is not None:
-                        script_config['stdout'] += script_config['channel'].recv(
-                                nbytes).decode('utf-8')
-                    script_config['ts'] = datetime.fromtimestamp(
-                            time.time()).strftime('%Y%m%d_%H%M%S')
-                    script_config['status'] = 'RUNNING'
+                        script_config["stdout"] += (
+                            script_config["channel"].recv(nbytes).decode("utf-8")
+                        )
+                    script_config["ts"] = datetime.fromtimestamp(time.time()).strftime(
+                        "%Y%m%d_%H%M%S"
+                    )
+                    script_config["status"] = "RUNNING"
                 self.scripts[script_id - 1] = script_config
         else:
-            raise ValueError(f'Invalid script_id {script_id}.')
+            raise ValueError(f"Invalid script_id {script_id}.")
 
         ret = {f"{i}": script_config[i] for i in script_config}
         return ret
 
-
-    def run_script_str(self,
-                       name:str,
-                       cmnd:str,
-                       job_id:str=None,
-                       args:List[str]=[],
-                       logfile:bool=False,
-                       errfile:bool=True) -> str:
+    def run_script_str(
+        self,
+        name: str,
+        cmnd: str,
+        job_id: str = None,
+        args: List[str] = [],
+        logfile: bool = False,
+        errfile: bool = True,
+    ) -> str:
         """
         Run str command as script
         """
         res = None
         temp_file = tempfile.NamedTemporaryFile(delete=True)
-        temp_file.write(f"#!/bin/bash\n{cmnd}".encode('utf-8'))
+        temp_file.write(f"#!/bin/bash\n{cmnd}".encode("utf-8"))
         temp_file.flush()
         self.deploy_script(name, temp_file.name)
         temp_file.close()
-        res = self.run_script(script_name=name,
-                              job_id=job_id,
-                              args=args,
-                              wait=False,
-                              logfile=logfile,
-                              errfile=errfile)
+        res = self.run_script(
+            script_name=name,
+            job_id=job_id,
+            args=args,
+            wait=False,
+            logfile=logfile,
+            errfile=errfile,
+        )
 
         return res
-

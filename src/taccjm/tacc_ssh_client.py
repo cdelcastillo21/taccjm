@@ -7,6 +7,7 @@ import os
 import sys
 import pdb
 import re
+import uvicorn
 from prettytable import PrettyTable
 import json
 import psutil
@@ -18,8 +19,8 @@ from time import sleep
 from getpass import getpass
 from taccjm.constants import (
     make_taccjm_dir,
-    TACCJM_HOST,
-    TACCJM_PORT,
+    TACC_SSH_HOST,
+    TACC_SSH_PORT,
     TACCJM_SOURCE,
     TACCJM_DIR,
 )
@@ -32,7 +33,6 @@ __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
 # Make log dirs and initialize logger
-make_taccjm_dir()
 logger = logging.getLogger(__name__)
 
 
@@ -73,7 +73,7 @@ def _print_res(res, fields, search=None, match=r"."):
     print(x)
 
 
-def set_host(host: str = TACCJM_HOST, port: int = TACCJM_PORT) -> Tuple[str, int]:
+def set_host(host: str = TACC_SSH_HOST, port: int = TACC_SSH_PORT) -> Tuple[str, int]:
     """
     Set Host
 
@@ -82,15 +82,15 @@ def set_host(host: str = TACCJM_HOST, port: int = TACCJM_PORT) -> Tuple[str, int
 
     Parameters
     ----------
-    host : str, default=`TACCJM_PORT`
+    host : str, default=`TACC_SSH_PORT`
         Host where taccjm server is running.
-    PORT : int, default=`TACCJM_HOST`
+    PORT : int, default=`TACC_SSH_HOST`
         Port on host which taccjm server is listening for requests.
 
     Returns
     -------
     host_port : tuple of str or int
-        Tuple containg (host, port) of new TACCJM_HOST and TACCJM_PORT.
+        Tuple containg (host, port) of new TACC_SSH_HOST and TACC_SSH_PORT.
 
     Warnings
     --------
@@ -98,12 +98,12 @@ def set_host(host: str = TACCJM_HOST, port: int = TACCJM_PORT) -> Tuple[str, int
     set host/port.
 
     """
-    global TACCJM_HOST, TACCJM_PORT
-    TACCJM_HOST = host
-    TACCJM_PORT = int(port)
-    logger.info(f"Switched host {TACCJM_HOST} and port {TACCJM_PORT}")
+    global TACC_SSH_HOST, TACC_SSH_PORT
+    TACC_SSH_HOST = host
+    TACC_SSH_PORT = int(port)
+    logger.info(f"Switched host {TACC_SSH_HOST} and port {TACC_SSH_PORT}")
 
-    return (TACCJM_HOST, TACCJM_PORT)
+    return (TACC_SSH_HOST, TACC_SSH_PORT)
 
 
 def find_tjm_processes(start: bool = False, kill: bool = False) -> dict:
@@ -133,20 +133,23 @@ def find_tjm_processes(start: bool = False, kill: bool = False) -> dict:
     processes_found = {}
 
     # Strings defining commands
-    srv_cmd = f"hug -ho {TACCJM_HOST} -p {TACCJM_PORT} -f "
-    srv_cmd += os.path.join(TACCJM_SOURCE, "taccjm_server.py")
-    hb_cmd = f"python {os.path.join(TACCJM_SOURCE, 'taccjm_server_heartbeat.py')}"
-    hb_cmd += f" --host={TACCJM_HOST} --port={TACCJM_PORT}"
+    srv_cmd = f"python3 {TACCJM_SOURCE}/tacc_ssh_server.py"
+    srv_cmd += f" {TACC_SSH_HOST} {TACC_SSH_PORT}"
+
+    # TODO: implement heartbeat?
+    # hb_cmd = f"python {os.path.join(TACCJM_SOURCE, 'taccjm_server_heartbeat.py')}"
+    # hb_cmd += f" --host={TACC_SSH_HOST} --port={TACC_SSH_PORT}"
 
     for proc in psutil.process_iter(["name", "pid", "cmdline"]):
-        if proc.info["cmdline"] != None:
+        if proc.info["cmdline"] is not None:
             cmd = " ".join(proc.info["cmdline"])
             if srv_cmd in cmd:
                 logger.info(f"Found server process at {proc.info['pid']}")
                 processes_found["server"] = proc
-            if hb_cmd in cmd:
-                logger.info(f"Found heartbeat process at {proc.info['pid']}")
-                processes_found["hb"] = proc
+            # TODO: implement heartbeat
+            # if hb_cmd in cmd:
+            #     logger.info(f"Found heartbeat process at {proc.info['pid']}")
+            #     processes_found["hb"] = proc
 
     if kill:
         # Kill processes found and return empty dictionary
@@ -158,12 +161,13 @@ def find_tjm_processes(start: bool = False, kill: bool = False) -> dict:
 
     if start:
         srv_log = os.path.join(
-            TACCJM_DIR, f"taccjm_server_{TACCJM_HOST}_{TACCJM_PORT}.log"
+            TACCJM_DIR, f"taccjm_server_{TACC_SSH_HOST}_{TACC_SSH_PORT}.log"
         )
-        hb_log = os.path.join(
-            TACCJM_DIR, f"taccjm_heartbeat_{TACCJM_HOST}_{TACCJM_PORT}.log"
-        )
-        for p in [("server", srv_cmd, srv_log), ("hb", hb_cmd, hb_log)]:
+        # hb_log = os.path.join(
+        #     TACCJM_DIR, f"taccjm_heartbeat_{TACC_SSH_HOST}_{TACC_SSH_PORT}.log"
+        # )
+        # for p in [("server", srv_cmd, srv_log), ("hb", hb_cmd, hb_log)]:
+        for p in [("server", srv_cmd, srv_log)]:
             if p[0] not in processes_found.keys():
                 # Start server/hb if not found
                 with open(p[2], "w") as log:
@@ -204,7 +208,7 @@ def api_call(http_method: str, end_point: str, data: dict = None) -> dict:
     """
 
     # Build http request
-    base_url = "http://{host}:{port}".format(host=TACCJM_HOST, port=TACCJM_PORT)
+    base_url = "http://{host}:{port}".format(host=TACC_SSH_HOST, port=TACC_SSH_PORT)
     req = requests.Request(http_method, base_url + "/" + end_point, data=data)
     prepared = req.prepare()
 
@@ -214,10 +218,12 @@ def api_call(http_method: str, end_point: str, data: dict = None) -> dict:
     try:
         res = s.send(prepared)
     except requests.exceptions.ConnectionError as c:
-        logger.info("Cannot connect to server. Restarting and waiting 10s.")
+        logger.info("Cannot connect to server. Restarting and waiting 5s.")
         _ = find_tjm_processes(start=True)
-        sleep(10)
+        sleep(5)
         res = s.send(prepared)
+
+    pdb.set_trace()
 
     # Return content if success, else raise error
     if res.status_code == 200:
@@ -226,19 +232,19 @@ def api_call(http_method: str, end_point: str, data: dict = None) -> dict:
         raise TACCJMError(res)
 
 
-def list_jms() -> List[str]:
+def list_ssh() -> List[str]:
     """
-    List JMs
+    List SSH Connections
 
-    List available job managers managed by job manager server.
+    List available SSH sessions managed by ssh server.
 
     Parameters
     ----------
 
     Returns
     -------
-    jms : list of str
-        List of job managers avaiable.
+    connection_ids : list of str
+        List of connection IDs for ssh sessions available.
     """
     try:
         res = api_call("GET", "list")
@@ -1453,3 +1459,8 @@ def empty_trash(jm_id: str, filter_str: str = "*") -> None:
     data = {"filter_str": filter_str}
 
     api_call("DELETE", f"{jm_id}/trash/empty", data)
+
+
+
+
+

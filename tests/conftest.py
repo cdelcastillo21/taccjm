@@ -10,17 +10,22 @@
 import pytest
 import shutil
 from pathlib import Path
-from taccjm.utils import create_template_app
+from unittest.mock import patch
+from taccjm import TACCSSHClient
+from paramiko import SSHException
 
 def_test_dir = Path(__file__).parent / ".test_dir"
+
 
 def pytest_addoption(parser):
     parser.addoption("--mfa", action="store",
             default="012345", help="MFA token. Must be provided")
 
+
 @pytest.fixture
 def mfa(request):
     return request.config.getoption("--mfa")
+
 
 @pytest.fixture()
 def test_dir():
@@ -34,12 +39,6 @@ def test_dir():
     except:
         pass
 
-@pytest.fixture()
-def test_script(test_dir):
-    script_path = str(test_dir.absolute() / 'test_script.sh')
-    with open(script_path, 'w') as fp:
-        fp.write('#!/bin/bash\nsleep 5\necho foo\n')
-    yield script_path
 
 @pytest.fixture()
 def test_file(test_dir):
@@ -48,8 +47,67 @@ def test_file(test_dir):
         f.write('Hello World!')
     yield file_path
 
-@pytest.fixture()
-def test_app(test_dir):
-    # Create template app locally
-    configs = create_template_app('test_app', dest_dir=test_dir)
-    yield configs
+
+@pytest.fixture
+@patch.object(TACCSSHClient, 'connect')
+@patch.object(TACCSSHClient, 'execute_command')
+def mocked_client(connect, execute_command):
+    client = TACCSSHClient('stampede2', user='test', psw='test', mfa=123456)
+    return client
+
+
+# Command succeeds, just mock the exec_command function in
+class good_channel():
+
+    def __init__(self, active=False):
+        self.active = active
+        pass
+
+    def exec_command(self, cmd):
+        pass
+
+    def exit_status_ready(self):
+        return True if not self.active else False
+
+    def recv_exit_status(self):
+        return 0
+
+    def recv(self, nbytes):
+        out = b'test'
+        return out[0:nbytes]
+
+    def recv_stderr(self, nbytes):
+        return b''
+
+    def close(self):
+        pass
+
+
+class bad_channel(good_channel):
+
+    def recv_stderr(self, nbytes):
+        err = b'error'
+        return err[0:nbytes]
+
+    def recv_exit_status(self):
+        return 1
+
+
+class good_transport():
+
+    def __init__(self):
+        pass
+
+    def open_session(self):
+        channel = good_channel()
+        return channel
+
+
+class bad_transport():
+
+    def __init__(self):
+        pass
+
+    def open_session(self):
+        raise SSHException
+
