@@ -47,10 +47,12 @@ class TestTACCSSHClient:
 
     @patch.object(TACCSSHClient, 'process_command')
     @patch.object(TACCSSHClient, 'get_transport')
-    def test_execute_command(self, get_transport, process_command, mocked_client):
+    def test_execute_command(self, get_transport, process_command):
         """Test executing a command"""
 
-        client = mocked_client
+        with patch.object(TACCSSHClient, 'execute_command'):
+            with patch.object(TACCSSHClient, 'connect'):
+              client = TACCSSHClient('stampede2', user='test', psw='test', mfa=123456)
 
         # Command that fails to SSH connection, mock through a bad transport object
         get_transport.return_value = bad_transport()
@@ -77,10 +79,12 @@ class TestTACCSSHClient:
         }
         res = client.execute_command("pwd", wait=True)
 
-    def test_process_command(self, mocked_client):
+    def test_process_command(self):
         """Test processing commands"""
 
-        client = mocked_client
+        with patch.object(TACCSSHClient, 'execute_command'):
+            with patch.object(TACCSSHClient, 'connect'):
+              client = TACCSSHClient('stampede2', user='test', psw='test', mfa=123456)
 
         # invalid command id
         with pytest.raises(ValueError):
@@ -167,3 +171,50 @@ class TestTACCSSHClient:
             client.process_command(5, wait=True, error=True)
 
 
+    def test_upload_file(test_file):
+        """Test uploadng a file and folder"""
+
+        with patch.object(TACCSSHClient, 'execute_command'):
+            with patch.object(TACCSSHClient, 'connect'):
+              client = TACCSSHClient('stampede2', user='test', psw='test', mfa=123456)
+
+        test_fname, test_file, test_folder = _setup_local_test_files()
+
+        # Send file - Try sending file only to trash directory
+        dest_name = 'test_file'
+        dest_path = '/'.join([JM.trash_dir, dest_name])
+        JM.upload(test_file, dest_path)
+        files = JM.list_files(JM.trash_dir)
+        assert dest_name in [f['filename'] for f in files]
+
+        # Send directory - Try sending directory now
+        dest_name = 'test_dir'
+        dest_dir = '/'.join([JM.trash_dir, dest_name])
+        JM.upload(test_folder, dest_dir)
+        files = JM.list_files(JM.trash_dir)
+        assert dest_name in [f['filename'] for f in files]
+        files = JM.list_files(dest_dir)
+        assert test_fname in [f['filename'] for f in files]
+
+        # Try sending a file that doesn't exist
+        with pytest.raises(FileNotFoundError):
+            JM.upload('./does-not-exist', dest_path)
+
+        # Now mock permission and untar-ing error, and unexpcted error
+        with patch.object(SSHClient2FA, 'open_sftp',
+                side_effect=PermissionError('Mock file permission')):
+            with pytest.raises(PermissionError):
+                JM.upload(test_folder, dest_dir)
+        with patch.object(SSHClient2FA, 'open_sftp',
+                side_effect=Exception('Mock other error')):
+            with pytest.raises(Exception):
+                JM.upload(test_file, dest_path)
+        with patch.object(TACCJobManager, '_execute_command',
+                side_effect=TJMCommandError(SYSTEM, USER, 'tar...', 1,
+                                'mock tar error', '', 'mock tar error')):
+            with pytest.raises(TJMCommandError) as t:
+                JM.upload(test_folder, dest_dir)
+
+        # Remove test folder and file we sent and local test folder
+        JM.empty_trash()
+        _cleanup_local_test_files()

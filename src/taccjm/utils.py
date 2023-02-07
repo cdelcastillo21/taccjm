@@ -8,6 +8,7 @@ import sys
 import pdb
 import os  # OS system utility functions
 import re
+from fnmatch import fnmatch  # For unix-style filename pattern matching
 import json  # For reading/writing dictionary<->json
 from typing import Tuple  # For type hinting
 from taccjm.constants import JOB_TEMPLATE, APP_TEMPLATE, APP_SCRIPT_TEMPLATE
@@ -305,3 +306,15 @@ def get_ts(fmt="%Y%m%d %H:%M:%S"):
     Standarize timestamps returned
     """
     return datetime.fromtimestamp(time.time()).strftime(fmt)
+
+
+def tar_file(to_compress, tar_file, arc_name=None, file_filter='*'):
+    """
+
+    """
+    with tarfile.open(tar_file, "w:gz") as tar:
+
+        def filter_fun(x):
+            return x if fnmatch(x.name, file_filter) else None
+
+        tar.add(to_compress, arcname=arc_name, filter=filter_fun)

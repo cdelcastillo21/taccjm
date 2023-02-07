@@ -32,13 +32,19 @@ app = FastAPI()
 # Note there could be multiple instance if managing more than one system
 CONNECTIONS = {}
 
+def _get_client(connection_id):
+    if connection_id in CONNECTIONS.keys():
+        return CONNECTIONS[connection_id]['client']
+    else:
+        raise ValueError(f'No active SSH Connection with id {connection_id}')
+
 
 class Connection(BaseModel):
     id: str
     sys: str
     user: str
     start: datetime
-    up_time: float
+    last_ts: datetime
     trash_dir: str
 
 class ConnectionRequest(BaseModel):
@@ -48,24 +54,18 @@ class ConnectionRequest(BaseModel):
     mfa: str
     restart: Union[bool, None] = False
 
-@app.get("/list")
+@app.get("/list", response_model=List[Connection])
 def list_jm():
     """Show initialized job managers"""
     out = []
     for c in CONNECTIONS.keys():
-        out.append(
-            {
-                "name": c,
-                "sys": CONNECTIONS[c].system,
-                "user": CONNECTIONS[c].user,
-                "trash_dir": CONNECTIONS[c].trash_dir,
-            }
-        )
+        conn = CONNECTIONS[c]
+        out.append({a:conn[a] for a in conn if a != 'client'})
     return out
 
 
 @app.post("/{connection_id}", response_model=Connection)
-def init(
+async def init(
     connection_id: str,
     req: ConnectionRequest
 ):
@@ -74,8 +74,9 @@ def init(
     if connection_id not in CONNECTIONS.keys() or restart:
         try:
             logger.info(f"INIT - Initializing TACCJM {connection_id}.")
-            CONNECTIONS[connection_id] = TACCSSHClient(
-                req.system, user=req.user, psw=req.psw, mfa=req.mfa, working_dir=connection_id
+            client  = TACCSSHClient(
+                req.system, user=req.user, psw=req.psw,
+                mfa=req.mfa, working_dir=connection_id
             )
             logger.info(f"SUCCESS - TACCJM {connection_id} initialized successfully.")
         except ValueError as v:
@@ -89,21 +90,44 @@ def init(
 
     ret = {
         "id": connection_id,
-        "sys": CONNECTIONS[connection_id].system,
-        "user": CONNECTIONS[connection_id].user,
+        "sys": client.system,
+        "user": client.user,
         "start": datetime.now(),
-        "up_time": 0.0,
-        "trash_dir": CONNECTIONS[connection_id].trash_dir,
+        "last_ts": datetime.now(),
+        "trash_dir": client.trash_dir,
     }
+    CONNECTIONS[connection_id] = ret
+    CONNECTIONS[connection_id]['client'] = client
 
     return ret
 
 
+@app.get("/{connection_id}", response_model=Connection)
+def get(
+    connection_id: str,
+):
+    global CONNECTIONS
+
+
+    if connection_id not in CONNECTIONS.keys():
+      msg = f"Connection id {connnection_id} not found"
+      raise HTTPException(status_code=404, detail=f"ssh_error: {msg}")
+    else:
+      ret = CONNECTIONS[connection_id]
+      ret = {a:ret[a] for a in ret if a != 'client'}
+
+      return ret
+
+
 class CommandRequest(BaseModel):
-    cmnd: Union[str, int]
+    cmnd: str
+    wait: Union[bool, None] = True
+
+
+class ProcessRequest(BaseModel):
+    cmnd_id: int
     nbytes: Union[int, None] = None
     wait: Union[bool, None] = True
-    error: Union[bool, None] = True
 
 
 class Command(BaseModel):
@@ -118,23 +142,35 @@ class Command(BaseModel):
 
 @app.post("/{connection_id}/exec", response_model=Command)
 def exec(connection_id: str, cmnd_req: CommandRequest):
-    if connection_id not in CONNECTIONS.keys():
-        raise ValueError(f'Invalid connection ID {connection_id}')
-    res = CONNECTIONS[connection_id].execute_command(cmnd_req.cmnd,
-                                                     wait=cmnd_req.wait,
-                                                     error=cmnd_req.error)
+    """Execute command"""
+    ssh_client = _get_client(connection_id)
+    logger.info(f"Executing new command on {connection_id}",
+                extra={'command_request':cmnd_req})
+    res = ssh_client.execute_command(cmnd_req.cmnd,
+                                     wait=cmnd_req.wait,
+                                     error=False)
     res = {i: res[i] for i in res if i != 'channel'}
+    CONNECTIONS[connection_id]['last_ts'] = datetime.now()
+    logger.info(f"Command {res['id']} executed on {connection_id}.",
+                extra={'command_config':res})
 
     return res
 
 
 @app.post("/{connection_id}/process", response_model=Command)
-def process(connection_id: str, req: CommandRequest):
-    res = CONNECTIONS[connection_id].process_command(req.id,
-                                                     nbytes=req.nbytes,
-                                                     wait=req.wait,
-                                                     error=req.error)
+def process(connection_id: str, proc_req: ProcessRequest):
+    """Process command"""
+
+    ssh_client = _get_client(connection_id)
+    logger.info(f"Processing command {proc_req.cmnd_id} on {connection_id}",
+                extra={'process_request':proc_req})
+    res = ssh_client.process_command(proc_req.cmnd_id,
+                                     wait=proc_req.wait,
+                                     error=False)
     res = {i: res[i] for i in res if i != 'channel'}
+    CONNECTIONS[connection_id]['last_ts'] = datetime.now()
+    logger.info(f"Command {res['id']} execute/processed on {connection_id}.",
+                extra={'command_config':res})
 
     return res
 

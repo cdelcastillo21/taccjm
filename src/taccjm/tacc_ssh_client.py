@@ -229,6 +229,7 @@ def api_call(http_method: str, end_point: str, params: dict = None,
     if res.status_code == 200:
         return json.loads(res.text)
     else:
+        pdb.set_trace()
         raise TACCJMError(res)
 
 
@@ -293,8 +294,9 @@ def init(
     ssh_cnofig : dict
         Dictionary containing info about job manager instance just initialized.
     """
-    if connection_id in [c["id"] for s in list_ssh()]:
-        raise ValueError(f"{jm_id} already exists.")
+    connections = list_ssh()
+    if connection_id in [c["id"] for s in connections]:
+        raise ValueError(f"SSH Session {connection_id} already exists.")
 
     # Get user credentials/psw/mfa if not provided
     user = input("Username: ") if user is None else user
@@ -319,25 +321,25 @@ def init(
     return res
 
 
-def get_jm(jm_id: str) -> dict:
+def get(connection_id: str) -> dict:
     """
-    Get JM
+    Get SSH Connection
 
-    Get info about a Job Manager initialized on server.
+    Get info about a SSH session initialized on server.
 
     Parameters
     ----------
-    jm_id : str
-        ID of Job Manager instance.
+    connection_od : str
+        ID of SSH connection to get.
 
     Returns
     -------
-    jm : dictionary
-        Dictionary containing job manager info.
+    connection_config : dictionary
+        Dictionary containing SSH connection info.
     """
 
     try:
-        res = api_call("GET", jm_id)
+        res = api_call("GET", connection_id)
     except TACCJMError as e:
         e.message = f"get_jm error"
         logger.error(e.message)
@@ -346,67 +348,8 @@ def get_jm(jm_id: str) -> dict:
     return res
 
 
-def get_queue(jm_id: str, user: str = None) -> dict:
-    """
-    Get Queue
-
-    Get job queue info for system job manager is connected to.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-    user : str, optional
-        User to get job queue info about. Will by default get for user
-        who initialized connection to job manager. Pass `all` as the user to
-        get the whole job queue.
-
-    Returns
-    -------
-    queue : dictionary
-        Dictionary containing job manager info.
-    """
-
-    data = {"user": user} if user is not None else {}
-    try:
-        queue = api_call("GET", f"{jm_id}/queue", data)
-    except TACCJMError as e:
-        e.message = f"get_queue error"
-        logger.error(e.message)
-        raise e
-
-    return queue
-
-
-def get_allocations(jm_id: str) -> dict:
-    """
-    Get Allocations
-
-    Get project allocations for user currently connected to remote system.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-
-    Returns
-    ------
-    allocations : dictionary
-        Dictionary containing information on available project allocations.
-    """
-
-    try:
-        allocations = api_call("GET", f"{jm_id}/allocations")
-    except TACCJMError as e:
-        e.message = f"get_allocations error"
-        logger.error(e.message)
-        raise e
-
-    return allocations
-
-
 def list_files(
-    jm_id: str,
+    connection_id: str,
     path: str = ".",
     attrs: List[str] = ["filename"],
     hidden: bool = False,
@@ -420,8 +363,8 @@ def list_files(
 
     Parameters
     ----------
-    jm_id : str
-        ID of Job Manager instance.
+    connection_id : str
+        ID of SSH Connection.
     path : str, default='.'
         Path to get files from. Defaults to user's home path on remote system.
 
@@ -435,7 +378,7 @@ def list_files(
         raise ValueError(f"search must be one of attrs {attrs}")
 
     try:
-        files = api_call("GET", f"{jm_id}/files/list", {"path": path})
+        files = api_call("GET", f"{connection_id}/files/list", {"path": path})
     except TACCJMError as e:
         e.message = "list_files error"
         logger.error(e.message)
@@ -445,37 +388,44 @@ def list_files(
 
     return files
 
-
-def peak_file(jm_id: str, path: str, head: int = -1, tail: int = -1) -> str:
+def exec(connection_id: str, cmnd: str,
+         wait: bool = True):
     """
-    Peak File
-
-    Head at first or last lines of a file on remote system via the head/tail
-    unix command.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-    path : str
-        Path of file to look at.
-    head : int, default=-1
-        If greater than 0, then get first `head` lines from file. If head and
-        tail are both specified, head takes precedence.
-    tail : int, default=-1
-        If greater than 0, then get first `tail` lines from file. If head and
-        tail are both specified, head takes precedence.
-
-    Returns
-    -------
-    txt : str
-        Text from first/last lines of file.
+    Exec a command
     """
-    data = {"path": path, "head": head, "tail": tail}
+
+    json_data = {'cmnd': cmnd,
+                 'wait': wait}
+
+
+    # Make API call
     try:
-        res = api_call("GET", f"{jm_id}/files/peak", data)
+        res = api_call("POST", f"{connection_id}/exec", json_data=json_data)
     except TACCJMError as e:
-        e.message = "peak_file error"
+      e.message = f"Error executing command {cmnd}"
+      logger.error(e.message)
+      raise e
+
+
+    return res
+
+
+def process(connection_id: str, cmnd_id: int, nbytes: int = None,
+         wait: bool = True):
+    """
+    Process a command
+    """
+
+    json_data = {'cmnd_id': cmnd_id,
+                 'nbytes': nbytes,
+                 'wait': wait}
+
+
+    # Make API call
+    try:
+        res = api_call("POST", f"{connection_id}/process", json_data=json_data)
+    except TACCJMError as e:
+        e.message = f"Error processing command {cmnd}"
         logger.error(e.message)
         raise e
 
@@ -483,7 +433,7 @@ def peak_file(jm_id: str, path: str, head: int = -1, tail: int = -1) -> str:
 
 
 def upload(
-    jm_id: str, local_path: str, remote_path: str, file_filter: str = "*"
+    connection_id: str, local_path: str, remote_path: str, file_filter: str = "*"
 ) -> None:
     """
     Upload
@@ -493,7 +443,7 @@ def upload(
 
     Parameters
     ----------
-    jm_id : str
+    connection_id : str
         ID of Job Manager instance.
     local_path : str
         Path of local file/folder to upload.
@@ -512,7 +462,7 @@ def upload(
         "file_filter": file_filter,
     }
     try:
-        api_call("PUT", f"{jm_id}/files/upload", data)
+        api_call("PUT", f"{connection_id}/files/upload", data)
     except TACCJMError as e:
         e.message = "upload error"
         logger.error(e.message)
@@ -520,7 +470,7 @@ def upload(
 
 
 def download(
-    jm_id: str, remote_path: str, local_path: str, file_filter: str = "*"
+    connection_id: str, remote_path: str, local_path: str, file_filter: str = "*"
 ) -> str:
     """
     Download
@@ -530,7 +480,7 @@ def download(
 
     Parameters
     ----------
-    jm_id : str
+    connection_id : str
         ID of Job Manager instance.
     remote_path : str
         Path of on remote system to file/folder to download.
@@ -551,7 +501,7 @@ def download(
         "file_filter": file_filter,
     }
     try:
-        res = api_call("GET", f"{jm_id}/files/download", data)
+        res = api_call("GET", f"{connection_id}/files/download", data)
     except TACCJMError as e:
         e.message = "download error"
         logger.error(e.message)
@@ -560,7 +510,7 @@ def download(
     return res
 
 
-def remove(jm_id: str, remote_path: str):
+def remove(connection_id: str, remote_path: str):
     """
     Remove file/folder
 
@@ -569,7 +519,7 @@ def remove(jm_id: str, remote_path: str):
 
     Parameters
     ----------
-    jm_id : str
+    connection_id : str
         ID of Job Manager instance.
     remote_path : str
         Path of on remote system to file/folder to send to trash directory.
@@ -579,7 +529,7 @@ def remove(jm_id: str, remote_path: str):
     """
     data = {"remote_path": remote_path}
     try:
-        res = api_call("DELETE", f"{jm_id}/files/remove", data)
+        res = api_call("DELETE", f"{connection_id}/files/remove", data)
     except TACCJMError as e:
         e.message = "remove error"
         logger.error(e.message)
@@ -588,7 +538,7 @@ def remove(jm_id: str, remote_path: str):
     return res
 
 
-def restore(jm_id: str, remote_path: str):
+def restore(connection_id: str, remote_path: str):
     """
     Restore file/folder
 
@@ -598,7 +548,7 @@ def restore(jm_id: str, remote_path: str):
 
     Parameters
     ----------
-    jm_id : str
+    connection_id : str
         ID of Job Manager instance.
     remote_path : str
         Path on remote system to file/folder to restore from trash directory.
@@ -612,7 +562,7 @@ def restore(jm_id: str, remote_path: str):
     """
     data = {"remote_path": remote_path}
     try:
-        res = api_call("PUT", f"{jm_id}/files/restore", data)
+        res = api_call("PUT", f"{connection_id}/files/restore", data)
     except TACCJMError as e:
         e.message = "restore error"
         logger.error(e.message)
@@ -621,7 +571,7 @@ def restore(jm_id: str, remote_path: str):
     return res
 
 
-def write(jm_id: str, data, remote_path: str):
+def write(connection_id: str, data, remote_path: str):
     """
     Write File
 
@@ -630,7 +580,7 @@ def write(jm_id: str, data, remote_path: str):
 
     Parameters
     ----------
-    jm_id : str
+    connection_id : str
         ID of Job Manager instance.
     data : str or dict
         Text or json data to write to file.
@@ -642,7 +592,7 @@ def write(jm_id: str, data, remote_path: str):
     """
     data = {"data": data, "remote_path": remote_path}
     try:
-        res = api_call("PUT", f"{jm_id}/files/write", data)
+        res = api_call("PUT", f"{connection_id}/files/write", data)
     except TACCJMError as e:
         e.message = "write error"
         logger.error(e.message)
@@ -651,7 +601,7 @@ def write(jm_id: str, data, remote_path: str):
     return res
 
 
-def read(jm_id: str, remote_path: str, data_type: str = "text"):
+def read(connection_id: str, remote_path: str, data_type: str = "text"):
     """
     Read File
 
@@ -660,7 +610,7 @@ def read(jm_id: str, remote_path: str, data_type: str = "text"):
 
     Parameters
     ----------
-    jm_id : str
+    connection_id : str
         ID of Job Manager instance.
     remote_path : str
         Path on remote system to write.
@@ -675,791 +625,12 @@ def read(jm_id: str, remote_path: str, data_type: str = "text"):
     """
     data = {"remote_path": remote_path, "data_type": data_type}
     try:
-        res = api_call("GET", f"{jm_id}/files/read", data)
+        res = api_call("GET", f"{connection_id}/files/read", data)
     except TACCJMError as e:
         e.message = "read error"
         logger.error(e.message)
         raise e
 
     return res
-
-
-def list_apps(jm_id: str):
-    """
-    List Apps
-
-    List available applications deployed on remote system.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-
-    Returns
-    -------
-    apps : list of str
-        List of applications deployed on remote system
-    """
-    try:
-        res = api_call("GET", f"{jm_id}/apps/list")
-    except TACCJMError as e:
-        e.message = "list_apps error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def get_app(jm_id: str, app_id: str):
-    """
-    Get Application
-
-    Get application config for application deployed on remote system.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-    app_id : str
-        ID of application deployed on remote system.
-
-    Returns
-    -------
-    app_config : dictionary
-        Dictionary containing application configuration info.
-    """
-
-    try:
-        res = api_call("GET", f"{jm_id}/apps/{app_id}")
-    except TACCJMError as e:
-        e.message = f"get_app error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def deploy_app(
-    jm_id: str,
-    app_config: dict = None,
-    local_app_dir: str = ".",
-    app_config_file: str = "app.json",
-    overwrite: bool = False,
-    **kwargs,
-):
-    """
-    Deploy Application
-
-    Deploy an application to remote system managed by job manager.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-    app_config : dict, optional
-        Dictionary containing configurations for application.
-    local_app_dir : str, default='.'
-        Local path containing application `assets` directory to send to remote
-        system.
-    app_config_file: str, default='app.json'
-        Path relative to local_app_dir containing app config json file.
-    overwrite : bool, default=False
-        Whether to overwrite application on remote system if it already exists
-        (same application name and version).
-    **kwargs : dict, optional
-        All extra keyword arguments will be interpreted as items to override in
-        override in app config found in json file or app_config passed.
-
-    Returns
-    -------
-    app_config : dictionary
-        Dictionary containing application configuration info of application
-        just deployed.
-    """
-
-    # Build data for request. Some of these may be None/default
-    data = {
-        "local_app_dir": os.path.abspath(local_app_dir),
-        "app_config_file": app_config_file,
-        "overwrite": overwrite,
-    }
-
-    # TODO: Check for valid kwargs params to update for app
-    data.update(kwargs)
-
-    if app_config is not None:
-        # Temp file with app config dict for sending request - deleted when closed
-        temp = tempfile.NamedTemporaryFile(mode="w+", dir=local_app_dir)
-        json.dump(app_config, temp)
-        temp.flush()
-        data["app_config_file"] = os.path.basename(temp.name)
-
-    try:
-        res = api_call("POST", f"{jm_id}/apps/deploy", data)
-    except TACCJMError as e:
-        e.message = f"deploy_app error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def list_jobs(jm_id: str):
-    """
-    List Jobs
-
-    List jobs deployed on remote system.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-
-    Returns
-    -------
-    jobs : list of str
-        List of jobs deployed on remote system
-    """
-    try:
-        res = api_call("GET", f"{jm_id}/jobs/list")
-    except TACCJMError as e:
-        e.message = "list_jobs error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def get_job(jm_id: str, job_id: str):
-    """
-    Get Job
-
-    Get job config for job deployed on remote system.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-    job_id : str
-        ID of job deployed on remote system.
-
-    Returns
-    -------
-    job_config : dictionary
-        Dictionary containing job configuration info.
-    """
-
-    try:
-        res = api_call("GET", f"{jm_id}/jobs/{job_id}")
-    except TACCJMError as e:
-        e.message = f"get_job error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def deploy_job(
-    jm_id: str,
-    job_config: dict = None,
-    local_job_dir: str = ".",
-    job_config_file: str = "job.json",
-    stage: bool = True,
-    **kwargs,
-) -> dict:
-    """
-     Setup job directory on supercomputing resources. If job_config is not
-     specified, then it is parsed from the json file found at
-     local_job_dir/job_config_file. In either
-     case, values found in dictionary or in parsed json file can be
-     overrided by passing keyword arguments. Note for dictionary values,
-     only the specific keys in the dictionary value specified will be
-     overwritten in the existing dictionary value, not the whole dictionary.
-
-     Parameters
-    ----------
-     job_config : dict, default=None
-         Dictionary containing job config. If None specified, then job
-         config will be read from file at local_job_dir/job_config_file.
-     local_job_dir : str, default='.'
-         Local directory containing job config file and project config file.
-         Defaults to current working directory.
-     job_config_file : str, default='job.json'
-         Path, relative to local_job_dir, to job config json file. File
-         only read if job_config dictionary not given.
-     stage : bool, default=False
-         If set to True, stage job directory by creating it, moving
-         application contents, moving job inputs, and writing submit_script
-         to remote system.
-     kwargs : dict, optional
-         All extra keyword arguments will be used as job config overrides.
-
-     Returns
-     -------
-     job_config : dict
-         Dictionary containing info about job that was set-up. If stage
-         was set to True, then a successful completion of deploy_job()
-         indicates that the job directory was prepared succesffuly and job
-         is ready to be submit.
-
-     Raises
-     ------
-    """
-
-    # Build data for request. Some of these may be None/default
-    data = {
-        "local_job_dir": local_job_dir,
-        "job_config_file": job_config_file,
-        "stage": stage,
-    }
-
-    # TODO: Check for valid kwargs params to update for job
-    data.update(kwargs)
-
-    if job_config is not None:
-        # Temp file with job config dict for sending request - deleted when closed
-        # temp = tempfile.NamedTemporaryFile(mode='w+', dir=local_job_dir)
-        # json.dump(job_config, temp)
-        # temp.flush()
-        # data['job_config_file'] = os.path.basename(temp.name)
-        data["job_config"] = json.dumps(job_config)
-
-    try:
-        res = api_call("POST", f"{jm_id}/jobs/deploy", data)
-    except TACCJMError as e:
-        e.message = f"deploy_job error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def submit_job(jm_id: str, job_id: str):
-    """
-    Submit Job
-
-    Submit a deployed job to HPC job queue on remote system.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of job manager instance where job is deployed.
-    job_id : str
-        ID of job deployed on remote system to submit.
-
-    Returns
-    -------
-    job_config : dictionary
-        Dictionary containing updated configuration of job just submitted.
-    """
-
-    try:
-        res = api_call("PUT", f"{jm_id}/jobs/{job_id}/submit")
-    except TACCJMError as e:
-        e.message = f"submit_job error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def cancel_job(jm_id: str, job_id: str):
-    """
-    Cancel Job
-
-    Canel a job that has been submitted to HPC job queue.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of job manager instance where job is deployed.
-    job_id : str
-        ID of job to cancel.
-
-    Returns
-    -------
-    job_config : dictionary
-        Dictionary containing updated configuration of job just cancelled.
-    """
-
-    try:
-        res = api_call("PUT", f"{jm_id}/jobs/{job_id}/cancel")
-    except TACCJMError as e:
-        e.message = f"cancel_job error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def remove_job(jm_id: str, job_id: str) -> str:
-    """
-    Remove Job
-
-    Cancels job if it has been submitted to the job queue and deletes the
-    job's directory. Note job can be restored with restore() command called
-    on jobs directory.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of job manager instance where job is deployed.
-    job_id : str
-        ID of job to cancel and remove.
-
-    Returns
-    -------
-    job_id : str
-        Job ID of job just removed.
-    """
-
-    try:
-        res = api_call("DELETE", f"{jm_id}/jobs/{job_id}/remove")
-    except TACCJMError as e:
-        e.message = f"remove_job error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def restore_job(jm_id: str, job_id: str) -> dict:
-    """
-    Restore Job
-
-    Restores a job that has been previously removed (sent to trash).
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of job manager instance where job is deployed.
-    job_id : str
-        ID of job to restore
-
-    Returns
-    -------
-    job_config : dict
-        Config of job that has just been restored.
-    """
-
-    try:
-        res = api_call("POST", f"{jm_id}/jobs/{job_id}/restore")
-    except TACCJMError as e:
-        e.message = f"restore_job error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def list_job_files(
-    jm_id: str,
-    job_id: str,
-    path: str = ".",
-    attrs: List[str] = ["filename"],
-    hidden: bool = False,
-    search: str = None,
-    match: str = r".",
-) -> List[dict]:
-    """
-    Get info on files in job directory.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager.
-    job_id : str
-        ID of job.
-    path: str, default=''
-        Directory, relative to the job directory, to query.
-
-
-    Returns
-    -------
-    files : list of dict
-        List of dictionaries containing file info including:
-            - filename : Filename
-            - st_atime : Last accessed time
-            - st_gid   : Group ID
-            - st_mode  : Type/Permission bits of file. Use stat library.
-            - st_mtime : Last modified time.
-            - st_size  : Size in bytes
-            - st_uid   : UID of owner.
-            - asbytes  : Output from an ls -lat like command on file.
-    """
-    attrs = validate_file_attrs(attrs)
-    if search is not None and search not in attrs:
-        raise ValueError(f"search must be one of attrs {attrs}")
-
-    try:
-        files = api_call("GET", f"{jm_id}/jobs/{job_id}/files/list", {"path": path})
-    except TACCJMError as e:
-        e.message = "list_job_files error"
-        logger.error(e.message)
-        raise e
-
-    files = filter_files(files, attrs=attrs, hidden=hidden, search=search, match=match)
-
-    return files
-
-
-def download_job_file(
-    jm_id: str, job_id: str, path: str, dest_dir: str = ".", file_filter: str = "*"
-) -> str:
-    """
-    Download file/folder at path, relative to job directory, and place it
-    in the specified local destination directory. Note downloaded job data
-    will always be placed within a folder named according to the jobs id.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-    job_id : str
-        ID of job.
-    path : str
-        Path, relative to job directory, to file/folder to download
-    dest_dir : str, default='.'
-        Local path to download job file/folder to. Defaults to current dir.
-    file_filter : str, default='*'
-        If downloading a directory, only files/folders that match the filter
-        will be downloaded.
-
-    Returns
-    -------
-    local_path : str
-        Path on local system to file/folder just downloaded
-    """
-
-    # Get absolute path when sending request to taccjm server
-    dest_dir = os.path.abspath(dest_dir)
-
-    data = {"path": path, "dest_dir": dest_dir, "file_filter": file_filter}
-    try:
-        res = api_call("GET", f"{jm_id}/jobs/{job_id}/files/download", data)
-    except TACCJMError as e:
-        e.message = "download_job_file error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def upload_job_file(
-    jm_id: str, job_id: str, path: str, dest_dir: str = ".", file_filter="*"
-):
-    """
-    Upload Job File/Folder
-
-    Upload a file or folder from a job's directory.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-    job_id : str
-        ID of job.
-    path : str
-        Local path to file/folder to upload.
-    dest_dir : str, default='.'
-        Path, relative to job directory, to upload file/folder to. Defaults to
-        job's root directory.
-    file_filter : str, default='*'
-        If uploading a directory, only files/folders that match the filter will
-        be uploaded.
-
-    Returns
-    -------
-    local_path : str
-        Path on local system to file/folder just downloaded
-    """
-
-    data = {"path": path, "dest_dir": dest_dir, "file_filter": file_filter}
-    try:
-        res = api_call("PUT", f"{jm_id}/jobs/{job_id}/files/upload", data)
-    except TACCJMError as e:
-        e.message = "upload_job_file error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def read_job_file(jm_id: str, job_id: str, path: str, data_type: str = "text"):
-    """
-    Read Job File
-
-    Read text (str) or json (dictionary) data directly from a file at `path`
-    relative to `job_id`'s directory on remote system.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-    job_id : str
-        ID of Job.
-    path : str
-        Path, relative to job directory, to read data from.
-    data_type : str, default='text'
-        What tpye of data is contained in file to be read. Either `text` or
-        `json`.
-
-    Returns
-    -------
-    contents : str or dict
-        Contents of job file read.
-    """
-    data = {"path": path, "data_type": data_type}
-    try:
-        res = api_call("GET", f"{jm_id}/jobs/{job_id}/files/read", data)
-    except TACCJMError as e:
-        e.message = "read_job_file error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def write_job_file(jm_id: str, job_id: str, data, path: str):
-    """
-    Write Job File
-
-    Write text (str) or json (dictionary) data directly to a file at `path`
-    relative to `job_id`'s directory on remote system.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-    job_id : str
-        ID of Job.
-    data : str or dict
-        Text or json data to write to file.
-    path : str
-        Path, relative to job directory, to write data to.
-
-    Returns
-    -------
-    path : str or dict
-        Path in job directory where file was written to.
-    """
-    data = {"data": data, "path": path}
-    try:
-        res = api_call("PUT", f"{jm_id}/jobs/{job_id}/files/write", data)
-    except TACCJMError as e:
-        e.message = "write_job_file error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def peak_job_file(
-    jm_id: str, job_id: str, path: str, head: int = -1, tail: int = -1
-) -> str:
-    """
-    Peak Job File
-
-    Read at first or last lines of a file in a job's directory on remote system
-    via the head/tail unix command.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-    job_id : str
-        ID of Job.
-    path : str
-        Path of file, relative to job directory, to look at.
-    head : int, default=-1
-        If greater than 0, then get first `head` lines from file. If head and
-        tail are both specified, head takes precedence.
-    tail : int, default=-1
-        If greater than 0, then get first `tail` lines from file. If head and
-        tail are both specified, head takes precedence.
-
-    Returns
-    -------
-    txt : str
-        Text from first/last lines of job file.
-    """
-    data = {"job_id": job_id, "path": path, "head": head, "tail": tail}
-    try:
-        res = api_call("GET", f"{jm_id}/jobs/{job_id}/files/peak", data)
-    except TACCJMError as e:
-        e.message = "peak_job_file error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def list_scripts(jm_id: str):
-    """
-    List Scripts
-
-    List scripts deployed on remote system.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-
-    Returns
-    -------
-    scripts : list of str
-        List of scripts deployed on remote system
-    """
-    try:
-        res = api_call("GET", f"{jm_id}/scripts/list")
-    except TACCJMError as e:
-        e.message = "list_scripts error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def deploy_script(jm_id: str, script_name: str, local_file: str = None):
-    """
-    Deploy Script
-
-    Deploy a script to remote system.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-    script_name : str
-        The name of the script. Will be used as the local filename unless
-        local_file is passed. If the filename ends in .py, it will be
-        assumed to be a Python3 script. Otherwise, it will be treated as a
-        generic executable.
-    local_file : str
-        The local filename of the script if not passed, will be inferred
-        from script_name.
-
-    Returns
-    -------
-    """
-    # TODO: Add type checking to inputs
-
-    data = {"script_name": script_name, "local_file": local_file}
-    try:
-        res = api_call("POST", f"{jm_id}/scripts/deploy", data)
-    except TACCJMError as e:
-        e.message = f"deploy_script error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def run_script(
-    jm_id: str,
-    script_name: str,
-    job_id: str = None,
-    args: List[str] = None,
-    wait: bool = False,
-    refresh_rate: int = 5,
-):
-    """
-    Run Script
-
-    Run a pre-deployed script on TACC.
-
-    Parameters
-    ----------
-    jm_id : str
-        ID of Job Manager instance.
-    script_name : str
-        The name of the script, without file extensions.
-    job_id : str
-        Job Id of job to run the script on.  If passed, the job
-        directory will be passed as the first argument to script.
-    args : list of str
-        Extra commandline arguments to pass to the script.
-
-    Returns
-    -------
-    out : str
-        The standard output of the script.
-    """
-
-    data = {"script_name": script_name, "job_id": job_id, "args": args}
-    try:
-        res = api_call("PUT", f"{jm_id}/scripts/run", data)
-    except TACCJMError as e:
-        e.message = "run_script error"
-        logger.error(e.message)
-        raise e
-
-    data = {"script_id": res["id"]}
-    if wait:
-        while True:
-            try:
-                res = api_call("GET", f"{jm_id}/scripts/status", data)
-            except TACCJMError as e:
-                e.message = "Error waiting for script"
-                logger.error(e.message)
-                raise e
-            if res["status"] in ["COMPLETE", "FAILED"]:
-                break
-            sleep(refresh_rate)
-
-    return res
-
-
-def get_script(jm_id: str, script_name: str):
-    """
-    Get running scripts
-    """
-    data = {"script_name": script_name}
-    try:
-        res = api_call("GET", f"{jm_id}/scripts/get", data)
-    except TACCJMError as e:
-        e.message = f"get_script error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def get_script_status(jm_id: str, script_id: int = None, nbytes: int = None):
-    """
-    Get running scripts
-    """
-    # TODO validate inputs
-    data = {"script_id": script_id, "nbytes": nbytes}
-    try:
-        res = api_call("GET", f"{jm_id}/scripts/status", data)
-    except TACCJMError as e:
-        e.message = f"get_script_status error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def empty_trash(jm_id: str, filter_str: str = "*") -> None:
-    """
-    Cleans out trahs directly by permently removing contents with rm -rf
-    command.
-
-    Parameters
-    ----------
-    filter : str, default='*'
-        Filter files in trash directory to remove
-
-    Returns
-    -------
-
-    """
-    data = {"filter_str": filter_str}
-
-    api_call("DELETE", f"{jm_id}/trash/empty", data)
-
-
-
 
 

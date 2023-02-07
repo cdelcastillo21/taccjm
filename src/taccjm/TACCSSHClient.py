@@ -18,8 +18,7 @@ import time  # Time functions
 import logging  # Used to setup the Paramiko log file
 import stat  # For reading file stat codes
 from datetime import datetime  # Date time functionality
-from fnmatch import fnmatch  # For unix-style filename pattern matching
-from taccjm.utils import init_logger
+from taccjm.utils import init_logger, tar_file
 from taccjm.constants import *  # For application configs
 from typing import Tuple, List  # Type hints
 from typing import Union  # Type hints
@@ -53,8 +52,11 @@ class TACCSSHClient(SSHClient2FA):
 
     Methods
     -------
+    execute_command
+    process_command
     list_files
-    peak_file
+    upload_file
+    upload_dir
     upload
     download
     remove
@@ -169,7 +171,7 @@ class TACCSSHClient(SSHClient2FA):
 
         Raises
         ------
-        TJMCommandError
+        SSHCommandError 
             If command executed on TACC resource returns non-zero return code.
         """
         # Gets underlying transport object for main ssh connection.
@@ -186,9 +188,9 @@ class TACCSSHClient(SSHClient2FA):
 
         channel.exec_command(cmnd)
 
-        command_id = len(self.commands)
+        command_id = len(self.commands) + 1
         command_config = {
-            "id": command_id + 1,
+            "id": command_id,
             "cmd": cmnd,
             "ts": datetime.now(),
             "status": "STARTED",
@@ -246,10 +248,10 @@ class TACCSSHClient(SSHClient2FA):
                     if command_config["rc"] != 0:
                         command_config["status"] = "FAILED"
                         if error:
-                            # Build TJMCommand Error, only place this should be done
+                            # Build SSH Command Error, only place this should be done
                             t = SSHCommandError(self.system, self.user, command_config)
 
-                            # Only log the actual TJMCommandError object once, here
+                            # Only log the actual SSHCommandError object once, here
                             self.log.error(t.__str__())
 
                             # Update command list before erroring out
@@ -270,7 +272,55 @@ class TACCSSHClient(SSHClient2FA):
 
         return command_config
 
-    def list_files(self, path: str = ".") -> List[dict]:
+
+    def _establish_sftp_connection(_self):
+        """
+        Wrapper for establishing sftp connetions and trapping errors to log
+        an then exit gracefully
+        """
+        try:
+            self.log.info(f'Opening sftp connection')
+            sftp = self.open_sftp()
+        except paramiko.ssh_exception.SSHException as e:
+            msg = f"Error while opening SFTP connection: {e}"
+            self.log.error(msg)
+            raise e
+        self.log.info(f'SFTP connection open')
+
+        try:
+            yield sftp
+        finally:
+            self.log.info(f'Closing SFTP connection')
+            sftp.close()
+
+    def _stat(self, sftp, path, follow_symbolic_links:bool = True):
+       """
+       Stat a file on remote system
+       """
+       stat = None
+       try:
+           # Query path to see if its directory or file
+           if follow_symbolic_links:
+               stat = sftp.stat(path)
+           else:
+               stat = sftp.lstat(path)
+       except FileNotFoundError as f:
+            msg = f"_stat - No such file or folder {f.filename}"
+            self.log.error(msg)
+            raise FileNotFoundError(errno.ENOENT, msg, path)
+       except PermissionError as p:
+            msg = f"_stat - Permission denied on {p.filename}"
+            self.log.error(msg)
+            raise PermissionError(errno.EACCES, msg, path)
+       except SSHException as s:
+            msg = "_state - Session is stale. Restart job manager."
+            self.log.error(msg)
+            raise s
+
+       # Return list of dictionaries with file info
+       return stat
+
+    def list_files(self, path: str = ".", follow_symbolic_links:bool = True) -> List[dict]:
         """
         Returns the info on all files/folderes at a given path. If path is a
         file, then returns file info. If path is directory, then returns file
@@ -296,55 +346,160 @@ class TACCSSHClient(SSHClient2FA):
 
         Raises
         ------
-        TJMCommandError
+        SSHCommandError
             If can't access path for any reason on TACC system. This may be
             because the TACC user doesn't have permissions to view the given
             directory or that the path does not exist, for exmaple.
 
         """
-        try:
-            f_info = []
-            f_attrs = ["st_atime", "st_gid", "st_mode", "st_mtime", "st_size", "st_uid"]
+        f_info = []
+        f_attrs = ["st_atime", "st_gid", "st_mode", "st_mtime", "st_size", "st_uid"]
 
-            # Open sftp connection
-            with self.open_sftp() as sftp:
-                # Query path to see if its directory or file
-                lstat = sftp.lstat(path)
+        # Open sftp connection
+        self.log.info(f'list_files operation started on {path}')
+        with self._estabish_sftp_connection() as sftp:
+            self.log.info(f'Getting file info {path}')
+            stat = self._stat(sftp, path,
+                               follow_symbolic_links=follow_symbolic_links)
 
-                if stat.S_ISDIR(lstat.st_mode):
-                    # If directory get info on all files in directory
-                    f_attrs.insert(0, "filename")
-                    files = sftp.listdir_attr(path)
-                    for f in files:
-                        # Extract fields from SFTPAttributes object for files
-                        d = dict([(x, f.__getattribute__(x)) for x in f_attrs])
-                        d["ls_str"] = f.asbytes()
-                        f_info.append(d)
-                else:
-                    # If file, just get file info
-                    d = [(x, lstat.__getattribute__(x)) for x in f_attrs]
-                    d.insert(0, ("filename", path))
-                    d.append(("ls_str", lstat.asbytes()))
-                    f_info.append(dict(d))
+            if stat.S_ISDIR(stat.st_mode):
+                # If directory get info on all files in directory
+                f_attrs.insert(0, "filename")
+                files = sftp.listdir_attr(path)
+                self.log.info(f'Directory found, getting {len(flies)} files')
+                for f in files:
+                    # Extract fields from SFTPAttributes object for files
+                    d = dict([(x, f.__getattribute__(x)) for x in f_attrs])
+                    d["ls_str"] = f.asbytes()
+                    f_info.append(d)
+            else:
+                # If file, just get file info
+                self.log.info(f'File Found, returing file info')
+                d = [(x, lstat.__getattribute__(x)) for x in f_attrs]
+                d.insert(0, ("filename", path))
+                d.append(("ls_str", lstat.asbytes()))
+                f_info.append(dict(d))
 
-            # Return list of dictionaries with file info
-            return f_info
-        except FileNotFoundError as f:
-            msg = f"list_files - No such file or folder {path}"
-            self.log.error(msg)
-            raise FileNotFoundError(errno.ENOENT, msg, path)
-        except PermissionError as p:
-            msg = "list_files - Permission denied"
-            self.log.error(msg)
-            raise PermissionError(errno.EACCES, msg, path)
-        except SSHException as s:
-            msg = "list_files - Session is stale. Restart job manager."
-            self.log.error(msg)
-            raise s
-        except Exception as e:
-            msg = f"list_files - Unknown error trying to access {path}: {e}"
-            self.log.error(msg)
-            raise e
+        # Return list of dictionaries with file info
+        return f_info
+
+    def upload_file(self, local_file: str, remote_file: str) -> None:
+        """
+        Upload a file
+        """
+        # Sending directory -> Package into tar file
+        if os.path.isfile(local_file):
+            try:
+                with self.open_sftp() as sftp:
+                    sftp.put(local_file, remote_file)
+            except FileNotFoundError as f:
+                msg = f"upload - No such file or folder {f.filename}."
+                self.log.error(msg)
+                raise FileNotFoundError(errno.ENOENT, msg, f.filename)
+            except PermissionError as p:
+                msg = f"upload - Permission denied on {p.filename}"
+                self.log.error(msg)
+                raise PermissionError(errno.EACCES, msg, p.filename)
+            except Exception as e:
+                msg = f"upload - Unexpected error {e.__str__()}"
+                self.log.error(msg)
+                raise e
+        elif os.path.isdir(local):
+            raise ValueError(f"File {local_file} is not a file. Use upload or upload_dir")
+        else:
+              raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), local)
+
+
+    def upload_dir(self, local_dir: str, remote: str, file_filter: str = "*") -> None:
+        """
+        Sends file or folder from local_dir path to remote path. If a file is
+        specified, the remote path is the destination path of the file to be
+        sent. If a folder is specified, all folder contents (recursive) are
+        compressed into a .tar.gz file before being sent and then the contents
+        are unpacked in the specified remote path.
+
+        Parameters
+        ----------
+        local_dir : str
+            Path to local_dir file or folder to send to TACC system.
+        remote : str
+            Destination unix-style path for the file/folder being sent on the
+            TACC system. If a file is being sent, remote is the destination
+            path. If a folder is being sent, remote is the folder where the
+            file contents will go. Note that if path not absolute, then it's
+            relative to user's home directory.
+        file_filter: str, optional, Default = '*'
+            If a folder is being uploaded, unix style pattern matching string
+            to use on files to download. For example, '*.txt' would only
+            download .txt files.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        FileNotFoundError
+            If local_dir file/folder does not exist, or remote destination path
+            is invalid does not exist.
+        PermissionError
+            If user does not have permission to write to specified remote path
+            on TACC system or access to local_dir file/folder and contents.
+        SSHCommandError
+            If a directory is being sent, this error is thrown if there are any
+            issues unpacking the sent .tar.gz file in the destination directory.
+
+        Warnings
+        --------
+        Will overwrite existing files and folders and is recursive for folders
+        being sent. Remote paths must use unix path seperator '/' since all
+        TACC systems are unix.
+
+        """
+        # Unix paths -> Get file remote file name and directory
+        remote_dir, remote_fname = os.path.split(remote)
+        remote_dir = "." if remote_dir == "" else remote_dir
+
+        # Sending directory -> Package into tar file
+        if os.path.isdir(local_dir):
+            fname = os.path.basename(local_dir)
+            local_tar_file = f".{fname}.taccjm.tar"
+            remote_tar_file = f"{remote_dir}/.taccjm_temp_{fname}.tar"
+
+            # TODO: Verify we have write permissions to remote_dir before we
+            # do the work of compressing
+
+            # Package tar file -> Recursive call
+            tar_file(local_dir, local_tar_file,
+                     arc_name=remote_tar_file, file_filter='*')
+
+            # Send tar file
+            try:
+                self.upload_file(local_tar_file, remote_tar_file)
+            except Exception as e:
+                # Remove local tar file before passing on exception
+                os.remove(local_tar_file)
+                raise e
+
+            # Remove local tar file that was just sent successfully
+            os.remove(local_tar_file)
+
+            # Now untar file in destination and remove remote tar file
+            # If tar command fails, the remove command should still work
+            untar_cmd = f"tar -xzvf {remote_tar_file} -C {remote_dir}; "
+            untar_cmd += f"rm -rf {remote_tar_file}"
+            try:
+                self.execute_command(untar_cmd)
+            except SSHCommandError as s:
+                t.message = f"upload - Error unpacking tar file"
+                self.log.error(t.message)
+                raise t
+        # Sending file
+        elif os.path.isfile(local_dir):
+            raise ValueError(f"File {local_dir} is not a directory. Use upload or upload_file")
+        else:
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), local_dir)
+
 
     def upload(self, local: str, remote: str, file_filter: str = "*") -> None:
         """
@@ -392,64 +547,104 @@ class TACCSSHClient(SSHClient2FA):
         TACC systems are unix.
 
         """
-        # Unix paths -> Get file remote file name and directory
-        remote_dir, remote_fname = os.path.split(remote)
-        remote_dir = "." if remote_dir == "" else remote_dir
+        if os.path.isdir(local):
+            self.upload_dir(local, remote)
+        elif os.path.isfile(local):
+            self.upload_file(local, remote)
+        else:
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), local)
 
+
+    def download_file(self, remote_file: str, local_file: str) -> None:
+        """
+        Downloads file from remote path on TACC resource to local
+        path.
+
+        Parameters
+        ----------
+        remote_file : str
+            Unix-style path to file on TACC system to download.
+            Note that path is relative to user's home directory.
+        local_file : str
+            Destination path of file
+
+        Returns
+        -------
+        local_file : str
+            Path of file downloaded
+
+        Raises
+        ------
+        FileNotFoundError
+            If local or remote file do not exist
+        PermissionError
+            If user does not have permission to write to specified remote path
+            on TACC system or access to local file and contents.
+
+        Warnings
+        --------
+        Will overwrite existing files Remote paths must use unix path seperator
+        '/' since all TACC systems are unix.
+        """
+
+        local = os.path.abspath(local.rstrip("/"))
+        remote = remote.rstrip("/")
         try:
-            # Sending directory -> Package into tar file
-            if os.path.isdir(local):
-                fname = os.path.basename(local)
-                local_tar_file = f".{fname}.taccjm.tar"
-                remote_tar_file = f"{remote_dir}/.taccjm_temp_{fname}.tar"
+            with self.open_sftp() as sftp:
+                fileattr = sftp.stat(remote)
+                is_dir = stat.S_ISDIR(fileattr.st_mode)
+                if is_dir:
+                    dirname, fname = posixpath.split(remote)
+                    remote_tar = f"{dirname}/{fname}.tar.gz"
 
-                # Package tar file -> Recursive call
-                with tarfile.open(local_tar_file, "w:gz") as tar:
+                    # Build command. Filter files according to file filter
+                    cmd = f"cd {dirname} && "
+                    cmd += f"find {fname} -name '{file_filter}' -print0 | "
+                    cmd += f"tar -czvf {remote_tar} --null --files-from -"
 
-                    def filter_fun(x):
-                        return x if fnmatch(x.name, file_filter) else None
+                    # Try packing remote tar file
+                    try:
+                        self.execute_command(cmd)
+                    except TJMCommandError as t:
+                        if "padding with zeros" in t.stdout:
+                            # Warning message, not an error.
+                            pass
+                        else:
+                            # Other error tar-ing file. Raise
+                            raise t
 
-                    tar.add(local, arcname=remote_fname, filter=filter_fun)
+                    # try to get tar file
+                    try:
+                        local_tar = f"{local}.tar.gz"
+                        sftp.get(remote_tar, local_tar)
+                    except Exception as e:
+                        os.remove(local_tar)
+                        raise e
 
-                # Send tar file
-                try:
-                    with self.open_sftp() as sftp:
-                        sftp.put(local_tar_file, remote_tar_file)
-                except Exception as e:
-                    # Remove local tar file before passing on exception
-                    os.remove(local_tar_file)
-                    raise e
+                    # unpack tar file locally
+                    with tarfile.open(local_tar) as tar:
+                        tar.extractall(path=local)
 
-                # Remove local tar file that was just sent successfully
-                os.remove(local_tar_file)
-
-                # Now untar file in destination and remove remote tar file
-                # If tar command fails, the remove command should still work
-                untar_cmd = f"tar -xzvf {remote_tar_file} -C {remote_dir}; "
-                untar_cmd += f"rm -rf {remote_tar_file}"
-                _ = self.execute_command(untar_cmd)
-            # Sending file
-            elif os.path.isfile(local):
-                with self.open_sftp() as sftp:
-                    sftp.put(local, remote)
-            else:
-                raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), local)
+                    # Remove local and remote tar files
+                    os.remove(local_tar)
+                    self.execute_command(f"rm -rf {remote_tar}")
+                else:
+                    # Get remote file
+                    sftp.get(remote, local)
         except FileNotFoundError as f:
-            msg = f"upload - No such file or folder {f.filename}."
+            msg = f"download - No such file or folder {f.filename}."
             self.log.error(msg)
             raise FileNotFoundError(errno.ENOENT, msg, f.filename)
         except PermissionError as p:
-            msg = f"upload - Permission denied on {p.filename}"
+            msg = f"download - Permission denied on {p.filename}"
             self.log.error(msg)
             raise PermissionError(errno.EACCES, msg, p.filename)
         except TJMCommandError as t:
-            t.message = f"upload - Error unpacking tar file"
-            self.log.error(t.message)
-            raise t
-        except Exception as e:
-            msg = f"upload - Unexpected error {e.__str__()}"
+            msg = f"download - Error tar-ing remote file."
+            t.message = msg
             self.log.error(msg)
-            raise e
+            raise t
+
 
     def download(self, remote: str, local: str, file_filter: str = "*") -> None:
         """
@@ -555,124 +750,6 @@ class TACCSSHClient(SSHClient2FA):
             self.log.error(msg)
             raise t
 
-    def remove(self, remote_path: str) -> None:
-        """
-        'Removes' a file/folder by moving it to the trash directory. Trash
-        should be emptied out preiodically with `empty_trash()` method.
-        Can also restore file `restore(path)` method.
-
-        Parameters
-        ----------
-        remote_path : str
-            Unix-style path for the file/folder to send to trash. Relative to
-            home directory for user on TACC system if not an absolute path.
-
-        Returns
-        -------
-        None
-
-        Raises
-        ------
-        FileNotFoundError
-            If local file/folder does not exist, or remote destination path
-            is invalid does not exist.
-        PermissionError
-            If user does not have permission to modify specified remote path
-        TJMCommandError
-            If a directory is being sent, this error is thrown if there are any
-            issues unpacking the sent .tar.gz file in the destination directory.
-
-        """
-        # Unix paths -> Get file remote file name and directory
-        file_name = remote_path.replace("/", "___")
-        trash_path = f"{self.trash_dir}/{file_name}"
-        abs_path = "./" + remote_path if remote_path[0] != "/" else remote_path
-        abs_path = posixpath.normpath(abs_path)
-
-        # Check if path is a file or directory
-        is_dir = False
-        try:
-            with self.open_sftp() as sftp:
-                fileattr = sftp.stat(abs_path)
-                is_dir = stat.S_ISDIR(fileattr.st_mode)
-        except FileNotFoundError as f:
-            msg = f"remove - No such file/folder {abs_path}"
-            self.log.error(msg)
-            raise FileNotFoundError(errno.ENOENT, msg, abs_path)
-
-        src_path = abs_path if not is_dir else abs_path + "/"
-        cmnd = f"rsync -a {src_path} {trash_path} && rm -rf {abs_path}"
-        try:
-            self.execute_command(cmnd)
-        except TJMCommandError as tjm_error:
-            tjm_error.message = f"remove - Unable to remove {remote_path}"
-            self.log.error(tjm_error.message)
-            raise tjm_error
-
-    def restore(self, remote_path: str) -> None:
-        """
-        Restores a file/folder from the trash directory by moving it back to
-        its original path.
-
-        Parameters
-        ----------
-        remote_path : str
-            Unix-style path of the file/folder that should not exist anymore to
-            restore.
-
-        Returns
-        -------
-        None
-
-        Raises
-        ------
-        FileNotFoundError
-            If the file to be restored does not exist in trash directory.
-        TJMCommandError
-            If error moving data from trash to its original path. This could
-            be becasue the original path still has data in it/exists.
-        """
-        # Unix paths -> Get file remote file name and directory
-        file_name = remote_path.replace("/", "___")
-        trash_path = posixpath.join(self.trash_dir, file_name)
-        abs_path = "./" + remote_path if remote_path[0] != "/" else remote_path
-
-        # Check if trash path is a file or directory
-        is_dir = False
-        try:
-            with self.open_sftp() as sftp:
-                fileattr = sftp.stat(trash_path)
-                is_dir = stat.S_ISDIR(fileattr.st_mode)
-        except FileNotFoundError as f:
-            msg = f"restore - file/folder {file_name} not in trash."
-            self.log.error(msg)
-            raise FileNotFoundError(errno.ENOENT, msg, f.filename)
-
-        src_path = f"{trash_path}/" if is_dir else trash_path
-        cmnd = f"rsync -a {src_path} {abs_path} && rm -rf {trash_path}"
-        try:
-            self.execute_command(cmnd)
-        except TJMCommandError as tjm_error:
-            tjm_error.message = f"restore - Unable to restore {remote_path}"
-            self.log.error(tjm_error.message)
-            raise tjm_error
-
-    def empty_trash(self, filter_str: str = "*") -> None:
-        """
-        Cleans out trahs directly by permently removing contents with rm -rf
-        command.
-
-        Parameters
-        ----------
-        filter : str, default='*'
-            Filter files in trash directory to remove
-
-        Returns
-        -------
-
-        """
-        self.execute_command(f"rm -rf {self.trash_dir}/{filter_str}")
-
     def write(self, data: Union[str, dict], path: str) -> None:
         """
         Write `data` directly to path via an sftp file stream. Supported types:
@@ -772,3 +849,123 @@ class TACCSSHClient(SSHClient2FA):
             msg = f"read - Unknown reading data from {path}: {e}"
             self.log.error(msg)
             raise e
+
+# Move this ssh client side
+#     def remove(self, remote_path: str) -> None:
+#         """
+#         'Removes' a file/folder by moving it to the trash directory. Trash
+#         should be emptied out preiodically with `empty_trash()` method.
+#         Can also restore file `restore(path)` method.
+# 
+#         Parameters
+#         ----------
+#         remote_path : str
+#             Unix-style path for the file/folder to send to trash. Relative to
+#             home directory for user on TACC system if not an absolute path.
+# 
+#         Returns
+#         -------
+#         None
+# 
+#         Raises
+#         ------
+#         FileNotFoundError
+#             If local file/folder does not exist, or remote destination path
+#             is invalid does not exist.
+#         PermissionError
+#             If user does not have permission to modify specified remote path
+#         TJMCommandError
+#             If a directory is being sent, this error is thrown if there are any
+#             issues unpacking the sent .tar.gz file in the destination directory.
+# 
+#         """
+#         # Unix paths -> Get file remote file name and directory
+#         file_name = remote_path.replace("/", "___")
+#         trash_path = f"{self.trash_dir}/{file_name}"
+#         abs_path = "./" + remote_path if remote_path[0] != "/" else remote_path
+#         abs_path = posixpath.normpath(abs_path)
+# 
+#         # Check if path is a file or directory
+#         is_dir = False
+#         try:
+#             with self.open_sftp() as sftp:
+#                 fileattr = sftp.stat(abs_path)
+#                 is_dir = stat.S_ISDIR(fileattr.st_mode)
+#         except FileNotFoundError as f:
+#             msg = f"remove - No such file/folder {abs_path}"
+#             self.log.error(msg)
+#             raise FileNotFoundError(errno.ENOENT, msg, abs_path)
+# 
+#         src_path = abs_path if not is_dir else abs_path + "/"
+#         cmnd = f"rsync -a {src_path} {trash_path} && rm -rf {abs_path}"
+#         try:
+#             self.execute_command(cmnd)
+#         except TJMCommandError as tjm_error:
+#             tjm_error.message = f"remove - Unable to remove {remote_path}"
+#             self.log.error(tjm_error.message)
+#             raise tjm_error
+# 
+#     def restore(self, remote_path: str) -> None:
+#         """
+#         Restores a file/folder from the trash directory by moving it back to
+#         its original path.
+# 
+#         Parameters
+#         ----------
+#         remote_path : str
+#             Unix-style path of the file/folder that should not exist anymore to
+#             restore.
+# 
+#         Returns
+#         -------
+#         None
+# 
+#         Raises
+#         ------
+#         FileNotFoundError
+#             If the file to be restored does not exist in trash directory.
+#         TJMCommandError
+#             If error moving data from trash to its original path. This could
+#             be becasue the original path still has data in it/exists.
+#         """
+#         # Unix paths -> Get file remote file name and directory
+#         file_name = remote_path.replace("/", "___")
+#         trash_path = posixpath.join(self.trash_dir, file_name)
+#         abs_path = "./" + remote_path if remote_path[0] != "/" else remote_path
+# 
+#         # Check if trash path is a file or directory
+#         is_dir = False
+#         try:
+#             with self.open_sftp() as sftp:
+#                 fileattr = sftp.stat(trash_path)
+#                 is_dir = stat.S_ISDIR(fileattr.st_mode)
+#         except FileNotFoundError as f:
+#             msg = f"restore - file/folder {file_name} not in trash."
+#             self.log.error(msg)
+#             raise FileNotFoundError(errno.ENOENT, msg, f.filename)
+# 
+#         src_path = f"{trash_path}/" if is_dir else trash_path
+#         cmnd = f"rsync -a {src_path} {abs_path} && rm -rf {trash_path}"
+#         try:
+#             self.execute_command(cmnd)
+#         except TJMCommandError as tjm_error:
+#             tjm_error.message = f"restore - Unable to restore {remote_path}"
+#             self.log.error(tjm_error.message)
+#             raise tjm_error
+# 
+#     def empty_trash(self, filter_str: str = "*") -> None:
+#         """
+#         Cleans out trahs directly by permently removing contents with rm -rf
+#         command.
+# 
+#         Parameters
+#         ----------
+#         filter : str, default='*'
+#             Filter files in trash directory to remove
+# 
+#         Returns
+#         -------
+# 
+#         """
+#         self.execute_command(f"rm -rf {self.trash_dir}/{filter_str}")
+# 
