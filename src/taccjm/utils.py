@@ -7,6 +7,7 @@ TACCJobManager Utility Function
 import sys
 import pdb
 import os  # OS system utility functions
+import tarfile  # For sending compressed directories
 import re
 from fnmatch import fnmatch  # For unix-style filename pattern matching
 import json  # For reading/writing dictionary<->json
@@ -19,6 +20,7 @@ from pythonjsonlogger import jsonlogger
 import math
 from datetime import datetime, timedelta
 import time
+import numpy as np
 
 
 DEFAULT_SCRIPTS_PATH = Path(__file__).parent / "scripts"
@@ -121,6 +123,7 @@ def create_template_app(
 
     return (app_config, job_config)
 
+
 # TODO: this function can most likely be merged with filter_res
 def filter_files(
     files,
@@ -142,6 +145,7 @@ def filter_files(
         files = [f for f in files if re.search(match, f[search]) is not None]
 
     return files
+
 
 def filter_res(res, fields, search=None, match=r".", filter_fun=None):
     """
@@ -291,6 +295,7 @@ def validate_file_attrs(attrs):
         "st_mtime",
         "st_size",
         "st_uid",
+        "ls_str",
     ]
     invalid_attrs = [a for a in attrs if a not in avail_attrs]
     if len(invalid_attrs) > 0:
@@ -318,3 +323,53 @@ def tar_file(to_compress, tar_file, arc_name=None, file_filter='*'):
             return x if fnmatch(x.name, file_filter) else None
 
         tar.add(to_compress, arcname=arc_name, filter=filter_fun)
+
+
+def get_log_level_str(log_int):
+    """
+    """
+    loglevels = np.array([0, 10, 20, 30, 40, 50])
+    max_log_level = np.max(loglevels[loglevels < log_int])
+
+    loglevels = {'50': 'critical',
+                 '40': 'error',
+                 '30': 'warning',
+                 '20': 'info',
+                 '10': 'debug',
+                 '0': 'notset'}
+
+    return loglevels[str(int(max_log_level))]
+
+
+def get_log_level(loglevel):
+    """
+    """
+    loglevels = {'critical': logging.CRITICAL,
+                 'error': logging.ERROR,
+                 'warning': logging.WARNING,
+                 'info': logging.INFO,
+                 'debug': logging.DEBUG,
+                 'notset': logging.NOTSET}
+
+    if loglevel not in loglevels.keys():
+        raise ValueError(f'Invalid loglevel:{loglevel}: {loglevels.keys()}')
+
+    return loglevels[loglevel]
+
+
+def parse_allocations_string(allocs_return):
+    """
+    Given a string return fro ma `/usr/local/etc/taccinfo` call on TACC systems,
+    parse available allocations for a user.
+    """
+    # Parse allocation info
+    allocations = set(
+        [x.strip() for x in allocs_return.split("\n")[2].split("|")])
+    allocations.remove("")
+    allocations = [x.split() for x in allocations]
+    allocations = [
+        {"name": x[0], "service_units": int(x[1]), "exp_date": x[2]}
+        for x in allocations
+    ]
+
+    return allocations

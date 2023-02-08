@@ -49,7 +49,12 @@ fi
 URL=$5
 if [ -z "$URL" ]
 then
-	URL=$DEFAULT_URL
+    URL=$DEFAULT_URL
+fi
+
+if [ -z "$WORK" ]
+then
+    WORK=$(pwd)
 fi
 
 log INFO "Setting up $ENV with mamba packages $PACKAGES and pip packages $PIP_PACKAGES"
@@ -59,7 +64,7 @@ mamba --help > /dev/null
 if [ $? -eq 0 ]; then
     log INFO "Found mamba"
 else
-    log INFO "Did not find mamba, installing.."
+    log INFO "Did not find mamba, installing from $URL/$EXE to $WORK"
     wget -P $WORK $URL/$EXE
     if [ ! -f "$WORK/$EXE" ]; then
         log ERROR "Error download executable at $URL/$EXE"
@@ -91,13 +96,13 @@ log INFO "Activated environment $ENV."
 
 
 log INFO "Installing $PACKAGES in $ENV."
-mamba install -y -q $PACKAGES
+mamba install -y $PACKAGES
 log INFO "Cleaning mamba env"
-mamba clean --all -f -y -q
+mamba clean --all -f -y 
 log INFO "Mamba env $ENV successfully created with packages $PACKAGES"
 
 log INFO "Installing pip packages $PIP_PACKAGES"
-pip install -q $PIP_PACKAGES
+pip install $PIP_PACKAGES
 log INFO "Successfully installed pip packages"
 
 exit 0

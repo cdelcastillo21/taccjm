@@ -4,21 +4,17 @@ TACCJM Client
 Client for managing TACCJM hug servers and accessing TACCJM API end points.
 """
 import os
-import sys
 import pdb
 import re
-import uvicorn
 from prettytable import PrettyTable
 import json
 import psutil
 import logging
 import requests
-import tempfile
 import subprocess
 from time import sleep
 from getpass import getpass
 from taccjm.constants import (
-    make_taccjm_dir,
     TACC_SSH_HOST,
     TACC_SSH_PORT,
     TACCJM_SOURCE,
@@ -106,9 +102,10 @@ def set_host(host: str = TACC_SSH_HOST, port: int = TACC_SSH_PORT) -> Tuple[str,
     return (TACC_SSH_HOST, TACC_SSH_PORT)
 
 
-def find_tjm_processes(start: bool = False, kill: bool = False) -> dict:
+def find_server(start: bool = False, kill: bool = False,
+                loglevel: str = 'info', heartbeat_interval: float = 0.5) -> dict:
     """
-    Find TACC Job Manager Processes
+    Find TACC SSH Server
 
     Looks for local processes that correspond to taccjm server and hearbeat.
 
@@ -133,12 +130,13 @@ def find_tjm_processes(start: bool = False, kill: bool = False) -> dict:
     processes_found = {}
 
     # Strings defining commands
-    srv_cmd = f"python {TACCJM_SOURCE}/tacc_ssh_server.py"
+    srv_cmd = f"python {os.path.join(TACCJM_SOURCE, 'tacc_ssh_server.py')}"
     srv_cmd += f" {TACC_SSH_HOST} {TACC_SSH_PORT}"
 
     # TODO: implement heartbeat?
-    # hb_cmd = f"python {os.path.join(TACCJM_SOURCE, 'taccjm_server_heartbeat.py')}"
-    # hb_cmd += f" --host={TACC_SSH_HOST} --port={TACC_SSH_PORT}"
+    hb_path = f"{os.path.join(TACCJM_SOURCE, 'tacc_ssh_server_heartbeat.py')}"
+    hb_cmd = f"python {hb_path}"
+    hb_cmd += f" --host={TACC_SSH_HOST} --port={TACC_SSH_PORT} "
 
     for proc in psutil.process_iter(["name", "pid", "cmdline"]):
         if proc.info["cmdline"] is not None:
@@ -146,10 +144,9 @@ def find_tjm_processes(start: bool = False, kill: bool = False) -> dict:
             if srv_cmd in cmd:
                 logger.info(f"Found server process at {proc.info['pid']}")
                 processes_found["server"] = proc
-            # TODO: implement heartbeat
-            # if hb_cmd in cmd:
-            #     logger.info(f"Found heartbeat process at {proc.info['pid']}")
-            #     processes_found["hb"] = proc
+            if hb_cmd in cmd:
+                logger.info(f"Found heartbeat process at {proc.info['pid']}")
+                processes_found["hb"] = proc
 
     if kill:
         # Kill processes found and return empty dictionary
@@ -159,23 +156,39 @@ def find_tjm_processes(start: bool = False, kill: bool = False) -> dict:
             val.terminate()
         processes_found = {}
 
-    if start:
-        srv_log = os.path.join(
-            TACCJM_DIR, f"taccjm_server_{TACC_SSH_HOST}_{TACC_SSH_PORT}.log"
+    if not start:
+        return processes_found
+
+    if not os.path.exists(TACCJM_DIR):
+        os.makedirs(TACCJM_DIR)
+
+    srv_cmd += f" {loglevel}"
+    if 'server' not in processes_found.keys():
+        log_base_path = os.path.join(
+            TACCJM_DIR, f"ssh_server_{TACC_SSH_HOST}_{TACC_SSH_PORT}"
         )
-        # hb_log = os.path.join(
-        #     TACCJM_DIR, f"taccjm_heartbeat_{TACC_SSH_HOST}_{TACC_SSH_PORT}.log"
-        # )
-        # for p in [("server", srv_cmd, srv_log), ("hb", hb_cmd, hb_log)]:
-        for p in [("server", srv_cmd, srv_log)]:
-            if p[0] not in processes_found.keys():
-                # Start server/hb if not found
-                with open(p[2], "w") as log:
-                    processes_found[p[0]] = subprocess.Popen(
-                        p[1].split(" "), stdout=log, stderr=subprocess.STDOUT
-                    )
-                    pid = processes_found[p[0]].pid
-                    logger.info(f"Started {p[0]} process with pid {pid}")
+        with open(f"{log_base_path}_out.txt", "w") as out:
+            with open(f"{log_base_path}_err.txt", "w") as err:
+                processes_found['server'] = subprocess.Popen(
+                    srv_cmd.split(" "),
+                    stdout=out,
+                    stderr=err)
+                pid = processes_found['server'].pid
+                logger.info(f"Started server process with pid {pid}")
+
+    hb_cmd += f"--loglevel={loglevel} --heartbeat-interval={heartbeat_interval}"
+    if 'hb' not in processes_found.keys():
+        log_base_path = os.path.join(
+            TACCJM_DIR, f"ssh_hb_{TACC_SSH_HOST}_{TACC_SSH_PORT}"
+        )
+        with open(f"{log_base_path}_out.txt", "w") as out:
+            with open(f"{log_base_path}_err.txt", "w") as err:
+                processes_found['hb'] = subprocess.Popen(
+                    hb_cmd.split(" "),
+                    stdout=out,
+                    stderr=err)
+                pid = processes_found['hb'].pid
+                logger.info(f"Started heartbeat process with pid {pid}")
 
     # Return processes found/started
     return processes_found
@@ -209,8 +222,10 @@ def api_call(http_method: str, end_point: str, params: dict = None,
     """
 
     # Build http request
-    base_url = "http://{host}:{port}".format(host=TACC_SSH_HOST, port=TACC_SSH_PORT)
-    req = requests.Request(http_method, base_url + "/" + end_point, json=json_data, params=params, data=data)
+    base_url = "http://{host}:{port}".format(host=TACC_SSH_HOST,
+                                             port=TACC_SSH_PORT)
+    req = requests.Request(http_method, base_url + "/" + end_point,
+                           json=json_data, params=params, data=data)
     prepared = req.prepare()
 
     # Initialize connection and send http request
@@ -218,22 +233,20 @@ def api_call(http_method: str, end_point: str, params: dict = None,
 
     try:
         res = s.send(prepared)
-    except requests.exceptions.ConnectionError as c:
+    except requests.exceptions.ConnectionError:
         logger.info("Cannot connect to server. Restarting and waiting 5s.")
-        _ = find_tjm_processes(start=True)
+        _ = find_server(start=True)
         sleep(5)
         res = s.send(prepared)
-
 
     # Return content if success, else raise error
     if res.status_code == 200:
         return json.loads(res.text)
     else:
-        pdb.set_trace()
         raise TACCJMError(res)
 
 
-def list_ssh() -> List[str]:
+def list_sessions() -> List[str]:
     """
     List SSH Connections
 
@@ -248,7 +261,7 @@ def list_ssh() -> List[str]:
         List of connection IDs for ssh sessions available.
     """
     try:
-        res = api_call("GET", "list")
+        res = api_call("GET", "")
     except TACCJMError as e:
         e.message = "list_jm error"
         logger.error(e.message)
@@ -275,7 +288,7 @@ def init(
     ----------
     connection_id: str
         ID to give to TACCSSHClient instance on the ssh server. Must be unique
-        and not exist already in when executing `list_ssh()`.
+        and not exist already in when executing `list_sessions()`.
     system : str
         Name of tacc system to connect to. Must be one of stampede2, ls5,
         frontera, or maverick2.
@@ -294,8 +307,8 @@ def init(
     ssh_cnofig : dict
         Dictionary containing info about job manager instance just initialized.
     """
-    connections = list_ssh()
-    if connection_id in [c["id"] for s in connections]:
+    connections = list_sessions()
+    if connection_id in [c["id"] for c in connections]:
         raise ValueError(f"SSH Session {connection_id} already exists.")
 
     # Get user credentials/psw/mfa if not provided
@@ -341,7 +354,48 @@ def get(connection_id: str) -> dict:
     try:
         res = api_call("GET", connection_id)
     except TACCJMError as e:
-        e.message = f"get_jm error"
+        e.message = "get_jm error"
+        logger.error(e.message)
+        raise e
+
+    return res
+
+
+def exec(connection_id: str, cmnd: str,
+         wait: bool = True):
+    """
+    Exec a command
+    """
+
+    json_data = {'cmnd': cmnd,
+                 'wait': wait}
+
+    # Make API call
+    try:
+        res = api_call("POST", f"{connection_id}/exec", json_data=json_data)
+    except TACCJMError as e:
+        e.message = f"Error executing command {cmnd}"
+        logger.error(e.message)
+        raise e
+
+    return res
+
+
+def process(connection_id: str, cmnd_id: int = None, nbytes: int = None,
+            wait: bool = True):
+    """
+    Process a command
+    """
+
+    json_data = {'cmnd_id': cmnd_id,
+                 'nbytes': nbytes,
+                 'wait': wait}
+
+    # Make API call
+    try:
+        res = api_call("POST", f"{connection_id}/process", json_data=json_data)
+    except TACCJMError as e:
+        e.message = f"Error processing command {cmnd_id}"
         logger.error(e.message)
         raise e
 
@@ -351,7 +405,16 @@ def get(connection_id: str) -> dict:
 def list_files(
     connection_id: str,
     path: str = ".",
-    attrs: List[str] = ["filename"],
+    attrs: List[str] = [
+        "filename",
+        "st_atime",
+        "st_gid",
+        "st_mode",
+        "st_mtime",
+        "st_size",
+        "st_uid",
+        "ls_str",
+    ],
     hidden: bool = False,
     search: str = None,
     match: str = r".",
@@ -378,7 +441,7 @@ def list_files(
         raise ValueError(f"search must be one of attrs {attrs}")
 
     try:
-        files = api_call("GET", f"{connection_id}/files/list", {"path": path})
+        files = api_call("GET", f"{connection_id}/ls/{path}")
     except TACCJMError as e:
         e.message = "list_files error"
         logger.error(e.message)
@@ -388,44 +451,63 @@ def list_files(
 
     return files
 
-def exec(connection_id: str, cmnd: str,
-         wait: bool = True):
+
+def read(connection_id: str, remote_path: str):
     """
-    Exec a command
+    Read File
+
+    Read text (str) or json (dictionary) data directly from a file on remote
+    system Job Manager is connected to.
+
+    Parameters
+    ----------
+    connection_id : str
+        ID of Job Manager instance.
+    remote_path : str
+        Path on remote system to write.
+    data_type : str, default='text'
+        What tpye of data is contained in file to be read. Either `text` or
+        `json`.
+
+    Returns
+    -------
+    contents : str or dict
+        Contents of file read.
     """
-
-    json_data = {'cmnd': cmnd,
-                 'wait': wait}
-
-
-    # Make API call
     try:
-        res = api_call("POST", f"{connection_id}/exec", json_data=json_data)
+        res = api_call("GET", f"{connection_id}/read/{remote_path}")
     except TACCJMError as e:
-      e.message = f"Error executing command {cmnd}"
-      logger.error(e.message)
-      raise e
-
+        e.message = "read error"
+        logger.error(e.message)
+        raise e
 
     return res
 
 
-def process(connection_id: str, cmnd_id: int, nbytes: int = None,
-         wait: bool = True):
+def write(connection_id: str, data, remote_path: str):
     """
-    Process a command
+    Write File
+
+    Write text (str) or json (dictionary) data directly to a file on remote
+    system Job Manager is connected to.
+
+    Parameters
+    ----------
+    connection_id : str
+        ID of Job Manager instance.
+    data : str or dict
+        Text or json data to write to file.
+    remote_path : str
+        Path on remote system to write.
+
+    Returns
+    -------
     """
-
-    json_data = {'cmnd_id': cmnd_id,
-                 'nbytes': nbytes,
-                 'wait': wait}
-
-
-    # Make API call
+    data = {"data": data, "path": remote_path}
     try:
-        res = api_call("POST", f"{connection_id}/process", json_data=json_data)
+        res = api_call("POST", f"{connection_id}/write/", json_data=data)
     except TACCJMError as e:
-        e.message = f"Error processing command {cmnd}"
+        e.message = "write error"
         logger.error(e.message)
         raise e
 
@@ -457,12 +539,12 @@ def upload(
     -------
     """
     data = {
-        "local_path": local_path,
-        "remote_path": remote_path,
+        "source_path": local_path,
+        "dest_path": remote_path,
         "file_filter": file_filter,
     }
     try:
-        api_call("PUT", f"{connection_id}/files/upload", data)
+        api_call("POST", f"{connection_id}/upload", json_data=data)
     except TACCJMError as e:
         e.message = "upload error"
         logger.error(e.message)
@@ -496,141 +578,15 @@ def download(
         Path on local system to file/folder just downloaded.
     """
     data = {
-        "remote_path": remote_path,
-        "local_path": local_path,
+        "source_path": remote_path,
+        "dest_path": local_path,
         "file_filter": file_filter,
     }
     try:
-        res = api_call("GET", f"{connection_id}/files/download", data)
+        res = api_call("GET", f"{connection_id}/download", params=data)
     except TACCJMError as e:
         e.message = "download error"
         logger.error(e.message)
         raise e
 
     return res
-
-
-def remove(connection_id: str, remote_path: str):
-    """
-    Remove file/folder
-
-    Remove path on remote system job manager is connected to by moving it into
-    the trash directory. Can restore file just removed withe `restore` method.
-
-    Parameters
-    ----------
-    connection_id : str
-        ID of Job Manager instance.
-    remote_path : str
-        Path of on remote system to file/folder to send to trash directory.
-
-    Returns
-    -------
-    """
-    data = {"remote_path": remote_path}
-    try:
-        res = api_call("DELETE", f"{connection_id}/files/remove", data)
-    except TACCJMError as e:
-        e.message = "remove error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def restore(connection_id: str, remote_path: str):
-    """
-    Restore file/folder
-
-    Restore the file at `remote_path` that was removed previously by a `remove`
-    command. This moves the file/folder out of trash and back to its original
-    path that is passed in.
-
-    Parameters
-    ----------
-    connection_id : str
-        ID of Job Manager instance.
-    remote_path : str
-        Path on remote system to file/folder to restore from trash directory.
-
-    Returns
-    -------
-
-    Warnings
-    --------
-    Will overwrite file/folder at remote_path if something exists there.
-    """
-    data = {"remote_path": remote_path}
-    try:
-        res = api_call("PUT", f"{connection_id}/files/restore", data)
-    except TACCJMError as e:
-        e.message = "restore error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def write(connection_id: str, data, remote_path: str):
-    """
-    Write File
-
-    Write text (str) or json (dictionary) data directly to a file on remote
-    system Job Manager is connected to.
-
-    Parameters
-    ----------
-    connection_id : str
-        ID of Job Manager instance.
-    data : str or dict
-        Text or json data to write to file.
-    remote_path : str
-        Path on remote system to write.
-
-    Returns
-    -------
-    """
-    data = {"data": data, "remote_path": remote_path}
-    try:
-        res = api_call("PUT", f"{connection_id}/files/write", data)
-    except TACCJMError as e:
-        e.message = "write error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
-def read(connection_id: str, remote_path: str, data_type: str = "text"):
-    """
-    Read File
-
-    Read text (str) or json (dictionary) data directly from a file on remote
-    system Job Manager is connected to.
-
-    Parameters
-    ----------
-    connection_id : str
-        ID of Job Manager instance.
-    remote_path : str
-        Path on remote system to write.
-    data_type : str, default='text'
-        What tpye of data is contained in file to be read. Either `text` or
-        `json`.
-
-    Returns
-    -------
-    contents : str or dict
-        Contents of file read.
-    """
-    data = {"remote_path": remote_path, "data_type": data_type}
-    try:
-        res = api_call("GET", f"{connection_id}/files/read", data)
-    except TACCJMError as e:
-        e.message = "read error"
-        logger.error(e.message)
-        raise e
-
-    return res
-
-
