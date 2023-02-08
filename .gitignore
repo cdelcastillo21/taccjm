@@ -52,3 +52,6 @@ MANIFEST
 # Per-project virtualenvs
 .venv*/
 .conda*/
+
+# Notebooks data
+*/notebooks/data/*
