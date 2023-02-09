@@ -4,6 +4,7 @@ TACCJobManager Utility Function
 
 """
 
+import stat
 import sys
 import pdb
 import os  # OS system utility functions
@@ -21,6 +22,7 @@ import math
 from datetime import datetime, timedelta
 import time
 import numpy as np
+import concurrent.futures
 
 
 DEFAULT_SCRIPTS_PATH = Path(__file__).parent / "scripts"
@@ -234,15 +236,18 @@ def get_default_script(script_name, ret="path"):
         return script_text
 
 
-def init_logger(name, output=sys.stdout, fmt="json", loglevel=logging.INFO):
+def init_logger(name,
+                log_config: dict = {'output': sys.stdout,
+                                    'fmt': 'json',
+                                    'level': logging.INFO}):
     """
     Format a logger instance
     """
     logger = logging.getLogger(name)
-    if isinstance(output, str):
-        output = open(output, "w")
-    logHandler = logging.StreamHandler(output)
-    if fmt == "json":
+    if isinstance(log_config['output'], str):
+        log_config['output '] = open(log_config['output'], "w")
+    logHandler = logging.StreamHandler(log_config['output'])
+    if log_config['fmt'] == "json":
         formatter = jsonlogger.JsonFormatter(
             "%(asctime)s %(name)s - %(levelname)s:%(message)s"
         )
@@ -253,7 +258,8 @@ def init_logger(name, output=sys.stdout, fmt="json", loglevel=logging.INFO):
 
     logHandler.setFormatter(formatter)
     logger.addHandler(logHandler)
-    logger.setLevel(loglevel)
+    logger.setLevel(log_config['level'])
+    logger.info(f"Logger {name} initialized", extra={'config': log_config})
 
     return logger
 
@@ -373,3 +379,56 @@ def parse_allocations_string(allocs_return):
     ]
 
     return allocations
+
+
+def stat_file_or_folder(full_path):
+    """
+    """
+    try:
+        stat_result = os.stat(full_path)
+        return (full_path, stat_result)
+    except Exception as e:
+        return (f"Error getting stats for {full_path}: {e}")
+        raise e
+
+
+def stat_all_files_and_folders(path,
+                               f_attrs=[
+                                 "st_atime",
+                                 "st_gid",
+                                 "st_mode",
+                                 "st_mtime",
+                                 "st_size",
+                                 "st_uid"
+                                 ],
+                               ):
+    """
+    Stats all files and folders at a path.
+    """
+    def _process(res):
+        d = {'filename': res[0]}
+        for x in f_attrs:
+            d[x] = res[1].__getattribute__(x)
+        return [d]
+
+    result = stat_file_or_folder(str(Path(path).resolve()))
+    if not stat.S_ISDIR(result[1].st_mode):
+        return [_process(result)]
+
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = []
+        for dirpath, dirnames, filenames in os.walk(path):
+            for name in filenames + dirnames:
+                full_path = os.path.join(dirpath, name)
+                future = executor.submit(stat_file_or_folder, full_path)
+                futures.append(future)
+
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if isinstance(result, tuple):
+                results.append(_process(result))
+            else:
+                pass
+
+    return results

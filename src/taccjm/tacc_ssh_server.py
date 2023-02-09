@@ -38,12 +38,16 @@ logger = None
 
 
 def _get_config(connection_id):
+    """
+    Get the config associated with a connection ID if it exists.
+    """
     if connection_id in CONNECTIONS.keys():
         res = CONNECTIONS[connection_id]
         res = {i: res[i] for i in res if i != 'client'}
         return res
     else:
         raise ValueError(f'No active SSH Connection with id {connection_id}')
+
 
 def _get_client(connection_id):
     if connection_id in CONNECTIONS.keys():
@@ -58,8 +62,11 @@ class Connection(BaseModel):
     user: str
     start: datetime
     last_ts: datetime
-    loglevel: str
-    logfile: str
+    log_level: str
+    log_file: str
+    home_dir: str
+    work_dir: str
+    scratch_dir: str
 
 
 class ConnectionRequest(BaseModel):
@@ -101,7 +108,9 @@ async def init(
     try:
         client = TACCSSHClient(
             req.system, user=req.user, psw=req.psw, mfa=req.mfa,
-            log=logfile, loglevel=loglevel,
+            log_config={'output': logfile,
+                        'fmt': 'json',
+                        'level': loglevel},
         )
     except ValueError as v:
         msg = f"Init failed on {req.system} for {req.user}: {v}"
@@ -118,8 +127,11 @@ async def init(
         "user": client.user,
         "start": datetime.now(),
         "last_ts": datetime.now(),
-        "loglevel": loglevel,
-        "logfile": logfile,
+        "log_level": loglevel,
+        "log_file": logfile,
+        "scratch_dir": client.scratch_dir,
+        "home_dir": client.home_dir,
+        "work_dir": client.work_dir,
     }
     logger.info(f"SUCCESS - {connection_id} initialized establisehed.",
                 extra={'connection_config': ret})
@@ -243,6 +255,26 @@ async def list_files(connection_id: str, file_path: str):
     return res
 
 
+@app.get("/{connection_id}/lsr/{file_path:path}", response_model=List[PathInfo])
+async def list_files_recursive(connection_id: str, file_path: str):
+    """
+    List Files
+
+    List files at the given file path
+
+    """
+    client = _get_client(connection_id)
+
+    try:
+        res = client.list_files(file_path, recurse=True)
+    except Exception as e:
+        msg = f"Error accessing {file_path} not found : {e}"
+        logger.error(msg)
+        raise HTTPException(status_code=404, detail=msg)
+
+    return res
+
+
 class FileData(BaseModel):
     path: str
     data_type: str = 'text'
@@ -312,8 +344,10 @@ if __name__ == '__main__':
     PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8000
     LOGLEVEL = get_log_level(sys.argv[3]) if len(sys.argv) > 3 else logging.INFO
     LOGFILE = f"{TACCJM_DIR}/ssh_server_{HOST}_{PORT}_log.json"
-    logger = init_logger('tacc_ssh_server', output=LOGFILE,
-                         fmt='json', loglevel=LOGLEVEL)
+    logger = init_logger('tacc_ssh_server',
+                         {'output': LOGFILE,
+                          'fmt': 'json',
+                          'level': LOGLEVEL})
 
     logger.info("Starting TACC SSH Server.")
     uvicorn.run(app, host=HOST, port=PORT)

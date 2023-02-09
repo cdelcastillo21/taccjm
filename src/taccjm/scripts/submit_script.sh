@@ -18,6 +18,12 @@
 
 cd {job_dir}
 
+module load {module_list}
 
 export NP={cores}
-{job_dir}/run.sh
+
+source ~/.bashrc
+
+conda activate taccjm
+
+{run_cmnd}

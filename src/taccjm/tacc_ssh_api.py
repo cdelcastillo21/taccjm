@@ -415,6 +415,7 @@ def list_files(
         "st_uid",
         "ls_str",
     ],
+    recurse: bool = False,
     hidden: bool = False,
     search: str = None,
     match: str = r".",
@@ -440,8 +441,10 @@ def list_files(
     if search is not None and search not in attrs:
         raise ValueError(f"search must be one of attrs {attrs}")
 
+    endpoint = 'ls' if not recurse else 'lsr'
+
     try:
-        files = api_call("GET", f"{connection_id}/ls/{path}")
+        files = api_call("GET", f"{connection_id}/{endpoint}/{path}")
     except TACCJMError as e:
         e.message = "list_files error"
         logger.error(e.message)

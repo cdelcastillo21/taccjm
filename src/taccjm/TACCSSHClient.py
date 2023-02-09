@@ -6,6 +6,7 @@ A class that defines an ssh connection to a TACC system.
 
 """
 import pdb  # Debug
+import sys
 import os  # OS system utility functions for local system
 import posixpath  # Paths on remote system (assumed UNIX)
 import errno  # For error messages
@@ -67,6 +68,8 @@ class TACCSSHClient(SSHClient2FA):
     USER_PROMPT = "Username:"
     PSW_PROMPT = "Password:"
     MFA_PROMPT = "TACC Token Code:"
+    HOME_DIR = "$HOME"
+    WORK_DIR = "$WORK"
     SCRATCH_DIR = "$SCRATCH"
 
     def __init__(
@@ -75,9 +78,9 @@ class TACCSSHClient(SSHClient2FA):
         user=None,
         psw=None,
         mfa=None,
-        log=None,
-        logfmt="json",
-        loglevel=logging.ERROR,
+        log_config={'output': sys.stdout,
+                    'fmt': 'txt',
+                    'level': logging.ERROR},
     ):
         """
         Initialize Job Manager connection and directories.
@@ -104,8 +107,7 @@ class TACCSSHClient(SSHClient2FA):
             mfa_prompt=self.MFA_PROMPT,
         )
 
-        self.log = init_logger(__name__, output=log,
-                               fmt=logfmt, loglevel=loglevel)
+        self.log = init_logger(__name__, log_config=log_config)
 
         if system not in self.SYSTEMS:
             m = f"Unrecognized system {system}. Options - {self.SYSTEMS}."
@@ -122,10 +124,18 @@ class TACCSSHClient(SSHClient2FA):
         # Initialize list of commands run to be empty
         self.commands = []
 
-        # Get taccjm working directory, relative to users scratch directory
+        # Scratch directory - Used by default for all operations
         self.scratch_dir = self.execute_command(
                 f"echo {self.SCRATCH_DIR}")['stdout'].strip()
         self.log.info(f"{self.SCRATCH_DIR} resolved to {self.scratch_dir}")
+
+        # home and work dirs -> Good to stash for later usage
+        self.home_dir = self.execute_command(
+                f"echo {self.HOME_DIR}")['stdout'].strip()
+        self.log.info(f"{self.HOME_DIR} resolved to {self.home_dir}")
+        self.work_dir = self.execute_command(
+                f"echo {self.WORK_DIR}")['stdout'].strip()
+        self.log.info(f"{self.WORK_DIR} resolved to {self.work_dir}")
 
     def execute_command(self, cmnd, wait=True, error=True) -> None:
         """
@@ -373,7 +383,8 @@ class TACCSSHClient(SSHClient2FA):
         return path
 
     def list_files(self, path: str = None,
-                   follow_symbolic_links: bool = True) -> List[dict]:
+                   follow_symbolic_links: bool = True,
+                   recurse: bool = False) -> List[dict]:
         """
         Returns the info on all files/folderes at a given path. If path is a
         file, then returns file info. If path is directory, then returns file
@@ -416,7 +427,7 @@ class TACCSSHClient(SSHClient2FA):
         self.log.info(f'Getting file info {path}')
         fstat = self._stat(path, sftp=sftp,
                            follow_symbolic_links=follow_symbolic_links)
-        if stat.S_ISDIR(fstat.st_mode):
+        if stat.S_ISDIR(fstat.st_mode) and recurse:
             # If directory get info on all files in directory
             f_attrs.insert(0, "filename")
             files = sftp.listdir_attr(path)

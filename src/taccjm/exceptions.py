@@ -46,6 +46,44 @@ class SSHCommandError(Exception):
         return msg
 
 
+class TACCClientErrror(Exception):
+    """
+    Custom exception for errors when using TACC resources.
+
+    Attributes
+    ----------
+    system : str
+        TACC System on which command was executed.
+    user : str
+        User that is executing command.
+    command : str
+        Command that threw the error.
+    rc : str
+        Return code.
+    stdout : str
+        Output from stdout.
+    stderr : str
+        Output from stderr.
+    message : str
+        Explanation of the error.
+    """
+
+    def __init__(self, system, user, command_config, message="Non-zero return code."):
+        self.system = system
+        self.user = user
+        self.command_config = command_config
+        self.message = message
+        super().__init__(self.message)
+
+    def __str__(self):
+        msg = f"{self.message}"
+        msg += f"\n{self.user}@{self.system}$ {self.command_config['cmd']}"
+        msg += f"\nrc     : {self.command_config['rc']}"
+        msg += f"\nstdout : {self.command_config['stdout']}"
+        msg += f"\nstderr : {self.command_config['stderr']}"
+        return msg
+
+
 class TJMCommandError(Exception):
     """
     Custom exception to wrap around executions of any commands sent to TACC

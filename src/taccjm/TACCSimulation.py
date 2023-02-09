@@ -1,83 +1,80 @@
 import stat
 import pdb
 import tempfile
-from taccjm import taccjm_client as tjm
-from taccjm.exceptions import TACCJMError
 import subprocess
 from pathlib import Path
 import shutil
+import posixpath
 import json
 import logging
 import os
 from datetime import datetime
 import time
-from dotenv import load_dotenv
+from typing import Union
 
-from taccjm.utils import hours_to_runtime_str, get_default_script, init_logger
-from taccjm.utils import validate_file_attrs, filter_files
+from taccjm.TACCClient import TACCClient
+from taccjm import tacc_ssh_api as tsa
+from taccjm.exceptions import TACCJMError
+from taccjm.utils import (
+    hours_to_runtime_str, get_default_script, init_logger,
+    validate_file_attrs, filter_files, stat_all_files_and_folders
+    )
 
 import __main__
 
+import click
+
 submit_script_template = get_default_script("submit_script.sh", ret="text")
-run_script_templatete = get_default_script("run.sh", ret="text")
+run_script_template = get_default_script("run.sh", ret="text")
 
 
-class TACCSimulation:
+def TACCSimulation():
     """
-    Simulation base class
+    Base class for a simulation job.
 
-    A class for setting up a simulation on TACC. This class is environment agnostic.
-    And communicates with TACC to set-up and run simulations as necessary. If not
-    running on TACC systems, will use taccjm to establish and maintain a connection
-    to desired TACC system where simulation is to be run.
+    This class is to be the main entrypoint for a SLURM job
     """
 
-    CONDA_REQUIRED = "pip"
-    PIP_REQUIRED = "git+https://github.com/cdelcastillo21/taccjm.git@0.0.5-improv"
-    APP_TEMPLATE = {
-        "name": "base-sim",
-        "short_desc": "Base TACC Application",
-        "long_desc": "Base template to build HPC Apps",
-        "default_node_count": 1,
-        "default_processors_per_node": 48,
-        "default_max_run_time": 0.1,
-        "default_queue": "development",
-        "inputs": [
-            {
-                "name": "file",
-                "label": "Input argument",
-                "desc": "File input to be copied to job dir.",
-            }
-        ],
-        "parameters": [
-            {
-                "name": "param",
-                "label": "Parameter argument",
-                "desc": "Value to be parsed into run script",
-            }
-        ],
+    JOB_DEFAULTS = {
+        "allocation": None,
+        "node_count": 1,
+        "processors_per_node": 48,
+        "max_run_time": 0.1,
+        "queue": "development",
+        "dependencies":  [],
     }
 
-    def __init__(
-        self,
-        name: str,
-        system: str = None,
-        log=None,
-        logfmt="txt",
-        loglevel=logging.CRITICAL,
-        config: dict = None,
-    ):
-        """
-        Upon initializaiton:
+    # These are file/folder inputs needed to run the simulation
+    ARGUMENTS = [
+            {
+                "name": "input_file",
+                "type": "input",
+                "label": "Input File",
+                "desc": "File input to be copied to job dir. " +
+                        "Will be passed as argument as well to run()",
+            },
+            {
+                "name": "param",
+                "type": "argument",
+                "label": "Parameter argument",
+                "desc": "Value to be passed to run() method as an argument.",
+            }
+    ],
 
-        - Determine if running on TACC or not
-        - If not running on TACC init TACC Job Manager connection
-        - TODO: Tapis support
-        """
-        self.name = name
-        self.commands = {}
-        self.log = init_logger(__name__, output=log, fmt=logfmt, loglevel=loglevel)
-        self.log.info(f"Logger initialized for {name} with level {loglevel}")
+    OUTPUTS = [
+          {
+                "name": "output",
+                "label": "Main output dir",
+                "desc": "Directory to save upon completion of job.",
+          }
+    ]
+
+    MODULES_LIST = ['remora']
+
+    def __init__(self,
+                 name: str = None,
+                 log_config: dict = None,
+                 ):
 
         if "__file__" in dir(__main__):
             self.is_script = True
@@ -91,572 +88,121 @@ class TACCSimulation:
         if name is None:
             self.name = Path(self.script_file).stem
 
-        # Lets us know if we are waiting on one or more commands to finish before
-        # Running a job (for example, set-up scripts still running in background).
-        self.blockers = []
+        self.log = init_logger(__name__, log_config)
+        self.client = TACCClient(log_config=log_config)
+        self.job_config = None
 
-        load_dotenv()
-        host = os.getenv("HOSTNAME")
-        if "tacc" not in host:
-            # Not running on TACC - Initialized job manager to interact with system
-            self.log.info("Not running on TACC. Initializiing jm environment")
-            self.system = (
-                system
-                if system is not None
-                else os.environ.get("TACCJM_DEFAULT_SYSTEM")
-            )
-            if self.system is None:
-                self.log.critical(
-                    "".join(
-                        [
-                            "No system detected in env variable ",
-                            "$TACCJM_DEFAULT_SYSTEM and non passed",
-                        ]
-                    )
-                )
-
-            self.jm = None
-            self.jm_id = f"ch-sim-{self.system}"
-            restart = False
-            self.log.info(f"Looking for jm {self.jm_id}")
-            try:
-                self.jm = tjm.get_jm(self.jm_id)
-                self.log.info(f"Found jm {self.jm_id}", extra=self.jm)
-            except ConnectionError:
-                restart = True
-                self.log.info("Unnable to connect to jm, restarting")
-            except TACCJMError:
-                self.log.info(f"Did not find jm {self.jm_id}")
-                pass
-
-            if self.jm is None:
-                self.log.info(f"Initializing JM {self.jm_id}")
-                # TODO: wrap this in try block
-                self.jm = tjm.init_jm(
-                    self.jm_id,
-                    self.system,
-                    user=os.environ.get("CHSIM_USER"),
-                    psw=os.environ.get("CHSIM_PSW"),
-                    restart=restart,
-                )
-            self._conda_init()
-            self.apps_dir = self.jm["apps_dir"]
-            self.jobs_dir = self.jm["jobs_dir"]
-        else:
-            # Running on TACC systems - Run things locally
-            self.jm = None
-            self.system = host.split(".")[1]
-            basedir = os.getenv("SCRATCH")
-            if basedir is None or not os.path.exists(basedir):
-                basedir = os.getenv("WORK")
-            pdb.set_trace()
-            self.jobs_dir = basedir + "/jobs"
-            self.apps_dir = basedir + "/apps"
-            os.makedirs(self.jobs_dir, exist_ok=True)
-            os.makedirs(self.apps_dir, exist_ok=True)
-
-    def _conda_install(self, conda=CONDA_REQUIRED, pip=PIP_REQUIRED):
+    def _parse_submit_script(self,
+                             job_config: dict):
         """
-        Conda install
-
-        This should only be run from non-TACC systems to verify setup is correct on
-        TACC systems. Installs conda (mamba) and setups ch-sim conda environment as
-        necessary.
+        Parse a job config submit script text, with proper directives.
         """
-        # Check conda (mamba) installed
-        self.log.info("Checking mamba environment")
-        res = self.run_command(
-            "source ~/.bashrc; mamba activate taccjm; taccjm --help",
-            wait=True,
-            check=False,
+        extra_directives = ""
+        dependency = job_config['slurm'].get("dependency")
+        if dependency is not None:
+            extra_directives += "\n#SBATCH --dependency=afterok:"+str(dependency)
+        txt = submit_script_template.format(
+                    job_name=job_config["name"],
+                    job_id=job_config["job_id"],
+                    job_dir=job_config['job_dir'],
+                    module_list=' '.join(self.MODULES),
+                    allocation=job_config['slurm']['allocation'],
+                    queue=job_config['slurm']['queue'],
+                    run_time=job_config['slurm']["max_run_time"],
+                    cores=job_config['slurm']['node_count'] *
+                    job_config['slurm']['processors_per_node'],
+                    node_count=job_config['slurm']['node_count'],
+                    processors_per_node=job_config['slurm']['processors_per_node'],
+                    extra_directives=extra_directives,
         )
-        if res["rc"] != 0:
-            self.log.info("Did not find conda env, setting up in background.")
-            script_path = get_default_script("conda_install.sh")
-            tjm.deploy_script(self.jm_id, script_path)
-            res = tjm.run_script(
-                self.jm_id, "conda_install", args=["taccjm", "pip", pip], wait=False
-            )
-            self.log.info("conda_init() Running. Setting blocker until completion")
-            self.blockers.append(res)
-            key = f"{res['name']}_{res['id']}"
-            self.commands[key] = res
+
+        return txt
+
+    def _parse_run_script(self):
+        """
+        Parse a job run script text, with proper modules loaded.
+        """
+        if self.modules is not None:
+            # TODO: Verify valid modules?
+            module_str = "module load " + " ".join(self.modules)
         else:
-            self.log.info("taccjm mamba env found")
+            module_str = ""
+        txt = run_script_template.format(modules_str=module_str)
 
-    def _check_blockers(self, wait=False):
-        """ """
-        blockers = []
-        for b in self.blockers:
-            cmd_id = f"{b['name']}_{b['id']}"
-            cmd = self.get_command(cmd_id, nbytes=None)
-            if cmd["status"] == "COMPLETE":
-                self.log.info(f"Blocker {cmd_id} completed")
-            elif cmd["status"] == "FAILED":
-                self.log.critical(f"Blocker {cmd_id} failed: {b}")
-                raise RuntimeError(f"Blocker {b} failed")
-            else:
-                self.log.info(f"Blocker {cmd_id} is still running")
-                blockers.append(cmd)
-        self.blockers = blockers
+        return txt
 
-        if len(self.blockers) == 0:
-            return True
-        else:
-            return False
+    def _prompt(self, question):
+        return input(question + " [y/n]").strip().lower() == "y"
 
-    def _list_files(
+    def setup(
         self,
-        path=".",
-        attrs=["filename"],
-        hidden: bool = False,
-        search: str = None,
-        match: str = r".",
-        job_id: str = None,
-    ):
-        """
-        Get files and file info
-        """
-        if job_id is not None:
-            path = f"{self.jobs_dir}/{job_id}/{path}"
-        if self.jm is None:
-            # Query path to see if its directory or file
-            validate_file_attrs(attrs)
-            f_info = []
-            f_attrs = ["st_atime", "st_gid", "st_mode", "st_mtime", "st_size", "st_uid"]
-            lstat = os.lstat(path)
-
-            if stat.S_ISDIR(lstat.st_mode):
-                # If directory get info on all files in directory
-                f_attrs.insert(0, "filename")
-                files = os.listdir_attr(path)
-                for f in files:
-                    # Extract fields from SFTPAttributes object for files
-                    d = dict([(x, f.__getattribute__(x)) for x in f_attrs])
-                    d["ls_str"] = f.asbytes()
-                    f_info.append(d)
-            else:
-                # If file, just get file info
-                d = [(x, lstat.__getattribute__(x)) for x in f_attrs]
-                d.insert(0, ("filename", path))
-                d.append(("ls_str", lstat.asbytes()))
-                f_info.append(dict(d))
-                files = filter_files(
-                    files, attrs=attrs, hidden=hidden, search=search, match=match
-                )
-            return f_info
-        else:
-            return tjm.list_files(
-                self.jm_id,
-                path=path,
-                attrs=attrs,
-                hidden=hidden,
-                search=search,
-                match=match,
-            )
-
-    def _read(self, path, data_type="text", job_id: str = None):
-        """
-        Wrapper to read files either locally or remotely, depending on where executing.
-        """
-        if job_id is not None:
-            path = f"{self.jobs_dir}/{job_id}/{path}"
-        if self.jm is None:
-            with open(path, "r") as fp:
-                if data_type == "json":
-                    return json.load(fp)
-                else:
-                    return fp.read()
-        else:
-            return tjm.read(self.jm_id, path, data_type=data_type)
-
-    def _write(self, data, path: str, job_id: str = None) -> None:
-        """
-        Wrapper to read files either locally or remotely, depending on where executing.
-        """
-        if job_id is not None:
-            path = f"{self.jobs_dir}/{job_id}/{path}"
-        if self.jm is None:
-            if isinstance(data, str):
-                with open(path, "w") as fp:
-                    fp.write(data)
-            else:
-                with open(path, "w") as fp:
-                    json.dump(data, fp)
-        else:
-            tjm.write(self.jm_id, data, path)
-
-    def run_command(self, cmnd: str = "pwd", check=True, wait=True, **kwargs):
-        """
-        Run Command
-
-        If running on TACC, the commands will be executed using a
-        python sub-process. Otherwise, command str will be written to a file (default
-        bash shell) and executed remotely
-        """
-        res = None
-        if self.jm is None:
-            # TODO: Local asynch execeution
-            self.log.info("Running command locally")
-            sub_proc = subprocess.run(cmnd, shell=True, check=check, **kwargs)
-            if sub_proc.stdout is not None:
-                res = sub_proc.stdout.decode("utf-8")
-        else:
-            self.log.info("Running command remotely via script")
-            temp_file = tempfile.NamedTemporaryFile(delete=True)
-            temp_file.write(f"#!/bin/bash\n{cmnd}".encode("utf-8"))
-            temp_file.flush()
-            script_name = Path(temp_file.name).stem
-            script_path = str(Path(temp_file.name).resolve())
-            self.log.info(f"Deploying script {script_name} at {script_path}")
-            tjm.deploy_script(self.jm["jm_id"], script_name, script_path)
-            try:
-                self.log.info(f"Running script {script_name}")
-                res = tjm.run_script(self.jm["jm_id"], script_name, wait=wait)
-            except Exception as e:
-                msg = f"Command << {cmnd} >> at script file {temp_file.name} failed."
-                if check:
-                    self.log.error(msg + ". Check is true, raising error.")
-                    raise e
-                else:
-                    self.log.error(msg + ". Check is false... continuing")
-            temp_file.close()
-
-            if wait:
-                if res["rc"] != 0:
-                    if check:
-                        self.log.error("Command error and check is true ")
-                        # TODO: Fix this exception
-                        raise RuntimeError("Command failed")
-                    else:
-                        self.log.warning("Command error, check is false, continuing")
-                else:
-                    self.log.info("Command completed succesfully")
-                    # TODO: return whole dictionary or stdout only?
-                    # res = res['stdout']
-            if not wait:
-                key = f"{res['name']}_{res['id']}"
-                self.commands[key] = res
-                res = key
-
-        return res
-
-    def get_command(self, cmd_id: str, nbytes=100):
-        """
-        Wait for given command to finish executing
-        """
-        if cmd_id not in self.commands:
-            raise ValueError("Invalid command ID cmd_id")
-        else:
-            try:
-                res = tjm.get_script_status(
-                    self.jm_id, self.commands[cmd_id]["id"], nbytes=nbytes
-                )
-            except Exception as t:
-                self.log.critical(f"Error getting script {cmd_id} status")
-                raise t
-            self.commands[cmd_id] = res
-
-        return res
-
-    def get_apps(self) -> List[str]:
-        """
-        Get list of applications deployed by TACCJobManager instance.
-
-        Parameters
-        ----------
-        None
-
-        Returns
-        -------
-        apps : list of str
-            List of applications deployed.
-
-        """
-        apps = self._list_files(
-            path=self.apps_dir, attrs=["filename", "st_mode"], hidden=False
-        )
-        apps = [a for a in apps if stat.S_ISDIR(a["st_mode"])]
-
-        return apps
-
-    def get_app(self, app_id: str) -> dict:
-        """
-        Get application config for app deployed at TACCJobManager.apps_dir.
-
-        Parameters
-        ----------
-        app_id : str
-            Name of app to pull config for.
-        ----------
-
-        Returns
-        -------
-        app_config : dict
-            Application config dictionary as stored in application directory.
-
-        Raises
-        ------
-        ValueError
-            If app_id does not exist in applications folder.
-
-        """
-        # Get current apps already deployed
-        cur_apps = self.get_apps()
-        if app_id not in cur_apps:
-            msg = f"get_app - Application {app_id} does not exist."
-            self.log.error(msg)
-            raise ValueError(msg)
-
-        # Load application config
-        app_config_path = "/".join([self.apps_dir, app_id, "app.json"])
-        app_config = self._read(path, data_type="json")
-
-        return app_config
-
-    def deploy_app(
-        self,
-        app_config: dict = None,
-        local_app_dir: str = ".",
-        app_config_file: str = "app.json",
-        overwrite: bool = False,
-        **kwargs,
+        args: dict = None,
+        slurm_config: dict = None,
+        stage: bool = False,
     ) -> dict:
         """
-        Deploy local application code associated with this simulation. Values in project
-        config file are substituted in where needed in the app config file to
-        form application config, and then app contents in assets directory
-        (relative to local_app_dir) are sent to to the apps_dir along with the
-        application config (as a json file).
-
-        Parameters
-        ----------
-        app_config : dict, default=None
-            Dictionary containing app config. If None specified, then app
-            config will be read from file specified at
-            local_app_dir/app_config_file.
-        local_app_dir: str, default='.'
-            Directory containing application to deploy.
-        app_config_file: str, default='app.json'
-            Path relative to local_app_dir containing app config json file.
-        overwrite: bool, default=False
-            Whether to overwrite application if it already exists in
-            application directory.
-        **kwargs : dict, optional
-            All extra keyword arguments will be interpreted as items to
-            override in app config found in json file.
-
-        Returns
-        -------
-        app_config : dict
-            Application config dictionary as stored in application directory.
-
-        Raises
-        ------
-        ValueError
-            If app_config is missing a required field or application already
-            exists but overwrite is not set to True.
         """
-        # Start from applications base template from class
-        app_config = self.APP_TEMPLATE
 
-        # Update with kwargs passed to this deploy method
-        app_config.update(**kwargs)
-
-        # Implement overwrite check?
-        # Only overwrite previous version of app if overwrite is set.
-        # cur_apps = self.get_apps()
-        # if (app_config['name'] in cur_apps) and (not overwrite):
-        #     msg = f"deploy_app - {app_config['name']} already exists."
-        #     logger.info(msg)
-        #     raise ValueError(msg)
-
-        # Setup a TACCJM application directory
-        # This contains the submit scripts
-        tmpdir = tempfile.mkdtemp()
-        assets_dir = tmpdir + "/assets"
-        Path(assets_dir).mkdir(exist_ok=True, parents=True)
-
-        # If running from a main script file, then patch up
-        if self.is_script == True:
-            shutil.copy(self.script_file), assets_dir + "/sim.py"
-            app_config["entry_script"] = "sim.py"
-        else:
-            with open(assets_dir + "/run.sh", "w") as fp:
-                fp.write(run_script_template.format(run_cmd="taccjm job run"))
-            app_config["entry_script"] = "run.sh"
-
-        # TODO: Async execution and add to blockers for submiting remotely?
-        self._run_command(f"chmod +x {entry_script}")
-
-        # TODO: Copy simulation dependencies - Implement later
-        # remote_deps = []
-        # if self.deps is not None:
-        #     for d in self.deps:
-        #         if Path(d).exists():
-        #             shutil.copy(d, assets_dir)
-        #         elif self.jm is not None:
-        #             remote_deps.append(d)
-
-        # Check for valid app config? - or will
-        # config always be good if we start with default?
-        # missing = set(self.APP_TEMPLATE.keys()) - set(app_config.keys())
-        # if len(missing)>0:
-        #     msg = f"deploy_app - missing required app configs {missing}"
-        #     logger.error(msg)
-        #     raise ValueError(msg)
-
-        # Write config file
-        with open(tmpdir + "/app.json", "w") as fp:
-            json.dump(app_config, fp)
-
-        # Write entrypoint
-        with open(assets_dir + "/run.sh", "w") as fp:
-            fp.write(self._parse_run_script())
-        # Make entry point script executable
-        entry_script = f"{deploy_app_dir}/{app_config['entry_script']}"
-
-        # Move app dir
-        local_app_dir = os.path.join(local_app_dir, "assets")
-        deploy_app_dir = self.apps_dir + "/" + self.name
-        if self.jm is None:
-            self.upload(local_app_dir, deploy_app_dir)
-        else:
-            shutil.copytree(local_app_dir, deploy_app_dir)
-
-        return app_config
-
-    def get_jobs(self) -> List[str]:
-        """
-        Get list of all jobs in TACCJobManager jobs directory.
-
-        Parameters
-        ----------
-        None
-
-        Returns
-        -------
-        jobs : list of str
-            List of jobs contained deployed.
-
-        """
-        jobs = self._list_files(
-            path=self.jobs_dir, attrs=["filename", "st_mode"], hidden=False
+        job_config = {}
+        job_config['name'] = self.name
+        name = job_config["name"]
+        job_config["job_id"] = (
+            name
+            + "_"
+            + datetime.fromtimestamp(time.time()).strftime("%Y%m%d_%H%M%S")
+            + next(tempfile._get_candidate_names())
         )
-        jobs = [j for j in jobs if stat.S_ISDIR(a["st_mode"])]
+        job_config['job_dir'] = self.client.job_path(job_config["job_id"], '')
+        job_config['slurm'] = self.JOB_DEFAULTS.copy()
+        job_config['slurm'].update(slurm_config)
+        job_config['args'] = {}
 
-        return jobs
-
-    def get_job(self, job_id: str) -> dict:
-        """
-        Get job config for job in TACCJobManager jobs_dir.
-
-        Parameters
-        ----------
-        job_id : str
-            ID of job to get.
-        ----------
-
-        Returns
-        -------
-        job_config : dict
-            Job config dictionary as stored in json file in job directory.
-
-        Raises
-        ------
-        ValueError
-            If invalid job ID (job does not exist).
-
-        """
-        try:
-            job_config_path = "/".join([self.jobs_dir, job_id, "job.json"])
-            return self._read(job_config_path, data_type="json")
-        except FileNotFoundError as e:
-            # Invalid job ID because job doesn't exist
-            msg = f"get_job - {job_id} does not exist."
-            logger.error(msg)
-            raise ValueError(msg)
-
-    def deploy_job(
-        self,
-        job_config: dict = None,
-        local_job_dir: str = ".",
-        job_config_file: str = "job.json",
-        stage: bool = True,
-        **kwargs,
-    ) -> dict:
-        """
-        Setup job directory on supercomputing resources. If job_config is not
-        specified, then it is parsed from the json file found at
-        local_job_dir/job_config_file. In either case, values found in
-        dictionary or in parsed json file can be overrided by passing keyword
-        arguments. Note for dictionary values, only the specific keys in the
-        dictionary value specified will be overwritten in the existing
-        dictionary value, not the whole dictionary.
-
-        Parameters
-        ----------
-        job_config : dict, default=None
-            Dictionary containing job config. If None specified, then job
-            config will be read from file at local_job_dir/job_config_file.
-        local_job_dir : str, default='.'
-            Local directory containing job config file and project config file.
-            Defaults to current working directory.
-        job_config_file : str, default='job.json'
-            Path, relative to local_job_dir, to job config json file. File
-            only read if job_config dictionary not given.
-        stage : bool, default=False
-            If set to True, stage job directory by creating it, moving
-            application contents, moving job inputs, and writing submit_script
-            to remote system.
-        kwargs : dict, optional
-            All extra keyword arguments will be used as job config overrides.
-
-        Returns
-        -------
-        job_config : dict
-            Dictionary containing info about job that was set-up. If stage
-            was set to True, then a successful completion of deploy_job()
-            indicates that the job directory was prepared succesffuly and job
-            is ready to be submit.
-
-        Raises
-        ------
-        """
-        # Load from json file if job conf dictionary isn't specified
-        if job_config is None:
-            job_config = self._read(local_job_dir / job_config_file, data_type="json")
-
-        # Overwrite job_config loaded with kwargs keyword arguments if specified
-        job_config.update(**kwargs)
-
-        # Get default arguments from deployed application
-        app_config = self.get_app(job_config["app"])
-
-        def _get_attr(j, a):
-            # Helper function to get app defatults for job configs
-            if j in job_config.keys():
-                return job_config[j]
+        to_stage = []
+        # Process arguments, don't stage yet
+        for arg in self.ARGUMENTS:
+            if arg['name'] not in args.keys():
+                raise ValueError(f"Missing argument {arg['name']}")
+            if arg['type'] == 'input':
+                # Argument is passed as path to file in job directory
+                job_path = self.client.job_path(job_config['job_id'],
+                                                os.path.basename(
+                                                  args[arg['name']]))
+                job_config['args'][arg['name']] = job_path
+                to_stage.append((args[arg['name']], job_path))
             else:
-                return app_config[a]
+                # Other arguments just passed as their value
+                job_config['args'][arg['name']] = args[arg['name']]
+
+        # Parse entry script -> Loads conda env, copies this class and
+        # adds appropriate CLI entrypoint for the submit script to execute
+        job_config['submit_script'] = self._parse_submit_script(job_config)
+
+        # Parse submit script with SLURM directives and calling entry script
+        job_config['entry_script'] = self._parse_run_script(job_config)
+
+        if stage:
+            job_config = self.stage(job_config)
+
+        return job_config
+
+    def stage(self,
+              job_config):
+        """
+
+        """
+        # Create temp directory to stage the job
+        self.client.exec(
+
+        # Write submit script
+        self.client
+
+        # Move temp directory to job location
 
         # Default in job arguments if they are not specified
         job_config["entry_script"] = _get_attr("entry_script", "entry_script")
-        job_config["desc"] = _get_attr("desc", "short_desc")
-        job_config["queue"] = _get_attr("queue", "default_queue")
-        job_config["node_count"] = int(_get_attr("node_count", "default_node_count"))
-        job_config["processors_per_node"] = int(
-            _get_attr("processors_per_node", "default_processors_per_node")
-        )
-        job_config["max_run_time"] = _get_attr("max_run_time", "default_max_run_time")
 
-        # Verify appropriate inputs and arguments are passed
-        for i in app_config["inputs"]:
-            if i["name"] not in job_config["inputs"]:
-                raise ValueError(f"deploy_job - missing input {i['name']}")
-        for i in app_config["parameters"]:
-            if i["name"] not in job_config["parameters"]:
-                raise ValueError(f"deploy_job - missing parameter {i['name']}")
+        # Copy job inputs 
+
 
         if stage:
             # Stage job inputs
@@ -719,159 +265,6 @@ class TACCSimulation:
 
         return job_config
 
-    def submit_job(self, job_id: str) -> dict:
-        """
-        Submit job to remote system job queue.
-
-        Parameters
-        ----------
-        job_id : str
-            ID of job to submit.
-
-        Returns
-        -------
-        job_config : dict
-            Dictionary containing information on job just submitted.
-            The new field 'slurm_id' should be added populated with id of job.
-
-        Raises
-        ------
-        """
-        # Load job config
-        job_config = self.get_job(job_id)
-
-        # Check if this job isn't currently in the queue
-        if "slurm_id" in job_config.keys():
-            msg = f"submit_job - {job_id} exists : {job_config['slurm_id']}"
-            raise ValueError(msg)
-
-        # Submit to SLURM queue -> Note we do this from the job_directory
-        cmnd = f"cd {job_config['job_dir']}; "
-        cmnd += f"sbatch {job_config['job_dir']}/submit_script.sh"
-        ret = self.run_command(cmnd)
-        if "\nFAILED\n" in ret:
-            raise TJMCommandError(
-                self.system, self.user, cmnd, 0, "", ret, f"submit_job - SLURM error"
-            )
-        job_config["slurm_id"] = ret.split("\n")[-2].split(" ")[-1]
-
-        # Save job config
-        job_config_path = job_config["job_dir"] + "/job.json"
-        self.write(job_config, job_config_path)
-
-        return job_config
-
-    def cancel_job(self, job_id: str) -> dict:
-        """
-        Cancel job on remote system job queue.
-
-        Parameters
-        ----------
-        job_id : str
-            ID of job to submit.
-
-        Returns
-        -------
-        job_config : dict
-            Dictionary containing information on job just canceled. The field
-            'slurm_id' should be removed from the job_config dictionary and the
-            'slurm_hist' field should be populated with a list of previous
-            slurm_id's with the latest one appended. Updated job config is
-            also updated in the jobs directory.
-        """
-        # Load job config
-        job_config = self.get_job(job_id)
-
-        if "slurm_id" in job_config.keys():
-            cmnd = f"scancel {job_config['slurm_id']}"
-            try:
-                self._execute_command(cmnd)
-            except TJMCommandError as e:
-                e.message = f"cancel_job - Failed to cancel job {job_id}."
-                logger.error(e.message)
-                raise e
-
-            # Remove slurm ID and store into job hist
-            job_config["slurm_hist"] = job_config.get("slurm_hist", [])
-            job_config["slurm_hist"].append(job_config.pop("slurm_id"))
-
-            # Save updated job config
-            job_config_path = job_config["job_dir"] + "/job.json"
-            self.write(job_config, job_config_path)
-        else:
-            msg = f"Job {job_id} has not been submitted yet."
-            logger.error(msg)
-            raise ValueError(msg)
-
-        return job_config
-
-    def remove_job(self, job_id: str) -> str:
-        """
-        Remove Job
-
-        Cancels job if it has been submitted to the job queue and deletes the
-        job's directory. Note job can be restored with restore() command called
-        on jobs directory.
-
-        Parameters
-        ----------
-        job_id : str
-            Job ID of job to clean up.
-
-        Returns
-        -------
-        job_id : str
-            ID of job just removed.
-        """
-        # Cancel job, if needed.
-        try:
-            self.cancel_job(job_id)
-        except:
-            pass
-
-        # Remove job directory, if it still exists
-        job_dir = "/".join([self.jobs_dir, job_id])
-        try:
-            self.remove(job_dir)
-        except:
-            pass
-
-        return job_id
-
-    def restore_job(self, job_id: str) -> dict:
-        """
-        Restores a job that has been previously removed (sent to trash).
-
-        Parameters
-        ----------
-        job_id : str
-            ID of job to restore
-
-        Returns
-        -------
-        job_config : dict
-            Config of job that has just been restored.
-
-        Raises
-        ------
-        ValueError
-            If job cannot be restored because it hasn't been removed or does
-            not exist.
-        """
-        # Unix paths -> Get file remote file name and directory
-        job_dir = "/".join([self.jobs_dir, job_id])
-
-        try:
-            self.restore(job_dir)
-        except FileNotFoundError as f:
-            msg = f"restore_job - Job {job_id} cannot be restored."
-            logger.error(msg)
-            raise ValueError(msg)
-
-        # Return restored job config
-        job_config = self.get_job(job_id)
-
-        return job_config
 
     def setup_simulation(self, **config):
         """Setup the simulation on TACC
@@ -976,50 +369,6 @@ class TACCSimulation:
 
         return [self._base_job_config(**config)]
 
-    def deploy_job(self, job_config):
-        """
-        Deploy job
-
-
-        Given a valid job config dictionary, deploy a simulation job onto TACC.
-        Deployment here means setting up a job directory on TACC fro a simulation.
-        If this function is running not running on TACC, job folders are generated
-        locally and then moved to TACC.
-        TACC system.
-        """
-        name = job_config["name"]
-        job_config["job_id"] = (
-            name
-            + "_"
-            + datetime.fromtimestamp(time.time()).strftime("%Y%m%d_%H%M%S")
-            + next(tempfile._get_candidate_names())
-        )
-        job_config["job_dir"] = self.jobs_dir + "/" + job_config["job_dir"]
-        app_dir = self.apps_dir + "/" + job_config["app"]
-        submit_script_text = self._parse_submit_script(job_config)
-
-        if self.jm is not None:
-            pass
-        else:
-            os.system(f"cp {app_dir}/* {self['job_dir']}")
-            with open(self["job_dir"] + "/job.json", "w") as fp:
-                json.dump(job_config, fp)
-            fname = job_config["job_dir"] + "/submit_script.sh"
-            with open(fname, "w") as fp:
-                fp.write(submit_script_text)
-
-        return job_config
-
-    def submit_job(self, job_id):
-        job_dir = self.jobs_dir + "/" + job_id
-        os.chmod(f"{job_dir}/run.sh", 0o700)
-        print("Submitting job in ", job_dir)
-        os.system(f"sbatch {job_dir}/submit_script.sh")
-
-    def remove_job(self, job_config):
-        job_dir = job_config["job_dir"]
-        shutil.rmtree(job_dir)
-
     def run(self, **config):
         """
         Run this simulation according to passed in config
@@ -1046,69 +395,26 @@ class TACCSimulation:
             raise ValueError(f"Unsupported action {action}")
 
 
-def TACCSimulationJob():
-    """
-    Base class for a simulation job.
-
-    This class is to be the main entrypoint for a SLURM job
-    """
-
-    def __init__(self, job_dir: str):
-
-        self._init_env()
-
-        with open(job_dir, "r") as fp:
-            self.config = json.load(fp)
-
-        # Verify loaded job config matches slurm env?
-
-        self.log = init_logger(__name__, output=log, fmt=logfmt, loglevel=loglevel)
-
-    def _init_env():
-        """
-        Initializes slurm env variables for job. Errors if can't be found (not
-        running from a slurm job)
-        """
-
-    def make_preprocess_command(self):
-        """
-        Work to be done before main ibrun command runs
-        """
-        return "echo START_PRE; sleep 10; echo END_PRE"
-
-    def make_main_command(self):
-        """
-        Command to be run with wrapped with ibrun in parallel
-        """
-        config
-        self.log.info("Pre-process step")
-
-        job_dir = self.job_config["job_dir"]
-        writers, workers = self.get_writers_and_workers()
-        exec_name = self._get_exec_name()
-        if job_dir != run_dir:
-            return f"{job_dir}/{exec_name} -I {run_dir} -O {run_dir} -W {writers}"
-        else:
-            return f"{job_dir}/{exec_name} -W {writers}"
-
-    def make_postprocess_command(self, run, run_dir):
-        """
-        Work to be done after main ibrun command runs
-        """
-        return "echo START_POST; sleep 10; echo END_POST"
-
-    def run(self, config, ibrun=True):
+    def run_job(self, config, ibrun=True):
         """Run on HPC resources.
 
         This is the entry point for a single job within the simulation. Must be run
         on a TACC system within a slurm session.
         """
-        cmd = self.make_main_command()
-        pre_cmd = self.make_preprocess_command()
-        post_cmd = self.make_postprocess_command()
-        self.log.info("Starting Simulation")
-        subprocess.run(pre_cmd)
-        self.log.info("Pre-process step done. Executing main parallel command")
-        subprocess.run("ibrun " + cmd)
-        self.log.info("Pre-process step")
-        subprocess.run(post_cmd)
+        self.load_config()
+        self.log.info("Starting Simulation", extra={'job_config': job_config})
+        self.client.exec("echo HELLO; sleep 10; echo GOODBYE")
+        self.log.info("Simulation Done")
+
+
+@click.command()
+@click.option('--name', default='My Class', help='The name of the class.')
+@click.option('--input_file', default='My Class', help='The name of the class.')
+@click.option('--', default='My Class', help='The name of the class.')
+def run(name):
+    simulation = TACCSimulation(name)
+    simulation.run_job()
+
+if __name__ == '__main__':
+    run()
+
