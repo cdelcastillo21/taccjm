@@ -186,7 +186,39 @@ class TACCClient:
                 match=match,
             )
 
-    def read(self, path, data_type="text", job_id: str = None):
+    def upload(self, src_path, dest_path, job_id: str = None):
+        """
+        Wrapper to read files either locally or remotely, depending on where executing.
+        """
+        if job_id is not None:
+            dest_path = self.job_path(job_id, dest_path)
+        if self.ssh_client is None:
+            fstat = self.list_files(src_path)[0]
+
+            if stat.S_ISDIR(fstat['st_mode']):
+                src_path += "/"
+            cmnd = f"rsync -a {src_path} {dest_path}"
+            self.exec(cmnd, wait=True)
+        else:
+            return tsa.upload(self.id, src_path, dest_path)
+
+    def download(self, src_path, dest_path, job_id: str = None):
+        """
+        Wrapper to read files either locally or remotely, depending on where executing.
+        """
+        if job_id is not None:
+            src_path = self.job_path(job_id, src_path)
+        if self.ssh_client is None:
+            fstat = self.list_files(src_path)[0]
+
+            if stat.S_ISDIR(fstat['st_mode']):
+                src_path += "/"
+            cmnd = f"rsync -a {src_path} {dest_path}"
+            self.exec(cmnd, wait=True)
+        else:
+            return tsa.upload(self.id, src_path, dest_path)
+
+    def read(self, path, job_id: str = None):
         """
         Wrapper to read files either locally or remotely, depending on where executing.
         """
@@ -194,12 +226,12 @@ class TACCClient:
             path = self.job_path(job_id, path)
         if self.ssh_client is None:
             with open(path, "r") as fp:
-                if data_type == "json":
+                if path.endswith('.json'):
                     return json.load(fp)
                 else:
                     return fp.read()
         else:
-            return tsa.read(self.id, path, data_type=data_type)
+            return tsa.read(self.id, path)['data']
 
     def write(self, data, path: str, job_id: str = None) -> None:
         """
@@ -555,9 +587,9 @@ class TACCClient:
             If invalid job ID (job does not exist).
 
         """
-        job_config_path = self.job_path('job_id', 'job.json')
+        job_config_path = self.job_path(job_id, 'job.json')
         try:
-            job_config = self.read(job_config_path, data_type="json")
+            job_config = self.read(job_config_path)
         except FileNotFoundError:
             # Invalid job ID because job doesn't exist
             msg = f"get_job - {job_id} does not exist."
@@ -594,8 +626,8 @@ class TACCClient:
 
         # Submit to SLURM queue -> Note we do this from the job_directory
         cmnd = f"cd {job_config['job_dir']} && "
-        cmnd += f"sbatch {job_config['job_dir']}/submit_script.sh"
-        ret = self.run_command(cmnd, error=True)
+        cmnd += f"sbatch {job_config['submit_script']}"
+        ret = self.exec(cmnd, error=True)
         job_config["slurm_id"] = ret['stdout'].split("\n")[-2].split(" ")[-1]
 
         # Save job config
@@ -713,11 +745,6 @@ class TACCClient:
 
         return job_config
 
-    def conda_check(self, env=None, packages=None, pip_packages=None):
-        """
-        
-        """
-
     def conda_install(self, conda=CONDA_REQUIRED, pip=PIP_REQUIRED):
         """
         Conda install
@@ -728,7 +755,7 @@ class TACCClient:
         """
         # Check conda (mamba) installed
         self.log.info("Checking mamba environment")
-        res = self.run_command(
+        res = self.exeec(
             "source ~/.bashrc; mamba activate taccjm; taccjm --help",
             wait=True,
             check=False,
@@ -736,8 +763,8 @@ class TACCClient:
         if res["rc"] != 0:
             self.log.info("Did not find conda env, setting up in background.")
             script_path = get_default_script("conda_install.sh")
-            tjm.deploy_script(self.jm_id, script_path)
-            res = tjm.run_script(
+            self.deploy_script(self.jm_id, script_path)
+            res = self.run_script(
                 self.jm_id, "conda_install", args=["taccjm", "pip", pip], wait=False
             )
             self.log.info("conda_init() Running. Setting blocker until completion")
@@ -746,6 +773,119 @@ class TACCClient:
             self.commands[key] = res
         else:
             self.log.info("taccjm mamba env found")
+
+    def showq(self, user: str = None) -> List[dict]:
+        """
+        Get information about jobs currently in the job queue.
+
+        Parameters
+        ----------
+        user : string, default=None
+            User to get queue info for user. If none, then defaults to user
+            connected to system. Pass `all` to get system for all users.
+
+        Returns
+        -------
+        jobs: list of dict
+            List of dictionaries containing inf on jobs in queue including:
+                - job_id      : ID of job in queue
+                - job_name    : Name given to job
+                - username    : User who submitted to job
+                - state       : Job queue state
+                - nodes       : Number of nodes job requires.
+                - remaining   : Remaining time left for job to execute.
+                - start_time  : Time job started exectuing.
+
+        Raises
+        ------
+        TJMCommandError
+            If slurm queue is not accessible for some reason (TACCC error).
+        """
+        # Build command string
+        cmnd = "showq"
+        slurm_user = self.user if user is None else user
+        if slurm_user != "all":
+            cmnd += f" -U {slurm_user}"
+
+        # Query job queue
+        try:
+            ret = self.exec(cmnd)
+        except TACCCommandError as t:
+            msg = "showq - TACC SLURM queue is not accessible."
+            self.log.error(msg)
+            raise t
+        ret = ret['stdout']
+
+        # Loop through lines in output table and parse job information
+        jobs = []
+        lines = ret.split("\n")
+        jobs_line = False
+        line_counter = -2
+        for line in lines:
+            job_statuses = ["ACTIVE", "WAITING", "BLOCKED", "COMPLETING"]
+            if any([line.startswith(x) for x in job_statuses]):
+                jobs_line = True
+                continue
+            if jobs_line:
+                if line == "":
+                    jobs_line = False
+                    line_counter = -2
+                    continue
+                else:
+                    line_counter += 1
+                    if line_counter > 0:
+                        split_line = line.split()
+                        jobs.append({
+                          "job_id": split_line[0],
+                          "job_name": split_line[1],
+                          "username": split_line[2],
+                          "state": split_line[3],
+                          "nodes": split_line[4],
+                          "remaining": split_line[4],
+                          "start_time": split_line[5]})
+
+        return jobs
+
+    def get_allocations(self) -> List[dict]:
+        """
+        Get information about users current allocations.
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+        allocations: list of dict
+            List of dictionaries containing allocation info including:
+                - name
+                - service_units
+                - exp_date
+
+        Raises
+        ------
+        TJMCommandError
+            If allocations file is not accessible for some reason (TACCC error).
+        """
+        # Check job allocations
+        cmnd = "/usr/local/etc/taccinfo"
+        try:
+            ret = self.exec(cmnd)
+        except TACCCommandError as t:
+            msg = "get_allocations - Unable to get allocation info"
+            self.log.error(msg)
+            raise t
+        ret = ret['stdout']
+
+        # Parse allocation info
+        allocations = set([x.strip() for x in ret.split("\n")[2].split("|")])
+        allocations.remove("")
+        allocations = [x.split() for x in allocations]
+        allocations = [
+            {"name": x[0], "service_units": int(x[1]), "exp_date": x[2]}
+            for x in allocations
+        ]
+
+        return allocations
 
 
 #     def get_apps(self):

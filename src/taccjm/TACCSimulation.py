@@ -15,7 +15,7 @@ submit_script_template = get_default_script("submit_script.sh", ret="text")
 run_script_template = get_default_script("run.sh", ret="text")
 
 
-def TACCSimulation():
+class TACCSimulation():
     """
     Base class for a simulation job.
     """
@@ -44,14 +44,16 @@ def TACCSimulation():
                 "label": "Parameter argument",
                 "desc": "Value to be passed to run() method as an argument.",
             }
-    ],
+    ]
 
     MODULES_LIST = ['remora']
 
     def __init__(self,
                  name: str = None,
+                 system: str = None,
                  log_config: dict = None,
                  ):
+        self.log = init_logger(__name__, log_config)
 
         if "__file__" in dir(__main__):
             self.is_script = True
@@ -62,11 +64,8 @@ def TACCSimulation():
             self.script_file = __file__
             self.log.info(f"Running from non-main script {self.script_file}")
 
-        if name is None:
-            self.name = Path(self.script_file).stem
-
-        self.log = init_logger(__name__, log_config)
-        self.client = TACCClient(log_config=log_config)
+        self.name = name if name is not None else Path(self.script_file).stem
+        self.client = TACCClient(system=system, log_config=log_config)
         self.job_config = None
 
     def _parse_submit_script(self,
@@ -85,7 +84,7 @@ def TACCSimulation():
                     job_name=job_config['name'],
                     job_id=job_config['job_id'],
                     job_dir=job_config['job_dir'],
-                    module_list=' '.join(MODULES_LIST),
+                    module_list=' '.join(self.MODULES_LIST),
                     allocation=job_config['slurm']['allocation'],
                     queue=job_config['slurm']['queue'],
                     run_time=rt,
@@ -101,13 +100,15 @@ def TACCSimulation():
 
     def setup(
         self,
-        args: dict = None,
-        slurm_config: dict = None,
+        args: dict = {},
+        slurm_config: dict = {},
         stage: bool = False,
         run: bool = False,
     ) -> dict:
         """
+        Set up simulation on TACC
         """
+        self.log.info('Starting simulation set-up',)
         job_config = {}
         job_config['name'] = self.name
         name = job_config["name"]
@@ -118,15 +119,27 @@ def TACCSimulation():
             + next(tempfile._get_candidate_names())
         )
         job_config['job_dir'] = self.client.job_path(job_config["job_id"], '')
-        job_config['slurm'] = JOB_DEFAULTS.copy()
+        job_config['slurm'] = self.JOB_DEFAULTS.copy()
         job_config['slurm'].update(slurm_config)
+        self.log.info('Slurm config set. Processing args',
+                      extra={'slurm_config': job_config['slurm']})
+
+        # Make sure allocation specified
+        if job_config['slurm']['allocation'] is None:
+            allocations = self.client.get_allocations()
+            def_alloc = allocations[0]['name']
+            self.log.info(f'Allocation not specified. Using {def_alloc}.',
+                          extra={'allocations': allocations})
+            job_config['slurm']['allocation'] = def_alloc
         job_config['args'] = {}
 
         to_stage = []
         # Process arguments, don't stage yet
-        for arg in ARGUMENTS:
+        for arg in self.ARGUMENTS:
             if arg['name'] not in args.keys():
-                raise ValueError(f"Missing argument {arg['name']}")
+                msg = f"Missing argument {arg['name']}"
+                self.log.error(msg, extra={'args': args})
+                raise ValueError(msg)
             if arg['type'] == 'input':
                 # Argument is passed as path to file in job directory
                 job_path = self.client.job_path(job_config['job_id'],
@@ -143,27 +156,29 @@ def TACCSimulation():
         job_config['submit_script'] = self._parse_submit_script(job_config)
 
         with open(self.script_file, 'r') as fp:
-            job_config['script_file'] = fp.read()
+            job_config['sim_script'] = fp.read()
 
         if not stage:
             return job_config
 
         # Create job directory
-        self.client.exec("mkdir {job_config['job_dir']}")
+        self.client.exec(f"mkdir {job_config['job_dir']}")
 
         # Copy job inputs
         for s in to_stage:
-            self.client.upload(to_stage[0], to_stage[1])
+            self.client.upload(s[0], s[1])
 
         # Write submit script
         path = self.client.job_path(job_config['job_id'], 'submit_script.sh')
-        self.client.write(job_config['submit_script'], path)
+        script_text = job_config.pop('submit_script')
+        self.client.write(script_text, path)
         job_config['submit_script'] = path
 
         # Write sim.py
         path = self.client.job_path(job_config['job_id'], 'sim.py')
-        self.client.write(job_config['submit_script'], path)
-        job_config['entry_script'] = path
+        script_text = job_config.pop('sim_script')
+        self.client.write(script_text, path)
+        job_config['sim_script'] = path
 
         # Write job_config
         path = self.client.job_path(job_config['job_id'], 'job.json')
@@ -176,26 +191,37 @@ def TACCSimulation():
 
         return job_config
 
-    def load_job_env(self):
-        """
-        Loads the job config from the current execution environment
-
-        TODO: Verify slurm environment variables match job config?
-        """
-        job_dir = os.getenv('SLURM_SUBMIT_DIR')
-        self.job_config = self.client.get_job(job_dir)
-
-    def run(self, config, ibrun=True):
+    def run(self,
+            args: dict = None,
+            slurm_config: dict = None):
         """Run on HPC resources.
 
         This is the entry point for a single job within the simulation.
         If not run from a SLURM execution environment, will setup and submit
         the job to be run, returning the job_config.
         """
-        self.load_job_config()
-        self.log.info("Starting Simulation",
-                      extra={'job_config': self.job_config})
-        self.client.exec("echo HELLO; pwd; sleep 10; echo GOODBYE")
+        # See if running from within execution environment
+        job_dir = os.getenv('SLURM_SUBMIT_DIR')
+        if job_dir is None:
+            self.log.info('Not in execution environment. Setting up job...')
+            job_config = self.setup(args=args, slurm_config=slurm_config,
+                                    stage=True, run=True)
+            self.log.info("Job {job_config['job_id']} set up and submitted",
+                          extra={'job_config': job_config})
+            return job_config
+        self.job_config = self.client.get_job(job_dir)
+        self.log.info('Loaded job config. starting job.',
+                      extra={'job_config': job_config})
+        self.run_job()
+
+    def run_job(self):
+        """
+        Job run entrypoint
+        """
+        input_file = self.job_config['args']['input_file']
+        param = self.job_config['args']['param']
+        self.log.info("Starting Simulation")
+        self.client.exec(f"tail -n {param} {input_file}")
         self.log.info("Simulation Done")
 
 

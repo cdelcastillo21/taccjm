@@ -334,7 +334,15 @@ async def upload(connection_id: str, req: DataRequest):
 
     """
     client = _get_client(connection_id)
-    client.upload(req.source_path, req.dest_path, file_filter=req.file_filter)
+    try:
+        client.upload(req.source_path, req.dest_path, file_filter=req.file_filter)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404,
+                            detail=f"File not found {req.source_path}")
+    except PermissionError:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Don't have permissions to {req.source_path}")
 
 
 if __name__ == '__main__':
