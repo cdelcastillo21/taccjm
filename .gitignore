@@ -54,4 +54,5 @@ MANIFEST
 .conda*/
 
 # Notebooks data
-*/notebooks/data/*
+notebooks/data/*
+notebooks/.env

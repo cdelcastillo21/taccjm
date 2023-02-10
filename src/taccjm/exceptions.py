@@ -46,7 +46,7 @@ class SSHCommandError(Exception):
         return msg
 
 
-class TACCClientErrror(Exception):
+class TACCCommandError(Exception):
     """
     Custom exception for errors when using TACC resources.
 

@@ -3,20 +3,19 @@ import pdb
 import tempfile
 import subprocess
 from pathlib import Path
-import shutil
 import posixpath
 import json
-import logging
 import os
 from datetime import datetime
 import time
 from typing import Union, List
 
 from taccjm import tacc_ssh_api as tsa
-from taccjm.exceptions import TACCJMError
+from taccjm.exceptions import TACCCommandError
 from taccjm.utils import (
     hours_to_runtime_str, get_default_script, init_logger,
-    validate_file_attrs, filter_files, stat_all_files_and_folders
+    validate_file_attrs, filter_files, stat_all_files_and_folders,
+    check_path
     )
 
 submit_script_template = get_default_script("submit_script.sh", ret="text")
@@ -39,7 +38,8 @@ class TACCClient:
     def __init__(
         self,
         system: str = None,
-        log_config: dict = None
+        log_config: dict = None,
+        ssh_config:  dict = None,
     ):
         """
         Upon initializaiton:
@@ -63,62 +63,68 @@ class TACCClient:
                 else os.environ.get("TACCJM_DEFAULT_SYSTEM")
             )
             if self.system is None:
-                self.log.critical(
-                    "".join(
-                        [
-                            "No system detected in env variable ",
-                            "$TACCJM_DEFAULT_SYSTEM and non passed",
-                        ]
-                    )
-                )
-
+                msg = "No system detected in env variable $TACCJM_DEFAULT_" + \
+                    "SYSTEM and non passed"
+                self.log.critical(msg)
+                raise ValueError(msg)
+            self.id = f"taccjm-{self.system}"
             self.ssh_client = None
-            self.ssh_id = f"taccjm-{self.system}"
             restart = False
-            self.log.info(f"Looking for ssh_connection {self.ssh_id}")
+            self.log.info(f"Looking for ssh_connection {self.id}")
             try:
-                self.ssh_client = tsa.get(self.ssh_id)
-                self.log.info(f"Found ssh session {self.ssh_id}",
+                self.ssh_client = tsa.get(self.id)
+                self.log.info(f"Found ssh session {self.id}",
                               extra=self.ssh_client)
-            except ConnectionError:
+            except Exception:
                 restart = True
-                self.log.info("Unnable to connect to ssh session, restarting")
-            except TACCJMError:
-                self.log.info(f"{self.ssh_id}, does not exist. Creating.")
+                self.log.info(f"{self.id}, does not exist. Creating.")
 
             if self.ssh_client is None:
-                self.log.info(f"Initializing ssh session {self.ssh_id}")
+                self.log.info(f"Initializing ssh session {self.id}")
                 # TODO: wrap this in try block
                 self.ssh_client = tsa.init(
-                    self.ssh_id,
+                    self.id,
                     self.system,
                     user=os.environ.get("CHSIM_USER"),
                     psw=os.environ.get("CHSIM_PSW"),
                     restart=restart,
                 )
-
-            # TODO: Implement conda-setup for simulation running
-            # self._conda_init()
-            self.scratch_dir = self.get_env_var('SCRATCH')
-            self.home_dir = self.get_env_var('HOME')
-            self.work_dir = self.get_env_var('WORK')
+            self.user = self.ssh_client['user']
+            self.scratch_dir = self.ssh_client['scratch_dir']
+            self.home_dir = self.ssh_client['home_dir']
+            self.work_dir = self.ssh_client['work_dir']
         else:
             # Running on TACC systems - Run things locally
             self.ssh_client = None
             self.system = host.split(".")[1]
-            self.scratch_dir = os.getenv("SCRATCH")
-            self.work_dir = os.getenv("WORK")
-            self.home_dir = os.getenv("HOME")
+            self.id = f"taccjm-{self.system}"
+            self.user = self.exec('whoami')['stdout'].strip()
+            self.scratch_dir = self.get_env_var('SCRATCH')
+            self.home_dir = self.get_env_var('HOME')
+            self.work_dir = self.get_env_var('WORK')
 
-        self.apps_dir = posixpath.join(self.work_dir, f'{self.ssh_id}/apps')
-        self.scripts_dir = posixpath.join(self.work_dir, f'{self.ssh_id}/scripts')
-        self.jobs_dir = posixpath.join(self.scratch_dir, f'{self.ssh_id}/jobs')
+        # Initialize Client Directories
+        self.apps_dir = posixpath.join(self.work_dir, f'{self.id}/apps')
+        self.scripts_dir = posixpath.join(self.work_dir, f'{self.id}/scripts')
+        self.jobs_dir = posixpath.join(self.scratch_dir, f'{self.id}/jobs')
+        self.trash_dir = posixpath.join(self.scratch_dir, f'{self.id}/trash')
+
+        # Initialize later?
+        mkdir_cmnd = 'mkdir -p ' + ' '.join([f'{self.__getattribute__(x)}'
+                                             for x in ['apps_dir',
+                                                       'scripts_dir',
+                                                       'jobs_dir',
+                                                       'trash_dir']])
+        self.exec(mkdir_cmnd)
 
     def get_env_var(self, var: str):
         """
         Resolve an environment variable
         """
-        return tsa.exec(self.ssh_id, f'echo ${var}')['stdout'].strip()
+        if self.local:
+            return os.getenv(var)
+        else:
+            return tsa.exec(self.id, f'echo ${var}')['stdout'].strip()
 
     def abspath(self, path):
         """
@@ -168,10 +174,10 @@ class TACCClient:
             path = self.abspath(path)
 
         if self.ssh_client is None:
-            return stat_all_files_and_folders(path)
+            return stat_all_files_and_folders(path, recurse=recurse)
         else:
             return tsa.list_files(
-                self.ssh_id,
+                self.id,
                 path=path,
                 attrs=attrs,
                 recurse=recurse,
@@ -193,7 +199,7 @@ class TACCClient:
                 else:
                     return fp.read()
         else:
-            return tsa.read(self.ssh_id, path, data_type=data_type)
+            return tsa.read(self.id, path, data_type=data_type)
 
     def write(self, data, path: str, job_id: str = None) -> None:
         """
@@ -209,7 +215,7 @@ class TACCClient:
                 with open(path, "w") as fp:
                     json.dump(data, fp)
         else:
-            tsa.write(self.ssh_id, data, path)
+            tsa.write(self.id, data, path)
 
     def exec(self, cmnd: str = "pwd", wait=True, error=True):
         """
@@ -240,7 +246,7 @@ class TACCClient:
                 "rt": None
             }
         else:
-            cmnd_config = tsa.exec(self.ssh_id, cmnd, wait=wait)
+            cmnd_config = tsa.exec(self.id, cmnd, wait=wait)
 
         self.commands[str(cmnd_config['id'])] = cmnd_config
 
@@ -261,18 +267,24 @@ class TACCClient:
             cmnd_config['rc'] = cmnd_config['process'].poll()
             if wait or cmnd_config['rc'] is not None:
                 self.log.info(f"Waiting for command {cmnd_id} to finish....")
-                ts = datetime.now()
-                cmnd_config['history'].append(prev_status)
+                cmnd_config['rc'] = cmnd_config['process'].wait()
+                self.log.info(f"Command {cmnd_id} done. Reading output.")
                 cmnd_config['stdout'] = cmnd_config['process'].stdout.read()
                 cmnd_config['stderr'] = cmnd_config['process'].stderr.read()
+
+                # update statuses
+                cmnd_config['history'].append(prev_status)
+                ts = datetime.now()
                 cmnd_config['ts'] = ts
                 cmnd_config['rt'] = (
                     cmnd_config['ts'] - cmnd_config['history'][-1]['ts']
                     ).seconds
                 if cmnd_config['rc'] != 0:
-                    cmnd_config['status'] == 'FAILED'
+                    cmnd_config['status'] = 'FAILED'
+                    self.log.info(f'Command {cmnd_id} failed!')
                 else:
-                    cmnd_config['status'] == 'COMPLETE'
+                    cmnd_config['status'] = 'COMPLETE'
+                    self.log.info(f'Command {cmnd_id} completed!')
             else:
                 self.log.info(f"Command {cmnd_id} is still running.")
                 cmnd_config['stdout'] = cmnd_config['process'].stdout.read()
@@ -281,72 +293,41 @@ class TACCClient:
                 if cmnd_config['status'] != prev_status['status']:
                     cmnd_config['history'].append(prev_status)
         else:
-            cmnd_config = tsa.process(self.ssh_id, cmnd_id,
+            cmnd_config = tsa.process(self.id, cmnd_id,
                                       nbytes=nbytes, wait=wait)
-            self.commands[str(cmnd_config['id'])] = cmnd_config
 
+        self.commands[str(cmnd_config['id'])] = cmnd_config
+
+        logconfig = {i: cmnd_config[i] for i in cmnd_config if i != 'process'}
         if cmnd_config['status'] == 'FAILED':
-            msg = f'Command failed: {cmnd_config}'
-            self.log.error(msg, extra={'cmnd_config': cmnd_config})
+            msg = f'Command {cmnd_id} failed'
+            self.log.error(msg, extra={'cmnd_config': logconfig})
             if error:
-                raise RuntimeError(msg)
+                raise TACCCommandError(self.system, self.user, cmnd_config)
+
+        self.log.info(f'Processed command {cmnd_id}',
+                      extra={'cmnd_config': logconfig})
 
         return cmnd_config
 
-    def remove(self, remote_path: str) -> None:
+    def rm(self, remote_path: str, restore=False) -> None:
         """
-        'Removes' a file/folder by moving it to the trash directory. Trash
-        should be emptied out preiodically with `empty_trash()` method.
-        Can also restore file `restore(path)` method.
+        Removes/Restores a file/folder from the trash directory by moving
+        it to/from its original path.
 
-        Parameters
-        ----------
-        remote_path : str
-            Unix-style path for the file/folder to send to trash. Relative to
-            home directory for user on TACC system if not an absolute path.
-
-        Returns
-        -------
-        None
-
-        Raises
-        ------
-        FileNotFoundError
-            If local file/folder does not exist, or remote destination path
-            is invalid does not exist.
-        PermissionError
-            If user does not have permission to modify specified remote path
-        TJMCommandError
-            If a directory is being sent, this error is thrown if there are any
-            issues unpacking the sent .tar.gz file in the destination directory.
-
-        """
-        # Unix paths -> Get file remote file name and directory
-        remote_path = self.abspath(remote_path)
-        file_name = remote_path.replace("/", "___")
-        trash_path = f"{self.trash_dir}/{file_name}"
-        cmnd = f"rsync -a {remote_path} {trash_path} && rm -rf {abs_path}"
-        try:
-            ret = self._execute_command(cmnd)
-        except TJMCommandError as tjm_error:
-            tjm_error.message = f"remove - Unable to remove {remote_path}"
-            logger.error(tjm_error.message)
-            raise tjm_error
-
-    def restore(self, remote_path: str) -> None:
-        """
-        Restores a file/folder from the trash directory by moving it back to
-        its original path.
+        TODO: Implement compression
 
         Parameters
         ----------
         remote_path : str
             Unix-style path of the file/folder that should not exist anymore to
             restore.
+        restore : bool, default=False`
+            If path has been removed already, use restore=True to restore it.
 
         Returns
         -------
-        None
+        TODO: Document
 
         Raises
         ------
@@ -357,29 +338,54 @@ class TACCClient:
             be becasue the original path still has data in it/exists.
         """
         # Unix paths -> Get file remote file name and directory
+        remote_path = self.abspath(remote_path)
         file_name = remote_path.replace("/", "___")
-        trash_path = posixpath.join(self.trash_dir, file_name)
-        abs_path = "./" + remote_path if remote_path[0] != "/" else remote_path
+        trash_path = f"{self.trash_dir}/{file_name}"
 
-        # Check if trash path is a file or directory
-        is_dir = False
-        try:
-            with self._client.open_sftp() as sftp:
-                fileattr = sftp.stat(trash_path)
-                is_dir = stat.S_ISDIR(fileattr.st_mode)
-        except FileNotFoundError as f:
-            msg = f"restore - file/folder {file_name} not in trash."
-            logger.error(msg)
-            raise FileNotFoundError(errno.ENOENT, msg, f.filename)
+        if not restore:
+            src_path = remote_path
+            dest_path = trash_path
+        else:
+            src_path = trash_path
+            dest_path = remote_path
 
-        src_path = f"{trash_path}/" if is_dir else trash_path
-        cmnd = f"rsync -a {src_path} {abs_path} && rm -rf {trash_path}"
-        try:
-            ret = self._execute_command(cmnd)
-        except TJMCommandError as tjm_error:
-            tjm_error.message = f"restore - Unable to restore {remote_path}"
-            logger.error(tjm_error.message)
-            raise tjm_error
+        fstat = self.list_files(src_path)[0]
+        common = posixpath.commonpath([self.trash_dir, fstat['filename']])
+        if common.startswith(self.trash_dir) and not restore:
+            msg = 'Trying to remove something already inside of the trash dir'
+            self.log.error(msg, extra={'remote_path': remote_path,
+                                       'restore': restore})
+            raise ValueError(msg)
+
+        if stat.S_ISDIR(fstat['st_mode']):
+            src_path += "/"
+        cmnd = f"rsync -a {src_path} {dest_path} && rm -rf {src_path}"
+
+        ret = self.exec(cmnd, wait=False)
+
+        return ret
+
+    def ls_trash(
+        self,
+        attrs=["filename",
+               "st_atime",
+               "st_gid",
+               "st_mode",
+               "st_mtime",
+               "st_size",
+               "st_uid",
+               "ls_str"],
+    ):
+        """
+        List trash contents
+        """
+        trash_contents = self.list_files(self.trash_dir,
+                                         attrs=attrs, recurse=True)
+        for t in trash_contents:
+            t['filename'] = posixpath.basename(
+              t['filename']).replace("___", "/")
+
+        return trash_contents
 
     def empty_trash(self, filter_str: str = "*") -> None:
         """
@@ -395,8 +401,116 @@ class TACCClient:
         -------
 
         """
-        self._execute_command(f"rm -rf {self.trash_dir}/{filter_str}")
+        if not check_path(filter_str):
+            raise ValueError(f'Invalid vilter string {filter_str}')
 
+        rem_path = posixpath.join(self.trash_dir, filter_str)
+        rem_path = posixpath.abspath(rem_path)
+
+        cmnd = f"rm -rf {self.trash_dir}/{filter_str}"
+        ret = self.exec(cmnd, wait=False)
+
+        return ret
+
+    def deploy_script(self, script_name: str,
+                      local_file: str = None,
+                      script_str: str = None) -> None:
+        """
+        Deploy a script to TACC
+
+        Parameters
+        ----------
+        script_name : str
+            The name of the script. Will be used as the local filename unless
+            local_file is passed. If the filename ends in .py, it will be
+            assumed to be a Python3 script. Otherwise, it will be treated as a
+            generic executable.
+        local_file : str
+            The local filename of the script if not passed, will be inferred
+            from script_name.
+        Returns
+        -------
+        """
+        local_fname = local_file if local_file is not None else script_name
+        if not os.path.exists(local_fname):
+            raise ValueError(f"Could not find script file - {local_fname}!")
+
+        # Extract basename in case the script_name is a path
+        script_name, ext = os.path.splitext(os.path.basename(script_name))
+        remote_path = posixpath.join(self.scripts_dir, script_name)
+
+        # If python file, add directive to python3 path on TACC system
+        if ext == ".py":
+            script = "#!" + self.python_path + "\n"
+            with open(local_fname, "r") as fp:
+                script += fp.read()
+            self.write(script, remote_path)
+        else:
+            self.upload(local_fname, remote_path)
+
+        # Make remote script executable
+        self.exec(f"chmod +x {remote_path}")
+
+    def run_script(
+        self,
+        script_name: str,
+        job_id: str = None,
+        args: List[str] = [],
+        logfile: bool = False,
+        errfile: bool = True,
+    ) -> str:
+        """
+        Run a pre-deployed script on TACC.
+
+        Parameters
+        ----------
+        script_name : str
+            The name of the script, without file extensions.
+        job_id : str
+            Job Id of job to run the script on.  If passed, the job
+            directory will be passed as the first argument to script.
+        args : list of str
+            Extra commandline arguments to pass to the script.
+
+        Returns
+        -------
+        out : str
+            The standard output of the script.
+        """
+        if job_id is not None:
+            args.insert(0, "/".join([self.jobs_dir, job_id]))
+
+        ts = datetime.fromtimestamp(time.time()).strftime("%Y%m%d_%H%M%S")
+        run_cmd = f"{self.scripts_dir}/{script_name} {' '.join(args)}"
+        if logfile:
+            logfile = f"{self.scripts_dir}/{script_name}_{ts}_log"
+            run_cmd += f" > {logfile}.txt"
+        else:
+            logfile = ""
+        if errfile:
+            errfile = f"{self.scripts_dir}/{script_name}_{ts}_err"
+            run_cmd += f" 2> {errfile}.txt"
+            errfile = ""
+
+        cmnd_config = self.exec(run_cmd, wait=False)
+
+        return cmnd_config
+
+    def list_scripts(self) -> List[str]:
+        """
+        List scripts deployed in this TACCJobManager Instance
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+        scripts : list of str
+            List of scripts in TACC Job Manager's scripts directory.
+        """
+        sc = [f["filename"] for f in self.list_files(path=self.scripts_dir,
+                                                     recurse=True)]
+        return sc
 
     def get_jobs(self) -> List[str]:
         """
@@ -413,7 +527,8 @@ class TACCClient:
 
         """
         jobs = self.list_files(
-            path=self.jobs_dir, attrs=["filename", "st_mode"], hidden=False
+            path=self.jobs_dir, attrs=["filename", "st_mode"], hidden=False,
+            recurse=True
         )
         jobs = [j for j in jobs if stat.S_ISDIR(j["st_mode"])]
 
@@ -478,18 +593,13 @@ class TACCClient:
             raise ValueError(msg)
 
         # Submit to SLURM queue -> Note we do this from the job_directory
-        cmnd = f"cd {job_config['job_dir']}; "
+        cmnd = f"cd {job_config['job_dir']} && "
         cmnd += f"sbatch {job_config['job_dir']}/submit_script.sh"
-        ret = self.run_command(cmnd)
-        if "\nFAILED\n" in ret:
-            raise TJMCommandError(
-                self.system, self.user, cmnd, 0, "", ret, f"submit_job - SLURM error"
-            )
-        job_config["slurm_id"] = ret.split("\n")[-2].split(" ")[-1]
+        ret = self.run_command(cmnd, error=True)
+        job_config["slurm_id"] = ret['stdout'].split("\n")[-2].split(" ")[-1]
 
         # Save job config
-        job_config_path = job_config["job_dir"] + "/job.json"
-        self.write(job_config, job_config_path)
+        self.write(job_config, self.job_path(job_id, 'job.json'))
 
         return job_config
 
@@ -517,22 +627,21 @@ class TACCClient:
         if "slurm_id" in job_config.keys():
             cmnd = f"scancel {job_config['slurm_id']}"
             try:
-                self._execute_command(cmnd)
-            except TJMCommandError as e:
-                e.message = f"cancel_job - Failed to cancel job {job_id}."
-                logger.error(e.message)
-                raise e
+                self.exec(cmnd)
+            except TACCCommandError as c:
+                self.log.error(f"cancel_job - Failed to cancel job {job_id}.",
+                               extra={'cmnd_config': c.command_config})
+                raise c
 
             # Remove slurm ID and store into job hist
             job_config["slurm_hist"] = job_config.get("slurm_hist", [])
             job_config["slurm_hist"].append(job_config.pop("slurm_id"))
 
             # Save updated job config
-            job_config_path = job_config["job_dir"] + "/job.json"
-            self.write(job_config, job_config_path)
+            self.write(job_config, self.job_path(job_id, 'job.json'))
         else:
             msg = f"Job {job_id} has not been submitted yet."
-            logger.error(msg)
+            self.log.error(msg)
             raise ValueError(msg)
 
         return job_config
@@ -563,12 +672,10 @@ class TACCClient:
 
         # Remove job directory, if it still exists
         job_dir = self.job_dir(job_id)
-        try:
-            self.remove(job_dir)
-        except Exception:
-            pass
 
-        return job_id
+        rem_res = self.rm(job_dir)
+
+        return rem_res
 
     def restore_job(self, job_id: str) -> dict:
         """
@@ -593,17 +700,53 @@ class TACCClient:
         # Unix paths -> Get file remote file name and directory
         job_dir = "/".join([self.jobs_dir, job_id])
 
+        rm_cmnd = self.rm(job_dir, restore=True)
         try:
-            self.restore(job_dir)
-        except FileNotFoundError as f:
-            msg = f"restore_job - Job {job_id} cannot be restored."
-            logger.error(msg)
-            raise ValueError(msg)
+            self.process(rm_cmnd['id'], wait=True, error=True)
+        except TACCCommandError as t:
+            msg = f"restore_job - Job {job_id} restore command failed."
+            self.log.error(msg, extra={'command_config': t.command_config})
+            raise t
 
         # Return restored job config
         job_config = self.get_job(job_id)
 
         return job_config
+
+    def conda_check(self, env=None, packages=None, pip_packages=None):
+        """
+        
+        """
+
+    def conda_install(self, conda=CONDA_REQUIRED, pip=PIP_REQUIRED):
+        """
+        Conda install
+
+        This should only be run from non-TACC systems to verify setup is correct on
+        TACC systems. Installs conda (mamba) and setups ch-sim conda environment as
+        necessary.
+        """
+        # Check conda (mamba) installed
+        self.log.info("Checking mamba environment")
+        res = self.run_command(
+            "source ~/.bashrc; mamba activate taccjm; taccjm --help",
+            wait=True,
+            check=False,
+        )
+        if res["rc"] != 0:
+            self.log.info("Did not find conda env, setting up in background.")
+            script_path = get_default_script("conda_install.sh")
+            tjm.deploy_script(self.jm_id, script_path)
+            res = tjm.run_script(
+                self.jm_id, "conda_install", args=["taccjm", "pip", pip], wait=False
+            )
+            self.log.info("conda_init() Running. Setting blocker until completion")
+            self.blockers.append(res)
+            key = f"{res['name']}_{res['id']}"
+            self.commands[key] = res
+        else:
+            self.log.info("taccjm mamba env found")
+
 
 #     def get_apps(self):
 #         """
@@ -661,36 +804,7 @@ class TACCClient:
 #         return app_config
 
 
-# 
-#     def _conda_install(self, conda=CONDA_REQUIRED, pip=PIP_REQUIRED):
-#         """
-#         Conda install
-# 
-#         This should only be run from non-TACC systems to verify setup is correct on
-#         TACC systems. Installs conda (mamba) and setups ch-sim conda environment as
-#         necessary.
-#         """
-#         # Check conda (mamba) installed
-#         self.log.info("Checking mamba environment")
-#         res = self.run_command(
-#             "source ~/.bashrc; mamba activate taccjm; taccjm --help",
-#             wait=True,
-#             check=False,
-#         )
-#         if res["rc"] != 0:
-#             self.log.info("Did not find conda env, setting up in background.")
-#             script_path = get_default_script("conda_install.sh")
-#             tjm.deploy_script(self.jm_id, script_path)
-#             res = tjm.run_script(
-#                 self.jm_id, "conda_install", args=["taccjm", "pip", pip], wait=False
-#             )
-#             self.log.info("conda_init() Running. Setting blocker until completion")
-#             self.blockers.append(res)
-#             key = f"{res['name']}_{res['id']}"
-#             self.commands[key] = res
-#         else:
-#             self.log.info("taccjm mamba env found")
-# 
+
 #     def _check_blockers(self, wait=False):
 #         """ """
 #         blockers = []
@@ -711,5 +825,4 @@ class TACCClient:
 #             return True
 #         else:
 #             return False
-
 

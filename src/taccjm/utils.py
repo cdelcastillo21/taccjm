@@ -243,6 +243,15 @@ def init_logger(name,
     """
     Format a logger instance
     """
+    def_config = {'output': sys.stdout,
+                  'fmt': 'json',
+                  'level': logging.CRITICAL}
+    if log_config is None:
+        log_config = def_config
+        def_config['output'] = None
+    else:
+        def_config.update(log_config)
+        log_config = def_config
     logger = logging.getLogger(name)
     if isinstance(log_config['output'], str):
         log_config['output '] = open(log_config['output'], "w")
@@ -389,7 +398,6 @@ def stat_file_or_folder(full_path):
         return (full_path, stat_result)
     except Exception as e:
         return (f"Error getting stats for {full_path}: {e}")
-        raise e
 
 
 def stat_all_files_and_folders(path,
@@ -401,6 +409,7 @@ def stat_all_files_and_folders(path,
                                  "st_size",
                                  "st_uid"
                                  ],
+                               recurse=False,
                                ):
     """
     Stats all files and folders at a path.
@@ -409,10 +418,12 @@ def stat_all_files_and_folders(path,
         d = {'filename': res[0]}
         for x in f_attrs:
             d[x] = res[1].__getattribute__(x)
-        return [d]
+        return d
 
     result = stat_file_or_folder(str(Path(path).resolve()))
-    if not stat.S_ISDIR(result[1].st_mode):
+    if isinstance(result, str):
+        raise ValueError(result)
+    if not stat.S_ISDIR(result[1].st_mode) or not recurse:
         return [_process(result)]
 
     results = []
@@ -432,3 +443,19 @@ def stat_all_files_and_folders(path,
                 pass
 
     return results
+
+
+def check_path(path: str):
+    """
+    Check path for funny business
+    """
+    if any(
+        [
+            path.startswith("../"),
+            path.endswith("/.."),
+            "/../" in path,
+        ]
+        ):
+        return False
+    else:
+        return True

@@ -8,7 +8,6 @@ import pdb
 import sys
 import logging
 from fastapi import FastAPI, HTTPException
-from pythonjsonlogger import jsonlogger
 from taccjm.TACCSSHClient import TACCSSHClient
 from pydantic import BaseModel
 from datetime import datetime, timedelta
@@ -175,6 +174,7 @@ class Command(BaseModel):
     stderr: str
     history: List[Dict]
     rt: Union[float, int, None]
+    rc: Union[int, None]
 
 
 @app.post("/{connection_id}/exec", response_model=Command)

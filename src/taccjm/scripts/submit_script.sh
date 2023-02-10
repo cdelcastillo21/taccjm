@@ -20,8 +20,6 @@ cd {job_dir}
 
 module load {module_list}
 
-export NP={cores}
-
 source ~/.bashrc
 
 conda activate taccjm
