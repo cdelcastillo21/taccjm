@@ -20,8 +20,4 @@ cd {job_dir}
 
 module load {module_list}
 
-source ~/.bashrc
-
-conda activate taccjm
-
 {run_cmnd}

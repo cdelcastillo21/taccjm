@@ -10,6 +10,7 @@ import pdb
 import os  # OS system utility functions
 import tarfile  # For sending compressed directories
 import re
+import pandas as pd
 from fnmatch import fnmatch  # For unix-style filename pattern matching
 import json  # For reading/writing dictionary<->json
 from typing import Tuple  # For type hinting
@@ -250,12 +251,17 @@ def init_logger(name,
         log_config = def_config
         def_config['output'] = None
     else:
+        bad = [x for x in log_config.keys() if x not in def_config.keys()]
+        if len(bad) > 0:
+            raise ValueError(
+                f"Invalid log config keys {bad}. Valid: {def_config.keys()}")
         def_config.update(log_config)
         log_config = def_config
     logger = logging.getLogger(name)
     if isinstance(log_config['output'], str):
-        log_config['output '] = open(log_config['output'], "w")
-    logHandler = logging.StreamHandler(log_config['output'])
+        logHandler = logging.FileHandler(log_config['output'])
+    else:
+        logHandler = logging.StreamHandler(log_config['output'])
     if log_config['fmt'] == "json":
         formatter = jsonlogger.JsonFormatter(
             "%(asctime)s %(name)s - %(levelname)s:%(message)s"
@@ -270,7 +276,15 @@ def init_logger(name,
     logger.setLevel(log_config['level'])
     logger.info(f"Logger {name} initialized", extra={'config': log_config})
 
-    return logger
+    return log_config, logger
+
+
+def read_log(log):
+    """
+    Read a the log currently being written to by log handler. Assumes json
+    logging to a file handler.
+    """
+    return pd.read_json(log.handlers[0].baseFilename, lines=True)
 
 
 def format_hours(hours):
@@ -455,7 +469,7 @@ def check_path(path: str):
             path.endswith("/.."),
             "/../" in path,
         ]
-        ):
+      ):
         return False
     else:
         return True

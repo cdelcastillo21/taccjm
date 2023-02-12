@@ -352,10 +352,10 @@ if __name__ == '__main__':
     PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8000
     LOGLEVEL = get_log_level(sys.argv[3]) if len(sys.argv) > 3 else logging.INFO
     LOGFILE = f"{TACCJM_DIR}/ssh_server_{HOST}_{PORT}_log.json"
-    logger = init_logger('tacc_ssh_server',
-                         {'output': LOGFILE,
-                          'fmt': 'json',
-                          'level': LOGLEVEL})
+    _, logger = init_logger('tacc_ssh_server',
+                            {'output': LOGFILE,
+                             'fmt': 'json',
+                             'level': LOGLEVEL})
 
     logger.info("Starting TACC SSH Server.")
     uvicorn.run(app, host=HOST, port=PORT)

@@ -107,7 +107,7 @@ class TACCSSHClient(SSHClient2FA):
             mfa_prompt=self.MFA_PROMPT,
         )
 
-        self.log = init_logger(__name__, log_config=log_config)
+        self.log_config, self.log = init_logger(__name__, log_config=log_config)
 
         if system not in self.SYSTEMS:
             m = f"Unrecognized system {system}. Options - {self.SYSTEMS}."

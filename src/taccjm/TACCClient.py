@@ -2,6 +2,8 @@ import stat
 import pdb
 import tempfile
 import subprocess
+import pandas as pd
+from io import StringIO
 from pathlib import Path
 import posixpath
 import json
@@ -48,8 +50,9 @@ class TACCClient:
         - If not running on TACC init TACC Job Manager connection
         - TODO: Tapis support
         """
-        self.commands = {}
-        self.log = init_logger(__name__, log_config)
+        self.local_commands = {}
+        self.remote_commands = {}
+        self.log_config, self.log = init_logger(__name__, log_config)
 
         host = os.getenv("HOSTNAME")
         self.local = True
@@ -116,6 +119,7 @@ class TACCClient:
                                                        'jobs_dir',
                                                        'trash_dir']])
         self.exec(mkdir_cmnd)
+        self.pm = None
 
     def get_env_var(self, var: str):
         """
@@ -126,12 +130,12 @@ class TACCClient:
         else:
             return tsa.exec(self.id, f'echo ${var}')['stdout'].strip()
 
-    def abspath(self, path):
+    def abspath(self, path, force_local=False):
         """
         Makes remote path absolute if it is not. Relative paths are assumed to
         be relative to a user's scratch_dir.
         """
-        if self.local:
+        if self.local or force_local:
             path = str(Path(path).resolve())
         else:
             path = path if posixpath.isabs(path) else posixpath.join(
@@ -142,9 +146,12 @@ class TACCClient:
         """ Get job dir given job_id """
         return posixpath.join(self.jobs_dir, job_id)
 
-    def job_path(self, job_id, path):
+    def job_path(self, job_id, path=None):
         """ Get job dir given job_id """
-        return posixpath.join(self.jobs_dir, job_id, path)
+        if path is not None:
+            return posixpath.join(self.jobs_dir, job_id, path)
+        else:
+            return posixpath.join(self.jobs_dir, job_id)
 
     def list_files(
         self,
@@ -157,11 +164,12 @@ class TACCClient:
                "st_size",
                "st_uid",
                "ls_str"],
-        recurse: bool  = False,
+        recurse: bool = False,
         hidden: bool = False,
         search: str = None,
         match: str = r".",
         job_id: str = None,
+        local: bool = False,
     ):
         """
         Get files and file info
@@ -171,9 +179,9 @@ class TACCClient:
                 raise ValueError('Path must be relative if job_id specified.')
             path = self.job_path(job_id, path)
         else:
-            path = self.abspath(path)
+            path = self.abspath(path, force_local=local)
 
-        if self.ssh_client is None:
+        if self.ssh_client is None or local:
             return stat_all_files_and_folders(path, recurse=recurse)
         else:
             return tsa.list_files(
@@ -186,45 +194,58 @@ class TACCClient:
                 match=match,
             )
 
-    def upload(self, src_path, dest_path, job_id: str = None):
+    def upload(self,
+               src_path: str,
+               dest_path: str,
+               job_id: str = None,
+               wait: bool = True,
+               local: bool = False):
         """
         Wrapper to read files either locally or remotely, depending on where executing.
         """
         if job_id is not None:
             dest_path = self.job_path(job_id, dest_path)
-        if self.ssh_client is None:
-            fstat = self.list_files(src_path)[0]
+        if self.ssh_client is None or local:
+            fstat = self.list_files(src_path, local=local)[0]
 
             if stat.S_ISDIR(fstat['st_mode']):
                 src_path += "/"
             cmnd = f"rsync -a {src_path} {dest_path}"
-            self.exec(cmnd, wait=True)
+            return self.exec(cmnd, wait=wait, local=True)
         else:
             return tsa.upload(self.id, src_path, dest_path)
 
-    def download(self, src_path, dest_path, job_id: str = None):
+    def download(self,
+                 src_path,
+                 dest_path,
+                 job_id: str = None,
+                 wait: bool = True,
+                 local: bool = False):
         """
         Wrapper to read files either locally or remotely, depending on where executing.
         """
         if job_id is not None:
             src_path = self.job_path(job_id, src_path)
-        if self.ssh_client is None:
-            fstat = self.list_files(src_path)[0]
+        if self.ssh_client is None or local:
+            fstat = self.list_files(src_path, local=local)[0]
 
             if stat.S_ISDIR(fstat['st_mode']):
                 src_path += "/"
             cmnd = f"rsync -a {src_path} {dest_path}"
-            self.exec(cmnd, wait=True)
+            return self.exec(cmnd, wait=wait, local=True)
         else:
-            return tsa.upload(self.id, src_path, dest_path)
+            return tsa.download(self.id, src_path, dest_path)
 
-    def read(self, path, job_id: str = None):
+    def read(self,
+             path,
+             job_id: str = None,
+             local: bool = False):
         """
         Wrapper to read files either locally or remotely, depending on where executing.
         """
         if job_id is not None:
             path = self.job_path(job_id, path)
-        if self.ssh_client is None:
+        if self.ssh_client is None or local:
             with open(path, "r") as fp:
                 if path.endswith('.json'):
                     return json.load(fp)
@@ -233,13 +254,17 @@ class TACCClient:
         else:
             return tsa.read(self.id, path)['data']
 
-    def write(self, data, path: str, job_id: str = None) -> None:
+    def write(self,
+              data,
+              path: str,
+              job_id: str = None,
+              local: bool = False) -> None:
         """
         Wrapper to read files either locally or remotely, depending on where executing.
         """
         if job_id is not None:
             path = self.job_path(job_id, path)
-        if self.ssh_client is None:
+        if self.ssh_client is None or local:
             if isinstance(data, str):
                 with open(path, "w") as fp:
                     fp.write(data)
@@ -249,7 +274,21 @@ class TACCClient:
         else:
             tsa.write(self.id, data, path)
 
-    def exec(self, cmnd: str = "pwd", wait=True, error=True):
+    def _trim_cmnd_dict(self, cmnd_config, max_size=200):
+        """
+        """
+        if self.local:
+            trimmed = {i: cmnd_config[i] for i in cmnd_config if i != 'process'}
+        else:
+            trimmed = cmnd_config.copy()
+        trimmed['stdout'] = trimmed['stdout'][0:max_size]
+        return trimmed
+
+    def exec(self,
+             cmnd: str = "pwd",
+             wait: bool = True,
+             error: bool = True,
+             local: bool = False):
         """
         Run Command
 
@@ -258,16 +297,16 @@ class TACCClient:
         (default bash shell) and executed remotely
         """
         cmnd_config = None
-        if self.ssh_client is None:
+        if self.ssh_client is None or local:
             self.log.info("Running command locally",
                           extra={'cmnd': cmnd, 'wait': wait, 'error': error})
             sub_proc = subprocess.Popen(cmnd,
                                         shell=True,
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE)
-            command_id = len(self.commands)
+
             cmnd_config = {
-                "id": command_id,
+                "id": f"{len(self.local_commands.keys())}",
                 "cmd": cmnd,
                 "ts": datetime.now(),
                 "status": "STARTED",
@@ -277,32 +316,38 @@ class TACCClient:
                 "process": sub_proc,
                 "rt": None
             }
+            self.local_commands[str(cmnd_config['id'])] = cmnd_config
         else:
             cmnd_config = tsa.exec(self.id, cmnd, wait=wait)
-
-        self.commands[str(cmnd_config['id'])] = cmnd_config
+            self.remote_commands[str(cmnd_config['id'])] = cmnd_config
 
         if wait:
             return self.process(cmnd_config['id'], wait=wait, error=error)
         else:
             return cmnd_config
 
-    def process(self, cmnd_id, wait=True, error=True, nbytes=None):
+    def process(self,
+                cmnd_id,
+                wait=True,
+                error=True,
+                nbytes=None,
+                local: bool = False):
         """
         Poll an executed command to see if it has completed.
         """
-        if self.ssh_client is None:
+        if self.ssh_client is None or local:
             self.log.info(f'Getting command {cmnd_id} from local command list')
-            cmnd_config = self.commands[str(cmnd_id)]
+            cmnd_config = self.local_commands[str(cmnd_id)]
             prev_status = {'status': cmnd_config['status'],
                            'ts': cmnd_config['ts']}
-            cmnd_config['rc'] = cmnd_config['process'].poll()
+            proc = cmnd_config['process']
+            cmnd_config['rc'] = proc.poll()
             if wait or cmnd_config['rc'] is not None:
                 self.log.info(f"Waiting for command {cmnd_id} to finish....")
-                cmnd_config['rc'] = cmnd_config['process'].wait()
+                cmnd_config['rc'] = proc.wait()
                 self.log.info(f"Command {cmnd_id} done. Reading output.")
-                cmnd_config['stdout'] = cmnd_config['process'].stdout.read()
-                cmnd_config['stderr'] = cmnd_config['process'].stderr.read()
+                cmnd_config['stdout'] = proc.stdout.read().decode('utf-8')
+                cmnd_config['stderr'] = proc.stderr.read().decode('utf-8')
 
                 # update statuses
                 cmnd_config['history'].append(prev_status)
@@ -319,16 +364,17 @@ class TACCClient:
                     self.log.info(f'Command {cmnd_id} completed!')
             else:
                 self.log.info(f"Command {cmnd_id} is still running.")
-                cmnd_config['stdout'] = cmnd_config['process'].stdout.read()
+                cmnd_config['stdout'] = proc.stdout.read()
                 cmnd_config['status'] = 'RUNNING'
                 cmnd_config['ts'] = datetime.now()
                 if cmnd_config['status'] != prev_status['status']:
                     cmnd_config['history'].append(prev_status)
+
+            self.local_commands[str(cmnd_config['id'])] = cmnd_config
         else:
             cmnd_config = tsa.process(self.id, cmnd_id,
                                       nbytes=nbytes, wait=wait)
-
-        self.commands[str(cmnd_config['id'])] = cmnd_config
+            self.remote_commands[str(cmnd_config['id'])] = cmnd_config
 
         logconfig = {i: cmnd_config[i] for i in cmnd_config if i != 'process'}
         if cmnd_config['status'] == 'FAILED':
@@ -338,7 +384,7 @@ class TACCClient:
                 raise TACCCommandError(self.system, self.user, cmnd_config)
 
         self.log.info(f'Processed command {cmnd_id}',
-                      extra={'cmnd_config': logconfig})
+                      extra={'cmnd_config': self._trim_cmnd_dict(cmnd_config)})
 
         return cmnd_config
 
@@ -745,7 +791,92 @@ class TACCClient:
 
         return job_config
 
-    def conda_install(self, conda=CONDA_REQUIRED, pip=PIP_REQUIRED):
+    def _mamba_install(self,
+                       exe="Mambaforge-pypy3-Linux-x86_64.sh",
+                       url="https://github.com/conda-forge/miniforge/" +
+                       "releases/latest/download",
+                       ):
+        """
+        Install mamba on TACC system
+        """
+        exe_path = posixpath.join(self.work_dir, exe)
+        install_path = posixpath.join(self.work_dir, 'mambaforge')
+        mamba_path = posixpath.join(install_path, 'mambafore/bin/mamba')
+        conda_path = posixpath.join(install_path, 'mambafore/bin/conda')
+        install_cmd = f"rm -rf {exe_path} && "
+        install_cmd += f"wget -P {self.work_dir} {url}/{exe} && "
+        install_cmd += f"chmod +x {exe_path} && "
+        install_cmd += f"{exe_path} -b -p $WORK/mambaforge && "
+        install_cmd += f"rm {exe_path} && "
+        install_cmd += f"{conda_path} init && "
+        install_cmd += f"{mamba_path} init"
+
+        pdb.set_trace()
+        install_cmd = self.exec(install_cmd)
+
+        return install_cmd
+
+    def _find_pm(self):
+        """
+        Find package manager in environment looks for mamba first. If can't
+        find looks for conda.
+        """
+        mamba_res = self.exec('mamba --help', wait=False)
+        conda_res = self.exec('conda --help', wait=False)
+        mamba_res = self.process(mamba_res['id'], wait=True, error=False)
+        if mamba_res['rc'] != 0:
+            conda_res = self.process(conda_res['id'], wait=True, error=False)
+            if conda_res['rc'] == 0:
+                self.pm = 'conda'
+        else:
+            self.pm = 'mamba'
+
+        if self.pm is None:
+            self.log.info("No mamba/conda env found. Installing",
+                          extra={'mamba_res': mamba_res,
+                                 'conda_res': conda_res})
+            self._mamba_install()
+            self.log.info("Mamba install complete")
+            self.pm = 'mamba'
+
+    def get_python_env(self, env: str = None):
+        """
+        Returns python environments installed, or packages 
+        """
+        if self.pm is None:
+            self._find_pm()
+
+        if env is None:
+            cmnd = f"{self.pm} env list"
+            cols = ['name', 'path']
+            skiprows = 2
+        else:
+            cmnd = f"{self.pm} list --name {env}"
+            cols = ['name', 'version', 'build', 'channel']
+            skiprows = 3
+        res = self.exec(cmnd, wait=True, error=True)
+        fp = StringIO(res['stdout'].replace('*', ' '))
+
+        if env is not None:
+            first_line = fp.readline()
+            env_path = first_line.strip().split(' ')[-1][:-1]
+            skiprows -= 1
+
+        df = pd.read_csv(fp,
+                         delim_whitespace=True,
+                         names=cols,
+                         header=None,
+                         skiprows=skiprows)
+
+        if env is not None:
+            df['path'] = env_path
+
+        return df
+
+    def get_install_env(self,
+                        env: str,
+                        conda: str = None,
+                        pip: str = None):
         """
         Conda install
 
@@ -753,26 +884,35 @@ class TACCClient:
         TACC systems. Installs conda (mamba) and setups ch-sim conda environment as
         necessary.
         """
-        # Check conda (mamba) installed
-        self.log.info("Checking mamba environment")
-        res = self.exeec(
-            "source ~/.bashrc; mamba activate taccjm; taccjm --help",
-            wait=True,
-            check=False,
-        )
-        if res["rc"] != 0:
-            self.log.info("Did not find conda env, setting up in background.")
-            script_path = get_default_script("conda_install.sh")
-            self.deploy_script(self.jm_id, script_path)
-            res = self.run_script(
-                self.jm_id, "conda_install", args=["taccjm", "pip", pip], wait=False
-            )
-            self.log.info("conda_init() Running. Setting blocker until completion")
-            self.blockers.append(res)
-            key = f"{res['name']}_{res['id']}"
-            self.commands[key] = res
-        else:
-            self.log.info("taccjm mamba env found")
+        if self.pm is None:
+            self._find_pm()
+
+        self.log.info(f"Getting/Installing {env}",
+                      extra={'pm': self.pm, 'env': env,
+                             'conda': conda, 'pip': pip})
+
+        envs = self.get_python_env()
+        if env not in envs['name']:
+            # Now create environment using package manager found
+            self.log.info(f"{env} does not exist. Creating now.")
+            self.exec(f"{self.pm} create -y --name {env}")
+
+        if conda is not None:
+            self.log.info("Installing conda packages")
+            self.exec(f"{self.pm} install -n {env} -y {conda}")
+
+        if pip is not None:
+            envs = self.get_python_env()
+            env_path = envs['path'][envs['name'] == env].iloc[0]
+            pip_path = f"{env_path}/bin/pip"
+            self.log.info(f"Installing pip packages using pip path {pip_path}")
+            self.exec(f"{pip_path} install {pip}")
+
+        python_env = self.get_python_env(env)
+        self.log.info("Environment configuration done",
+                      extra={'env': python_env.to_dict()})
+
+        return python_env
 
     def showq(self, user: str = None) -> List[dict]:
         """

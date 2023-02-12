@@ -104,8 +104,10 @@ def run(
     global _logger
 
     LOGFILE = f"{TACCJM_DIR}/ssh_server_hb_{host}_{port}_log.json"
-    _logger = init_logger('tacc_ssh_hb', output=LOGFILE,
-                          fmt='json', loglevel=get_log_level(loglevel))
+    _, _logger = init_logger('tacc_ssh_hb',
+                             log_config={'output': LOGFILE,
+                                         'fmt': 'json',
+                                         'level': get_log_level(loglevel)})
 
     # Set endpoint for taccjm server
     _logger.info(
