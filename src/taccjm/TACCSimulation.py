@@ -151,7 +151,6 @@ class TACCSimulation():
         # Checking python env set-up
         self.log.info("Setting up python execution environment")
         envs = self.client.get_python_env()
-        pdb.set_trace()
         if not any(envs['name'] == self.ENV_CONFIG['conda_env']):
             python_setup = True
         if python_setup:
