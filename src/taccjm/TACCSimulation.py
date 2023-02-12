@@ -151,7 +151,8 @@ class TACCSimulation():
         # Checking python env set-up
         self.log.info("Setting up python execution environment")
         envs = self.client.get_python_env()
-        if self.ENV_CONFIG['conda_env'] not in envs['name']:
+        pdb.set_trace()
+        if not any(envs['name'] == self.ENV_CONFIG['conda_env']):
             python_setup = True
         if python_setup:
             self.client.python_env = self.client.get_install_env(
@@ -205,19 +206,21 @@ class TACCSimulation():
                 # Other arguments just passed as their value
                 job_config['args'][arg['name']] = args[arg['name']]
 
-        conda_path = envs['path'][envs['name'] == 'base'].iloc[0]
-        run_cmd = f"chmod +x {self.name}.py\n"
-        run_cmd += f"{conda_path}/bin/{self.client.pm} run"
-        run_cmd += f" -n {self.ENV_CONFIG['conda_env']} {self.name}.py"
+        run_cmd = f"chmod +x {self.name}.py\n./{self.name}.py"
+        # run_cmd += f"{conda_path}/bin/{self.client.pm} run"
+        # run_cmd += f" -n {self.ENV_CONFIG['conda_env']} {self.name}.py"
         self.log.info('Parsing submit script',
                       extra={'run_cmd': run_cmd})
         job_config['submit_script'] = self._parse_submit_script(
             job_config,
             run_cmd=run_cmd)
 
+        conda_path = envs['path'][envs['name'] ==
+                                  self.ENV_CONFIG['conda_env']].iloc[0]
         self.log.info(f'Reading sim script at {self.script_file}')
+        job_config['sim_script'] = f"#!{conda_path}/bin/python\n\n"
         with open(self.script_file, 'r') as fp:
-            job_config['sim_script'] = fp.read()
+            job_config['sim_script'] += fp.read()
         if "\nif __name__ == '__main__':" not in job_config['sim_script']:
             self.log.info('Detected no main clause... adding.')
             job_config['sim_script'] += "\n\n"
