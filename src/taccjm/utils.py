@@ -257,7 +257,11 @@ def init_logger(name,
                 f"Invalid log config keys {bad}. Valid: {def_config.keys()}")
         def_config.update(log_config)
         log_config = def_config
+
     logger = logging.getLogger(name)
+    if logger.hasHandlers():
+        return log_config, logger
+
     if isinstance(log_config['output'], str):
         logHandler = logging.FileHandler(log_config['output'])
     else:

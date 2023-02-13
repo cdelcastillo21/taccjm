@@ -19,7 +19,7 @@ submit_script_template = get_default_script("submit_script.sh", ret="text")
 main_clause = """if __name__ == '__main__':
     import sys
     import logging
-    simulation = TACCSimulation(name={name},
+    simulation = TACCSimulation(name='{name}',
                                 log_config={{'output': {output},
                                             'fmt': '{fmt}',
                                             'level': logging.{level}}})

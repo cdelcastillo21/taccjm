@@ -1,5 +1,6 @@
 import stat
 import pdb
+import socket
 import tempfile
 import subprocess
 import pandas as pd
@@ -54,9 +55,9 @@ class TACCClient:
         self.remote_commands = {}
         self.log_config, self.log = init_logger(__name__, log_config)
 
-        host = os.getenv("HOSTNAME")
+        host = socket.gethostname()
         self.local = True
-        if "tacc" not in host:
+        if ".tacc." not in host:
             # Not running on TACC - Initialized job manager to interact with system
             self.local = False
             self.log.info("Not running on TACC. Starting SSH session.")
@@ -841,7 +842,7 @@ class TACCClient:
 
     def get_python_env(self, env: str = None):
         """
-        Returns python environments installed, or packages 
+        Returns python environments installed, or packages
         """
         if self.pm is None:
             self._find_pm()
