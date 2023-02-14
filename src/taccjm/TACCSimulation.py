@@ -19,7 +19,7 @@ submit_script_template = get_default_script("submit_script.sh", ret="text")
 main_clause = """if __name__ == '__main__':
     import sys
     import logging
-    simulation = TACCSimulation(name='{name}',
+    simulation = {class_name}(name='{name}',
                                 log_config={{'output': {output},
                                             'fmt': '{fmt}',
                                             'level': logging.{level}}})
@@ -68,6 +68,8 @@ class TACCSimulation():
                  name: str = None,
                  system: str = None,
                  log_config: dict = None,
+                 script_file: str = None,
+                 class_name: str = None,
                  ):
         self.log_config, self.log = init_logger(__name__, log_config)
 
@@ -77,12 +79,18 @@ class TACCSimulation():
             self.log.info(f"Running from main script {self.script_file}")
         else:
             self.is_script = False
-            self.script_file = __file__
-            self.log.info(f"Running from non-main script {self.script_file}")
+            if script_file is None:
+                self.script_file = __file__
+                self.log.info(f"Running from base class at {self.script_file}")
+            else:
+                self.script_file = script_file
+                self.log.info(f"Running from inherited class at {self.script_file}")
 
         self.name = name if name is not None else Path(self.script_file).stem
         self.client = TACCClient(system=system, log_config=log_config)
         self.job_config = None
+        self.class_name = __name__ if class_name is None else class_name
+        self.class_name = self.class_name.split('.')[-1]
 
     def _parse_submit_script(self,
                              job_config: dict,
@@ -236,6 +244,7 @@ class TACCSimulation():
             job_config['sim_script'] += "\n\n"
             job_config['sim_script'] += main_clause.format(
                 name=self.name,
+                class_name=self.class_name,
                 output=f"'{self.name}-log.{self.log_config['fmt']}'",
                 fmt=self.log_config['fmt'],
                 level=get_log_level_str(self.log_config['level']).upper())

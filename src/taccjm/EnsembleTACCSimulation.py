@@ -55,6 +55,15 @@ class EnsembleTACCSimulation(TACCSimulation):
             },
     ]
 
+    def __init__(self,
+                 name: str = None,
+                 system: str = None,
+                 log_config: dict = None,
+                 ):
+        super().__init__(name, system, log_config,
+                         script_file=__file__,
+                         class_name=__name__)
+
     def _validate_run_configs(self, runs):
         """
         TODO: Implement run config validation
