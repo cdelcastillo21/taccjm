@@ -102,7 +102,6 @@ class EnsembleTACCSimulation(TACCSimulation):
         self.log.info("Initializing task queue")
         tq = SLURMTaskQueue(
             tasks=tasks,
-            task_file=self.job_config['args']['task_file'],
             workdir=self.job_config['job_dir'],
             task_max_runtime=self.job_config['args']['task_max_runtime'],
             max_runtime=self.job_config['args']['max_runtime'],

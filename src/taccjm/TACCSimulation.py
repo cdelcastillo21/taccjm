@@ -245,7 +245,7 @@ class TACCSimulation():
             job_config['sim_script'] += main_clause.format(
                 name=self.name,
                 class_name=self.class_name,
-                output=f"'{self.name}-log.{self.log_config['fmt']}'",
+                output=f"'{self.name}-log'",
                 fmt=self.log_config['fmt'],
                 level=get_log_level_str(self.log_config['level']).upper())
 
