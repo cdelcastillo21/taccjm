@@ -893,7 +893,7 @@ class TACCClient:
                              'conda': conda, 'pip': pip})
 
         envs = self.get_python_env()
-        if env not in envs['name']:
+        if not any(envs['name'] == env):
             # Now create environment using package manager found
             self.log.info(f"{env} does not exist. Creating now.")
             self.exec(f"{self.pm} create -y --name {env}")

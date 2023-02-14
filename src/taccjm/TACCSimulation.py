@@ -137,6 +137,7 @@ class TACCSimulation():
         python_setup: bool = False,
         stage: bool = False,
         run: bool = False,
+        remora: bool = True,
     ) -> dict:
         """
         Set up simulation on TACC
@@ -189,9 +190,15 @@ class TACCSimulation():
         # Process arguments, don't stage yet
         for arg in self.ARGUMENTS:
             if arg['name'] not in args.keys():
-                msg = f"Missing argument {arg['name']}"
-                self.log.error(msg, extra={'args': args})
-                raise ValueError(msg)
+                if not arg.get('required', True):
+                    continue
+                elif 'default' not in arg.keys():
+                    msg = f"Missing argument {arg['name']}"
+                    self.log.error(msg, extra={'job_args': args})
+                    raise ValueError(msg)
+                else:
+                    self.log.info("Setting arg default value")
+                    args[arg['name']] = arg['default']
             self.log.info(f"Found {arg['type']} {arg['name']}",
                           extra={'arg': arg})
             if arg['type'] == 'input':
@@ -205,7 +212,11 @@ class TACCSimulation():
                 # Other arguments just passed as their value
                 job_config['args'][arg['name']] = args[arg['name']]
 
-        run_cmd = f"chmod +x {self.name}.py\n./{self.name}.py"
+        run_cmd = f"chmod +x {self.name}.py\n\n"
+        if remora:
+            run_cmd += f"remora ./{self.name}.py"
+        else:
+            run_cmd += f"./{self.name}.py"
         # run_cmd += f"{conda_path}/bin/{self.client.pm} run"
         # run_cmd += f" -n {self.ENV_CONFIG['conda_env']} {self.name}.py"
         self.log.info('Parsing submit script',
@@ -296,8 +307,13 @@ class TACCSimulation():
         return job_config
 
     def run(self,
-            args: dict = None,
-            slurm_config: dict = None):
+            args: dict = {},
+            slurm_config: dict = {},
+            python_setup: bool = False,
+            stage: bool = True,
+            run: bool = True,
+            remora: bool = False,
+            ) -> dict:
         """Run on HPC resources.
 
         This is the entry point for a single job within the simulation.
@@ -308,23 +324,42 @@ class TACCSimulation():
         job_dir = os.getenv('SLURM_SUBMIT_DIR')
         if job_dir is None:
             self.log.info('Not in execution environment. Setting up job...')
-            job_config = self.setup(args=args, slurm_config=slurm_config,
-                                    stage=True, run=True, python_setup=True)
+            job_config = self.setup(args=args,
+                                    slurm_config=slurm_config,
+                                    stage=stage,
+                                    run=run,
+                                    python_setup=python_setup,
+                                    remora=remora)
             self.log.info("Job {job_config['job_id']} set up and submitted",
                           extra={'job_config': job_config})
             return job_config
         self.job_config = self.client.get_job(job_dir)
         self.log.info('Loaded job config. starting job.',
-                      extra={'job_config': job_config})
+                      extra={'job_config': self.job_config})
+        self.setup_job()
         self.run_job()
+
+    def setup_job(self):
+        """
+        Command to set-up job directory.
+
+        This is a skeleton method that should be over-written.
+        """
+        self.log.info("Job set-up Start")
+        self.client.exec("sleep 5")
+        self.log.info("Job set-up Start")
 
     def run_job(self):
         """
         Job run entrypoint
+
+        This is a skeleton method that should be over-written.
+
+        Note: ibrun command should be here somewhere.
         """
         input_file = self.job_config['args']['input_file']
         param = self.job_config['args']['param']
         self.log.info("Starting Simulation")
-        self.client.exec(f"tail -n {param} {input_file}")
+        self.client.exec(f"tail -n {param} {input_file} > out.txt; sleep 10")
         self.log.info("Simulation Done")
 
