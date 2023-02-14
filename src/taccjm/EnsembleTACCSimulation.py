@@ -16,7 +16,7 @@ class EnsembleTACCSimulation(TACCSimulation):
         "allocation": None,
         "node_count": 1,
         "processors_per_node": 48,
-        "max_run_time": 0.5,
+        "max_run_time": 0.2,
         "queue": "development",
         "dependencies":  [],
     }
@@ -45,7 +45,7 @@ class EnsembleTACCSimulation(TACCSimulation):
                 "name": "max_runtime",
                 "type": "param",
                 "desc": "Max runtime for the whole ensemble.",
-                "default": 0.5,
+                "default": 0.2,
             },
             {
                 "name": "summary_interval",
@@ -102,7 +102,8 @@ class EnsembleTACCSimulation(TACCSimulation):
         self.log.info("Initializing task queue")
         tq = SLURMTaskQueue(
             tasks=tasks,
-            workdir=self.job_config['job_dir'],
+            workdir=self.client.job_path('task-queue',
+                                         self.job_config['job_id']),
             task_max_runtime=self.job_config['args']['task_max_runtime'],
             max_runtime=self.job_config['args']['max_runtime'],
             delay=1,

@@ -512,6 +512,9 @@ class SLURMTaskQueue:
         for task in self.errored:
             task_info.append(
                     dict([('status', 'errored')] + get_info(task)))
+        for task in self.timed_out:
+            task_info.append(
+                    dict([('status', 'timed_out')] + get_info(task)))
         for task in self.invalid:
             task_info.append(
                     dict([('status', 'invalid')] + get_info(task)))

@@ -142,8 +142,8 @@ class Task:
             f.write("  exit 1\n")
             f.write("fi\n")
         if self.cdir is not None:
-            f.write(f"cd {self.cdir}\n")
             f.write(f"cwd=$(pwd)\n")
+            f.write(f"cd {self.cdir}\n")
         f.write(f"ibrun -o {offset} -n {extent} {self.command}\n")
         if self.cdir is not None:
             f.write(f"cd $cwd\n")
