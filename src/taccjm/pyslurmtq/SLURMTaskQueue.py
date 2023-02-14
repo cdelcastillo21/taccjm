@@ -111,7 +111,7 @@ class SLURMTaskQueue:
 
         # Set-up job logging
         self._logger = logging.getLogger(__name__)
-        _logHandler = logging.FileHandler(self.workdir / 'tq_log.json')
+        _logHandler = logging.FileHandler(self.workdir / 'tq_log')
         _formatter = jsonlogger.JsonFormatter(
                 '%(asctime)s %(name)s - %(levelname)s:%(message)s')
         _logHandler.setFormatter(_formatter)
