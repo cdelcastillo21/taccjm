@@ -316,8 +316,8 @@ class TACCSimulation():
         return job_config
 
     def run(self,
-            args: dict = {},
-            slurm_config: dict = {},
+            args: dict = None,
+            slurm_config: dict = None,
             python_setup: bool = False,
             stage: bool = True,
             run: bool = True,

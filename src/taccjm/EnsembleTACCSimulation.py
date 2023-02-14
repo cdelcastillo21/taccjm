@@ -73,9 +73,9 @@ class EnsembleTACCSimulation(TACCSimulation):
     def generate_runs(self):
         """
         Add runs using current job_config here. This will run from job
-        execution time.
+        execution time. For now we just return the task list from the config
         """
-        return []
+        return self.job_config['args']['tasks']
 
     def setup_job(self):
         """
@@ -97,7 +97,7 @@ class EnsembleTACCSimulation(TACCSimulation):
             tasks.append(self.client.read(
                 self.job_config['args']['task_file']))
         self._validate_run_configs(tasks)
-        self.log.info("Found {len(tasks)} valid tasks", extra={'tasks': tasks})
+        self.log.info(f"Found {len(tasks)} valid tasks", extra={'tasks': tasks})
 
         self.log.info("Initializing task queue")
         tq = SLURMTaskQueue(
