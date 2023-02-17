@@ -91,6 +91,7 @@ class TACCSimulation():
         self.job_config = None
         self.class_name = __name__ if class_name is None else class_name
         self.class_name = self.class_name.split('.')[-1]
+        self.jobs = {}
 
     def _parse_submit_script(self,
                              job_config: dict,

@@ -50,7 +50,7 @@ class EnsembleTACCSimulation(TACCSimulation):
             {
                 "name": "summary_interval",
                 "type": "param",
-                "desc": "Interval (in seconds) of output of task-queue summary",
+                "desc": "Period (in seconds) of output of task-queue summary",
                 "default": 60,
             },
     ]
