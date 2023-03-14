@@ -1,16 +1,17 @@
+import logging
 import pdb
 import time
-import begin
-import logging
-import numpy as np
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Timer
-from contextlib import contextmanager
+
+import begin
+import numpy as np
 from pythonjsonlogger import jsonlogger
 
 from taccjm import tacc_ssh_api as tsa
-from taccjm.utils import parse_allocations_string, init_logger, get_log_level
 from taccjm.constants import TACCJM_DIR
+from taccjm.utils import get_log_level, init_logger, parse_allocations_string
 
 global stats
 stats = np.array([])
@@ -50,11 +51,14 @@ def heartbeat():
         with timing("list_sessions()") as api_time:
             res = tsa.list_sessions()
             for c in res:
-                _logger.info(f"Checking connection {c['id']}'s allocations.",
-                             extra={'connection_config': c})
+                _logger.info(
+                    f"Checking connection {c['id']}'s allocations.",
+                    extra={"connection_config": c},
+                )
                 try:
                     allocs = parse_allocations_string(
-                        tsa.exec(c['id'], "/usr/local/etc/taccinfo")['stdout'])
+                        tsa.exec(c["id"], "/usr/local/etc/taccinfo")["stdout"]
+                    )
                     for a in allocs:
                         _logger.info(
                             f"Found allocation {a['name']}",
@@ -104,15 +108,14 @@ def run(
     global _logger
 
     LOGFILE = f"{TACCJM_DIR}/ssh_server_hb_{host}_{port}_log.json"
-    _, _logger = init_logger('tacc_ssh_hb',
-                             log_config={'output': LOGFILE,
-                                         'fmt': 'json',
-                                         'level': get_log_level(loglevel)})
+    _, _logger = init_logger(
+        "tacc_ssh_hb",
+        log_config={"output": LOGFILE, "fmt": "json", "level": get_log_level(loglevel)},
+    )
 
     # Set endpoint for taccjm server
     _logger.info(
-        f"Setting host and port to ({host}, {port})",
-        extra={"host": host, "port": port}
+        f"Setting host and port to ({host}, {port})", extra={"host": host, "port": port}
     )
     tsa.set_host(host=host, port=port)
 

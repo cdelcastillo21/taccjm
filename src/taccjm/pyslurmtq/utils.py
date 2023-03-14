@@ -3,13 +3,15 @@ SLURM Task Queue Utilities
 
 Utility functions for :class:`SLURMTaskQueue` and supporting classes.
 """
-from prettytable import PrettyTable
 import logging
 import re
+
+from prettytable import PrettyTable
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
+
 
 def expand_int_list(s):
     """Expands int lists with ranges."""
@@ -34,8 +36,8 @@ def compact_int_list(i, delim=","):
             return f"{i[0]}-{i[e-1]}{delim}{compact_int_list(i[e:])}"
     return f"{i[0]}-{i[-1]}"
 
-def filter_res(res, fields, search=None, match=r'.', print_res=False,
-        output_file=None):
+
+def filter_res(res, fields, search=None, match=r".", print_res=False, output_file=None):
     """
     Print results
 
@@ -59,7 +61,7 @@ def filter_res(res, fields, search=None, match=r'.', print_res=False,
 
     """
     # Initialize Table
-    x = PrettyTable(float_format='0.2')
+    x = PrettyTable(float_format="0.2")
     x.field_names = fields
 
     # Build table from results
@@ -78,7 +80,7 @@ def filter_res(res, fields, search=None, match=r'.', print_res=False,
         print(x)
 
     if output_file is not None:
-        with open(output_file, 'w') as fp:
+        with open(output_file, "w") as fp:
             fp.write(str(x))
 
     return filtered_res

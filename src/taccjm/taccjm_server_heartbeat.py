@@ -1,14 +1,15 @@
-import pdb
-import time
-import begin
-import logging
 import datetime
-import numpy as np
+import logging
+import pdb
+import sys
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Timer
-from contextlib import contextmanager
+
+import begin
+import numpy as np
 from pythonjsonlogger import jsonlogger
-import sys
 
 from taccjm import taccjm_client as tc
 

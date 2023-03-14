@@ -3,26 +3,24 @@ TACCJM Client
 
 Client for managing TACCJM hug servers and accessing TACCJM API end points.
 """
+import json
+import logging
 import os
 import pdb
 import re
-from prettytable import PrettyTable
-import json
-import psutil
-import logging
-import requests
 import subprocess
-from time import sleep
 from getpass import getpass
-from taccjm.constants import (
-    TACC_SSH_HOST,
-    TACC_SSH_PORT,
-    TACCJM_SOURCE,
-    TACCJM_DIR,
-)
+from time import sleep
 from typing import List, Tuple
+
+import psutil
+import requests
+from prettytable import PrettyTable
+
+from taccjm.constants import (TACC_SSH_HOST, TACC_SSH_PORT, TACCJM_DIR,
+                              TACCJM_SOURCE)
 from taccjm.exceptions import TACCJMError
-from taccjm.utils import validate_file_attrs, filter_files
+from taccjm.utils import filter_files, validate_file_attrs
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -102,8 +100,12 @@ def set_host(host: str = TACC_SSH_HOST, port: int = TACC_SSH_PORT) -> Tuple[str,
     return (TACC_SSH_HOST, TACC_SSH_PORT)
 
 
-def find_server(start: bool = False, kill: bool = False,
-                loglevel: str = 'info', heartbeat_interval: float = 0.5) -> dict:
+def find_server(
+    start: bool = False,
+    kill: bool = False,
+    loglevel: str = "info",
+    heartbeat_interval: float = 0.5,
+) -> dict:
     """
     Find TACC SSH Server
 
@@ -163,39 +165,42 @@ def find_server(start: bool = False, kill: bool = False,
         os.makedirs(TACCJM_DIR)
 
     srv_cmd += f" {loglevel}"
-    if 'server' not in processes_found.keys():
+    if "server" not in processes_found.keys():
         log_base_path = os.path.join(
             TACCJM_DIR, f"ssh_server_{TACC_SSH_HOST}_{TACC_SSH_PORT}"
         )
         with open(f"{log_base_path}_out.txt", "w") as out:
             with open(f"{log_base_path}_err.txt", "w") as err:
-                processes_found['server'] = subprocess.Popen(
-                    srv_cmd.split(" "),
-                    stdout=out,
-                    stderr=err)
-                pid = processes_found['server'].pid
+                processes_found["server"] = subprocess.Popen(
+                    srv_cmd.split(" "), stdout=out, stderr=err
+                )
+                pid = processes_found["server"].pid
                 logger.info(f"Started server process with pid {pid}")
 
     hb_cmd += f"--loglevel={loglevel} --heartbeat-interval={heartbeat_interval}"
-    if 'hb' not in processes_found.keys():
+    if "hb" not in processes_found.keys():
         log_base_path = os.path.join(
             TACCJM_DIR, f"ssh_hb_{TACC_SSH_HOST}_{TACC_SSH_PORT}"
         )
         with open(f"{log_base_path}_out.txt", "w") as out:
             with open(f"{log_base_path}_err.txt", "w") as err:
-                processes_found['hb'] = subprocess.Popen(
-                    hb_cmd.split(" "),
-                    stdout=out,
-                    stderr=err)
-                pid = processes_found['hb'].pid
+                processes_found["hb"] = subprocess.Popen(
+                    hb_cmd.split(" "), stdout=out, stderr=err
+                )
+                pid = processes_found["hb"].pid
                 logger.info(f"Started heartbeat process with pid {pid}")
 
     # Return processes found/started
     return processes_found
 
 
-def api_call(http_method: str, end_point: str, params: dict = None,
-             data: dict = None, json_data: dict = None) -> dict:
+def api_call(
+    http_method: str,
+    end_point: str,
+    params: dict = None,
+    data: dict = None,
+    json_data: dict = None,
+) -> dict:
     """
     API Call
 
@@ -222,10 +227,14 @@ def api_call(http_method: str, end_point: str, params: dict = None,
     """
 
     # Build http request
-    base_url = "http://{host}:{port}".format(host=TACC_SSH_HOST,
-                                             port=TACC_SSH_PORT)
-    req = requests.Request(http_method, base_url + "/" + end_point,
-                           json=json_data, params=params, data=data)
+    base_url = "http://{host}:{port}".format(host=TACC_SSH_HOST, port=TACC_SSH_PORT)
+    req = requests.Request(
+        http_method,
+        base_url + "/" + end_point,
+        json=json_data,
+        params=params,
+        data=data,
+    )
     prepared = req.prepare()
 
     # Initialize connection and send http request
@@ -304,8 +313,19 @@ def init(
 
     Returns
     -------
-    ssh_cnofig : dict
+    ssh_config: dict
         Dictionary containing info about job manager instance just initialized.
+        This includes the fields:
+            id: str
+            sys: str
+            user: str
+            start: datetime
+            last_ts: datetime
+            log_level: str
+            log_file: str
+            home_dir: str
+            work_dir: str
+            scratch_dir: str
     """
     connections = list_sessions()
     if connection_id in [c["id"] for c in connections]:
@@ -334,6 +354,27 @@ def init(
     return res
 
 
+def stop(
+    connection_id: str,
+) -> dict:
+    """
+    Stop an active ssh session
+    """
+    # Make API call
+    connections = [c for c in list_sessions() if c['id'] == connection_id]
+    if len(connections) == 0:
+        raise ValueError(f"SSH Session {connection_id} is not active.")
+
+    try:
+        api_call("DELETE", connection_id)
+    except TACCJMError as e:
+        e.message = "stop error"
+        logger.error(e.message)
+        raise e
+
+    return connections[0]
+
+
 def get(connection_id: str) -> dict:
     """
     Get SSH Connection
@@ -348,7 +389,17 @@ def get(connection_id: str) -> dict:
     Returns
     -------
     connection_config : dictionary
-        Dictionary containing SSH connection info.
+        Dictionary containing SSH connection info. This includes the fields:
+            id: str
+            sys: str
+            user: str
+            start: datetime
+            last_ts: datetime
+            log_level: str
+            log_file: str
+            home_dir: str
+            work_dir: str
+            scratch_dir: str
     """
 
     try:
@@ -361,14 +412,12 @@ def get(connection_id: str) -> dict:
     return res
 
 
-def exec(connection_id: str, cmnd: str,
-         wait: bool = True):
+def exec(connection_id: str, cmnd: str, wait: bool = True):
     """
     Exec a command
     """
 
-    json_data = {'cmnd': cmnd,
-                 'wait': wait}
+    json_data = {"cmnd": cmnd, "wait": wait}
 
     # Make API call
     try:
@@ -381,15 +430,14 @@ def exec(connection_id: str, cmnd: str,
     return res
 
 
-def process(connection_id: str, cmnd_id: int = None, nbytes: int = None,
-            wait: bool = True):
+def process(
+    connection_id: str, cmnd_id: int = None, nbytes: int = None, wait: bool = True
+):
     """
     Process a command
     """
 
-    json_data = {'cmnd_id': cmnd_id,
-                 'nbytes': nbytes,
-                 'wait': wait}
+    json_data = {"cmnd_id": cmnd_id, "nbytes": nbytes, "wait": wait}
 
     # Make API call
     try:
@@ -441,7 +489,7 @@ def list_files(
     if search is not None and search not in attrs:
         raise ValueError(f"search must be one of attrs {attrs}")
 
-    endpoint = 'ls' if not recurse else 'lsr'
+    endpoint = "ls" if not recurse else "lsr"
 
     try:
         files = api_call("GET", f"{connection_id}/{endpoint}/{path}")

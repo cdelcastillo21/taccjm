@@ -3,29 +3,26 @@ TACCJM Client
 
 Client for managing TACCJM hug servers and accessing TACCJM API end points.
 """
+import json
+import logging
 import os
-import sys
 import pdb
 import re
-from prettytable import PrettyTable
-import json
-import psutil
-import logging
-import requests
-import tempfile
 import subprocess
-from time import sleep
+import sys
+import tempfile
 from getpass import getpass
-from taccjm.constants import (
-    make_taccjm_dir,
-    TACCJM_HOST,
-    TACCJM_PORT,
-    TACCJM_SOURCE,
-    TACCJM_DIR,
-)
+from time import sleep
 from typing import List, Tuple
+
+import psutil
+import requests
+from prettytable import PrettyTable
+
+from taccjm.constants import (TACCJM_DIR, TACCJM_HOST, TACCJM_PORT,
+                              TACCJM_SOURCE, make_taccjm_dir)
 from taccjm.exceptions import TACCJMError
-from taccjm.utils import validate_file_attrs, filter_files
+from taccjm.utils import filter_files, validate_file_attrs
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"

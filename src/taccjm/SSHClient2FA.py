@@ -9,12 +9,12 @@ References:
 
 """
 
-import pdb  # Debug
-import socket  # This method requires that we create our own socket
 import getpass  # Allows for secure prompting and collection of the user password
 import logging  # Used to setup the Paramiko log file
-import paramiko  # Provides SSH functionality
+import pdb  # Debug
+import socket  # This method requires that we create our own socket
 
+import paramiko  # Provides SSH functionality
 
 # Better way to do this?
 global user, pw, mfa, user_p, pw_p, mfa_p

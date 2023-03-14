@@ -3,18 +3,20 @@ TACC SSH FastAPI Server
 
 Server for managing instances of TACCSSHClient classes using the FastAPI framework
 """
+import logging
+from loguru import logger
 import os
 import pdb
 import sys
-import logging
-from fastapi import FastAPI, HTTPException
-from taccjm.TACCSSHClient import TACCSSHClient
-from pydantic import BaseModel
 from datetime import datetime, timedelta
-from typing import List, Dict, Union
-from taccjm.utils import init_logger, get_log_level, get_log_level_str
-from taccjm.constants import make_taccjm_dir, TACCJM_DIR
+from typing import Dict, List, Union
 
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+from taccjm.constants import TACCJM_DIR, make_taccjm_dir
+from taccjm.TACCSSHClient import TACCSSHClient
+from taccjm.utils import get_log_level, get_log_level_str, init_logger
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -33,7 +35,6 @@ PORT = None
 CONNECTIONS = {}
 LOGFILE = None
 LOGLEVEL = None
-logger = None
 
 
 def _get_config(connection_id):
@@ -42,17 +43,17 @@ def _get_config(connection_id):
     """
     if connection_id in CONNECTIONS.keys():
         res = CONNECTIONS[connection_id]
-        res = {i: res[i] for i in res if i != 'client'}
+        res = {i: res[i] for i in res if i != "client"}
         return res
     else:
-        raise ValueError(f'No active SSH Connection with id {connection_id}')
+        raise ValueError(f"No active SSH Connection with id {connection_id}")
 
 
 def _get_client(connection_id):
     if connection_id in CONNECTIONS.keys():
-        return CONNECTIONS[connection_id]['client']
+        return CONNECTIONS[connection_id]["client"]
     else:
-        raise ValueError(f'No active SSH Connection with id {connection_id}')
+        raise ValueError(f"No active SSH Connection with id {connection_id}")
 
 
 class Connection(BaseModel):
@@ -84,32 +85,29 @@ def list_jm():
     out = []
     for c in CONNECTIONS.keys():
         conn = CONNECTIONS[c]
-        out.append({a: conn[a] for a in conn if a != 'client'})
+        out.append({a: conn[a] for a in conn if a != "client"})
     return out
 
 
 @app.post("/{connection_id}", response_model=Connection)
-async def init(
-    connection_id: str,
-    req: ConnectionRequest
-):
+async def init(connection_id: str, req: ConnectionRequest):
     if connection_id in CONNECTIONS.keys() and not req.restart:
         msg = f"Connection {connection_id} already exists."
         raise HTTPException(status_code=409, detail=msg)
 
     logger.info(f"Init {connection_id} with on {req.system} for {req.user}")
-    loglevel = get_log_level(
-        req.loglevel) if req.loglevel is not None else LOGLEVEL
+    loglevel = get_log_level(req.loglevel) if req.loglevel is not None else LOGLEVEL
     def_log = f"{TACCJM_DIR}/{connection_id}_{req.system}_{req.user}_log.json"
     logfile = req.logfile if req.logfile is not None else def_log
     logger.info(f"Log at {logfile} with level {get_log_level_str(loglevel)}")
 
     try:
         client = TACCSSHClient(
-            req.system, user=req.user, psw=req.psw, mfa=req.mfa,
-            log_config={'output': logfile,
-                        'fmt': 'json',
-                        'level': loglevel},
+            req.system,
+            user=req.user,
+            psw=req.psw,
+            mfa=req.mfa,
+            log_config={"output": logfile, "fmt": "json", "level": loglevel},
         )
     except ValueError as v:
         msg = f"Init failed on {req.system} for {req.user}: {v}"
@@ -132,10 +130,12 @@ async def init(
         "home_dir": client.home_dir,
         "work_dir": client.work_dir,
     }
-    logger.info(f"SUCCESS - {connection_id} initialized establisehed.",
-                extra={'connection_config': ret})
+    logger.info(
+        f"SUCCESS - {connection_id} initialized establisehed.",
+        extra={"connection_config": ret},
+    )
     CONNECTIONS[connection_id] = ret
-    CONNECTIONS[connection_id]['client'] = client
+    CONNECTIONS[connection_id]["client"] = client
 
     return ret
 
@@ -149,9 +149,21 @@ def get(
         raise HTTPException(status_code=404, detail=f"ssh_error: {msg}")
     else:
         ret = CONNECTIONS[connection_id]
-        ret = {a: ret[a] for a in ret if a != 'client'}
+        ret = {a: ret[a] for a in ret if a != "client"}
 
         return ret
+
+
+@app.delete("/{connection_id}", response_model=Connection)
+def stop(
+    connection_id: str,
+):
+    if connection_id not in CONNECTIONS.keys():
+        msg = f"Connection id {connection_id} not found"
+        raise HTTPException(status_code=404, detail=f"ssh_error: {msg}")
+    else:
+        connection = CONNECTIONS.pop(connection_id)
+        connection.close()
 
 
 class CommandRequest(BaseModel):
@@ -181,50 +193,54 @@ class Command(BaseModel):
 def exec(connection_id: str, cmnd_req: CommandRequest):
     """Execute command"""
     ssh_client = _get_client(connection_id)
-    logger.info(f"Executing new command on {connection_id}",
-                extra={'command_request': cmnd_req})
-    res = ssh_client.execute_command(cmnd_req.cmnd,
-                                     wait=cmnd_req.wait,
-                                     error=False)
-    res = {i: res[i] for i in res if i != 'channel'}
-    CONNECTIONS[connection_id]['last_ts'] = datetime.now()
-    logger.info(f"Command {res['id']} executed on {connection_id}.",
-                extra={'command_config': res})
+    logger.info(
+        f"Executing new command on {connection_id}", extra={"command_request": cmnd_req}
+    )
+    res = ssh_client.execute_command(cmnd_req.cmnd, wait=cmnd_req.wait, error=False)
+    res = {i: res[i] for i in res if i != "channel"}
+    CONNECTIONS[connection_id]["last_ts"] = datetime.now()
+    logger.info(
+        f"Command {res['id']} executed on {connection_id}.",
+        extra={"command_config": res},
+    )
 
     return res
 
 
-@app.post("/{connection_id}/process",
-          response_model=Union[Command, List[Command]])
+@app.post("/{connection_id}/process", response_model=Union[Command, List[Command]])
 def process(connection_id: str, proc_req: ProcessRequest):
     """Process command"""
 
     ssh_client = _get_client(connection_id)
     if proc_req.cmnd_id is not None:
-        logger.info(f"Processing command {proc_req.cmnd_id} on {connection_id}",
-                    extra={'process_request': proc_req})
-        res = ssh_client.process_command(proc_req.cmnd_id,
-                                         nbytes=proc_req.nbytes,
-                                         wait=proc_req.wait,
-                                         error=False)
-        res = {i: res[i] for i in res if i != 'channel'}
-        logger.info(f"Command {res['id']} execute/processed on {connection_id}.",
-                    extra={'command_config': res})
+        logger.info(
+            f"Processing command {proc_req.cmnd_id} on {connection_id}",
+            extra={"process_request": proc_req},
+        )
+        res = ssh_client.process_command(
+            proc_req.cmnd_id, nbytes=proc_req.nbytes, wait=proc_req.wait, error=False
+        )
+        res = {i: res[i] for i in res if i != "channel"}
+        logger.info(
+            f"Command {res['id']} execute/processed on {connection_id}.",
+            extra={"command_config": res},
+        )
     else:
-        logger.info("Polling all active commands",
-                    extra={'process_request': proc_req})
+        logger.info("Polling all active commands", extra={"process_request": proc_req})
         res = ssh_client.process_active(nbytes=proc_req.nbytes)
-        res = [{i: r[i] for i in r if i != 'channel'} for r in res]
-        logger.info(f"{len(res)} commands still active n {connection_id}.",
-                    extra={'active_commands': res})
+        res = [{i: r[i] for i in r if i != "channel"} for r in res]
+        logger.info(
+            f"{len(res)} commands still active n {connection_id}.",
+            extra={"active_commands": res},
+        )
 
-    CONNECTIONS[connection_id]['last_ts'] = datetime.now()
+    CONNECTIONS[connection_id]["last_ts"] = datetime.now()
 
     return res
 
 
 class PathInfo(BaseModel):
-    path: Union[str, None] = '.'
+    path: Union[str, None] = "."
     filename: Union[str, None] = None
     st_atime: Union[int, None] = None
     st_gid: Union[int, None] = None
@@ -277,7 +293,7 @@ async def list_files_recursive(connection_id: str, file_path: str):
 
 class FileData(BaseModel):
     path: str
-    data_type: str = 'text'
+    data_type: str = "text"
     data: Union[str, dict, None] = None
 
 
@@ -288,9 +304,9 @@ async def read(connection_id: str, file_path: str):
     """
     client = _get_client(connection_id)
 
-    file = {'path': file_path}
-    file['data_type'] = 'json' if file['path'].endswith('.json') else 'text'
-    file['data'] = client.read(file['path'], data_type=file['data_type'])
+    file = {"path": file_path}
+    file["data_type"] = "json" if file["path"].endswith(".json") else "text"
+    file["data"] = client.read(file["path"], data_type=file["data_type"])
 
     return file
 
@@ -307,12 +323,13 @@ async def write(connection_id: str, data: FileData):
 class DataRequest(BaseModel):
     source_path: str
     dest_path: str
-    file_filter: str = '*'
+    file_filter: str = "*"
 
 
 @app.get("/{connection_id}/download")
-async def download(connection_id: str, source_path: str, dest_path: str,
-                   file_filter: str = '*'):
+async def download(
+    connection_id: str, source_path: str, dest_path: str, file_filter: str = "*"
+):
     """
     List Files
 
@@ -337,26 +354,23 @@ async def upload(connection_id: str, req: DataRequest):
     try:
         client.upload(req.source_path, req.dest_path, file_filter=req.file_filter)
     except FileNotFoundError:
-        raise HTTPException(status_code=404,
-                            detail=f"File not found {req.source_path}")
+        raise HTTPException(status_code=404, detail=f"File not found {req.source_path}")
     except PermissionError:
         raise HTTPException(
-            status_code=403,
-            detail=f"Don't have permissions to {req.source_path}")
+            status_code=403, detail=f"Don't have permissions to {req.source_path}"
+        )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import uvicorn
 
     HOST = sys.argv[1] if len(sys.argv) > 1 else "0.0.0.0"
     PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8000
     LOGLEVEL = get_log_level(sys.argv[3]) if len(sys.argv) > 3 else logging.INFO
     LOGFILE = f"{TACCJM_DIR}/ssh_server_{HOST}_{PORT}_log.json"
-    _, logger = init_logger('tacc_ssh_server',
-                            {'output': LOGFILE,
-                             'fmt': 'json',
-                             'level': LOGLEVEL})
-
+    serialize = True if "fmt" == "json" else False
+    logger.add(LOGFILE, rotation="10 MB", filter="tacc_ssh_server",
+               serialize=serialize)
     logger.info("Starting TACC SSH Server.")
     uvicorn.run(app, host=HOST, port=PORT)
     logger.info("TACC SSH Server shut down.")

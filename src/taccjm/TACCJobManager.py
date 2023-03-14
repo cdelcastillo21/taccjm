@@ -4,31 +4,34 @@ TACCJobManager Class
 
 """
 
-import os  # OS system utility functions for local system
-import posixpath  # Paths on remote system (assumed UNIX)
 import errno  # For error messages
-import tarfile  # For sending compressed directories
-import re  # Regular Expressions
-import pdb  # Debug
-import tempfile
 import json  # For saving and loading job configs to disk
-import time  # Time functions
 import logging  # Used to setup the Paramiko log file
+import os  # OS system utility functions for local system
+import pdb  # Debug
+import posixpath  # Paths on remote system (assumed UNIX)
+import re  # Regular Expressions
 import stat  # For reading file stat codes
+import tarfile  # For sending compressed directories
+import tempfile
+import time  # Time functions
 from datetime import datetime  # Date time functionality
 from fnmatch import fnmatch  # For unix-style filename pattern matching
-from taccjm.utils import *  # TACCJM Util functions for config files/dicts
-from taccjm.constants import *  # For application configs
-from typing import Tuple, List  # Type hints
 from typing import Union  # Type hints
-# from pandas import to_datetime
+from typing import List, Tuple  # Type hints
 
-# Modified paramiko ssh client and common paramiko exceptions
-from taccjm.SSHClient2FA import SSHClient2FA
-from paramiko import SSHException, AuthenticationException, BadHostKeyException
+from paramiko import AuthenticationException, BadHostKeyException, SSHException
 
+from taccjm.constants import *  # For application configs
 # Custom exception for handling remote command errors
 from taccjm.exceptions import TJMCommandError
+# Modified paramiko ssh client and common paramiko exceptions
+from taccjm.SSHClient2FA import SSHClient2FA
+from taccjm.utils import *  # TACCJM Util functions for config files/dicts
+
+# from pandas import to_datetime
+
+
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"

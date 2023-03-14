@@ -5,28 +5,28 @@ A class that defines an ssh connection to a TACC system.
 
 
 """
-import pdb  # Debug
-import sys
-import os  # OS system utility functions for local system
-import posixpath  # Paths on remote system (assumed UNIX)
 import errno  # For error messages
-import tarfile  # For sending compressed directories
-import tempfile
 import json  # For saving and loading job configs to disk
 import logging  # Used to setup the Paramiko log file
+import os  # OS system utility functions for local system
+import pdb  # Debug
+import posixpath  # Paths on remote system (assumed UNIX)
 import stat  # For reading file stat codes
+import sys
+import tarfile  # For sending compressed directories
+import tempfile
 from datetime import datetime  # Date time functionality
-from taccjm.utils import init_logger, tar_file
-from taccjm.constants import *  # For application configs
-from typing import Union, Tuple, List  # Type hints
 from pathlib import Path
+from typing import List, Tuple, Union  # Type hints
 
-# Modified paramiko ssh client and common paramiko exceptions
-from taccjm.SSHClient2FA import SSHClient2FA
-from paramiko import SSHException, AuthenticationException, BadHostKeyException
+from paramiko import AuthenticationException, BadHostKeyException, SSHException
 
+from taccjm.constants import *  # For application configs
 # Custom exception for handling remote command errors
 from taccjm.exceptions import SSHCommandError
+# Modified paramiko ssh client and common paramiko exceptions
+from taccjm.SSHClient2FA import SSHClient2FA
+from taccjm.utils import init_logger, tar_file
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -78,9 +78,7 @@ class TACCSSHClient(SSHClient2FA):
         user=None,
         psw=None,
         mfa=None,
-        log_config={'output': sys.stdout,
-                    'fmt': 'txt',
-                    'level': logging.ERROR},
+        log_config={"output": sys.stdout, "fmt": "txt", "level": logging.ERROR},
     ):
         """
         Initialize Job Manager connection and directories.
@@ -125,17 +123,118 @@ class TACCSSHClient(SSHClient2FA):
         self.commands = []
 
         # Scratch directory - Used by default for all operations
-        self.scratch_dir = self.execute_command(
-                f"echo {self.SCRATCH_DIR}")['stdout'].strip()
+        self.scratch_dir = self.execute_command(f"echo {self.SCRATCH_DIR}")[
+            "stdout"
+        ].strip()
         self.log.info(f"{self.SCRATCH_DIR} resolved to {self.scratch_dir}")
 
         # home and work dirs -> Good to stash for later usage
-        self.home_dir = self.execute_command(
-                f"echo {self.HOME_DIR}")['stdout'].strip()
+        self.home_dir = self.execute_command(f"echo {self.HOME_DIR}")["stdout"].strip()
         self.log.info(f"{self.HOME_DIR} resolved to {self.home_dir}")
-        self.work_dir = self.execute_command(
-                f"echo {self.WORK_DIR}")['stdout'].strip()
+        self.work_dir = self.execute_command(f"echo {self.WORK_DIR}")["stdout"].strip()
         self.log.info(f"{self.WORK_DIR} resolved to {self.work_dir}")
+
+    def _get_sftp(self):
+        """
+        Wrapper for establishing sftp connetions and trapping errors to log
+        an then exit gracefully
+        """
+        try:
+            self.log.info("Opening sftp connection")
+            sftp = self.open_sftp()
+        except SSHException as s:
+            self.log.error(f"Error while opening SFTP connection: {s}")
+            raise s
+        self.log.info("SFTP connection open")
+
+        return sftp
+
+    def _sftp_exit(self, sftp, err, exc):
+        """
+        Close sftp, log error, and raise exception
+        """
+        sftp.close()
+        self.log.error(err)
+        raise exc
+
+    def _stat(self, path, sftp=None, follow_symbolic_links: bool = True):
+        """
+        Stat a file on remote system
+        """
+        close = False
+        if sftp is None:
+            sftp = self._get_sftp()
+            close = True
+        stat = None
+        try:
+            # Query path to see if its directory or file
+            if follow_symbolic_links:
+                stat = sftp.stat(path)
+            else:
+                stat = sftp.lstat(path)
+        except FileNotFoundError:
+            self._sftp_exit(sftp, f"No such file or folder {path}", FileNotFoundError)
+        except PermissionError:
+            self._sftp_exit(sftp, f"Permission denied on {path}", PermissionError)
+        except SSHException as s:
+            self._sftp_exit(sftp, "SSH Error establishing connection", s)
+            raise s
+
+        if close:
+            sftp.close()
+
+        # Return listDEBUG o dictionaries with file info
+        return stat
+
+    def _decompress_remote(self, remote_tar_file: str, cdir: str = None):
+        """
+        De-compress a file remotely
+        """
+        untar_cmd = f"tar -xzvf {remote_tar_file}"
+        if cdir is not None:
+            untar_cmd += f" -C {cdir}"
+        untar_cmd += f"; rm -rf {remote_tar_file}"
+        try:
+            self.log.info(
+                "un-tarring the file remotely", extra={"untar_cmd": untar_cmd}
+            )
+            self.execute_command(untar_cmd)
+        except SSHCommandError as s:
+            self.log.error("Error unpacking tar file remotely")
+            raise s
+
+    def _compress_remote(self, remote_dir: str, file_filter: str = "*"):
+        """
+        Compres a file remotely
+        """
+        dirname, fname = posixpath.split(remote_dir)
+        remote_tar = f"{self.scratch_dir}/.{fname}.tar.gz"
+
+        # Build command. Filter files according to file filter
+        cmd = f"cd {dirname} && "
+        cmd += f"find {fname} -name '{file_filter}' -print0 | "
+        cmd += f"tar -czvf {remote_tar} --null --files-from -"
+
+        # Try packing remote tar file
+        try:
+            self.execute_command(cmd)
+        except SSHCommandError as s:
+            if "padding with zeros" in s.stdout:
+                # Warning message, not an error.
+                pass
+            else:
+                s.message = f"Error tar-ing {remote_tar}"
+                raise s
+
+        return remote_tar
+
+    def _make_remote_absolute(self, path):
+        """
+        Makes remote path absolute if it is not. Relative paths are assumed to
+        be relative to a user's scratch_dir.
+        """
+        path = path if posixpath.isabs(path) else posixpath.join(self.scratch_dir, path)
+        return path
 
     def execute_command(self, cmnd, wait=True, error=True) -> None:
         """
@@ -154,7 +253,7 @@ class TACCSSHClient(SSHClient2FA):
 
         Raises
         ------
-        SSHCommandError 
+        SSHCommandError
             If command executed on TACC resource returns non-zero return code.
         """
         # Gets underlying transport object for main ssh connection.
@@ -182,7 +281,8 @@ class TACCSSHClient(SSHClient2FA):
             "stderr": "",
             "history": [],
             "channel": channel,
-            "rt": None}
+            "rt": None,
+        }
         self.commands.append(command_config)
 
         if wait:
@@ -205,32 +305,27 @@ class TACCSSHClient(SSHClient2FA):
         anything in stderr, else return stdout.
         """
         if command_id > len(self.commands) or command_id < 1:
-            raise ValueError(
-                f"Invalid id {command_id} (1<={len(self.commands)}).")
+            raise ValueError(f"Invalid id {command_id} (1<={len(self.commands)}).")
         command_config = self.commands[command_id - 1]
 
         if command_config["status"] in ["COMPLETE", "FAILED"]:
             return command_config
 
-        prev_status = {"ts": command_config['ts'],
-                       "status": command_config['status']}
+        prev_status = {"ts": command_config["ts"], "status": command_config["status"]}
         if command_config["channel"].exit_status_ready() or wait:
-            command_config['history'].append(prev_status)
+            command_config["history"].append(prev_status)
             command_config["rc"] = command_config["channel"].recv_exit_status()
             ts = datetime.now()
             command_config["stdout"] += (
                 command_config["channel"].recv(max_nbytes).decode("utf-8")
             )
             command_config["stderr"] += (
-                command_config["channel"]
-                .recv_stderr(max_nbytes)
-                .decode("utf-8")
+                command_config["channel"].recv_stderr(max_nbytes).decode("utf-8")
             )
             command_config["channel"].close()
             _ = command_config.pop("channel")
             command_config["ts"] = ts
-            command_config["rt"] = (
-                ts - command_config['history'][0]['ts']).seconds
+            command_config["rt"] = (ts - command_config["history"][0]["ts"]).seconds
             if command_config["rc"] != 0:
                 command_config["status"] = "FAILED"
                 if error:
@@ -253,8 +348,8 @@ class TACCSSHClient(SSHClient2FA):
             command_config["ts"] = datetime.now()
             command_config["status"] = "RUNNING"
 
-            if prev_status['status'] != "RUNNING":
-                command_config['history'].append(prev_status)
+            if prev_status["status"] != "RUNNING":
+                command_config["history"].append(prev_status)
 
         self.commands[command_id - 1] = command_config
 
@@ -264,127 +359,27 @@ class TACCSSHClient(SSHClient2FA):
         """
         Poll all active commands.
         """
-        ds = ['COMPLETE', 'FAILED']
-        active_commands = [c for c in self.commands if c['status'] not in ds]
-        self.log.info(f'Polling {len(active_commands)} active commands.')
+        ds = ["COMPLETE", "FAILED"]
+        active_commands = [c for c in self.commands if c["status"] not in ds]
+        self.log.info(f"Polling {len(active_commands)} active commands.")
         still_active = []
         for cmnd in active_commands:
-            res = self.process_command(cmnd['id'], wait=False,
-                                       error=False, nbytes=nbytes)
-            if res['status'] not in ds:
+            res = self.process_command(
+                cmnd["id"], wait=False, error=False, nbytes=nbytes
+            )
+            if res["status"] not in ds:
                 still_active.append(res)
 
-        self.log.info(f'Done polling. {len(still_active)} still active.')
+        self.log.info(f"Done polling. {len(still_active)} still active.")
 
         return still_active
 
-    def _get_sftp(self):
-        """
-        Wrapper for establishing sftp connetions and trapping errors to log
-        an then exit gracefully
-        """
-        try:
-            self.log.info('Opening sftp connection')
-            sftp = self.open_sftp()
-        except SSHException as s:
-            self.log.error(f"Error while opening SFTP connection: {s}")
-            raise s
-        self.log.info('SFTP connection open')
-
-        return sftp
-
-    def _sftp_exit(self, sftp, err, exc):
-        """
-        Close sftp, log error, and raise exception
-        """
-        sftp.close()
-        self.log.error(err)
-        raise exc
-
-    def _stat(self, path, sftp=None, follow_symbolic_links:bool = True):
-        """
-        Stat a file on remote system
-        """
-        close = False
-        if sftp is None:
-            sftp = self._get_sftp()
-            close = True
-        stat = None
-        try:
-            # Query path to see if its directory or file
-            if follow_symbolic_links:
-                stat = sftp.stat(path)
-            else:
-                stat = sftp.lstat(path)
-        except FileNotFoundError:
-            self._sftp_exit(sftp, f"No such file or folder {path}",
-                            FileNotFoundError)
-        except PermissionError:
-            self._sftp_exit(sftp, f"Permission denied on {path}",
-                            PermissionError)
-        except SSHException as s:
-            self._sftp_exit(sftp, "SSH Error establishing connection", s)
-            raise s
-
-        if close:
-            sftp.close()
-
-        # Return listDEBUG o dictionaries with file info
-        return stat
-
-    def _decompress_remote(self, remote_tar_file: str, cdir: str = None):
-        """
-        De-compress a file remotely
-        """
-        untar_cmd = f"tar -xzvf {remote_tar_file}"
-        if cdir is not None:
-            untar_cmd += f" -C {cdir}"
-        untar_cmd += f"; rm -rf {remote_tar_file}"
-        try:
-            self.log.info("un-tarring the file remotely",
-                          extra={'untar_cmd': untar_cmd})
-            self.execute_command(untar_cmd)
-        except SSHCommandError as s:
-            self.log.error("Error unpacking tar file remotely")
-            raise s
-
-    def _compress_remote(self, remote_dir: str, file_filter: str = '*'):
-        """
-        Compres a file remotely
-        """
-        dirname, fname = posixpath.split(remote_dir)
-        remote_tar = f"{self.scratch_dir}/.{fname}.tar.gz"
-
-        # Build command. Filter files according to file filter
-        cmd = f"cd {dirname} && "
-        cmd += f"find {fname} -name '{file_filter}' -print0 | "
-        cmd += f"tar -czvf {remote_tar} --null --files-from -"
-
-        # Try packing remote tar file
-        try:
-            self.execute_command(cmd)
-        except SSHCommandError as s:
-            if "padding with zeros" in s.stdout:
-                # Warning message, not an error.
-                pass
-            else:
-                s.message = f'Error tar-ing {remote_tar}'
-                raise s
-
-        return remote_tar
-
-    def _make_remote_absolute(self, path):
-        """
-        Makes remote path absolute if it is not. Relative paths are assumed to
-        be relative to a user's scratch_dir.
-        """
-        path = path if posixpath.isabs(path) else posixpath.join(
-            self.scratch_dir, path)
-        return path
-
-    def list_files(self, path: str = None,
-                   follow_symbolic_links: bool = True,
-                   recurse: bool = False) -> List[dict]:
+    def list_files(
+        self,
+        path: str = None,
+        follow_symbolic_links: bool = True,
+        recurse: bool = False,
+    ) -> List[dict]:
         """
         Returns the info on all files/folderes at a given path. If path is a
         file, then returns file info. If path is directory, then returns file
@@ -422,16 +417,15 @@ class TACCSSHClient(SSHClient2FA):
         path = self._make_remote_absolute(path)
 
         # Open sftp connection
-        self.log.info(f'list_files operation started on {path}')
+        self.log.info(f"list_files operation started on {path}")
         sftp = self._get_sftp()
-        self.log.info(f'Getting file info {path}')
-        fstat = self._stat(path, sftp=sftp,
-                           follow_symbolic_links=follow_symbolic_links)
+        self.log.info(f"Getting file info {path}")
+        fstat = self._stat(path, sftp=sftp, follow_symbolic_links=follow_symbolic_links)
         if stat.S_ISDIR(fstat.st_mode) and recurse:
             # If directory get info on all files in directory
             f_attrs.insert(0, "filename")
             files = sftp.listdir_attr(path)
-            self.log.info(f'Directory found, getting {len(files)} files')
+            self.log.info(f"Directory found, getting {len(files)} files")
             for f in files:
                 # Extract fields from SFTPAttributes object for files
                 d = dict([(x, f.__getattribute__(x)) for x in f_attrs])
@@ -439,7 +433,7 @@ class TACCSSHClient(SSHClient2FA):
                 f_info.append(d)
         else:
             # If file, just get file info
-            self.log.info('File Found, returing file info')
+            self.log.info("File Found, returing file info")
             d = [(x, fstat.__getattribute__(x)) for x in f_attrs]
             d.insert(0, ("filename", path))
             d.append(("ls_str", fstat.asbytes()))
@@ -500,10 +494,9 @@ class TACCSSHClient(SSHClient2FA):
         # Make sure we are working with a directory
         if not os.path.exists(local):
             self.log.error(f"{local} does not exist.")
-            raise FileNotFoundError(errno.ENOENT,
-                                    os.strerror(errno.ENOENT), local)
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), local)
 
-        self.log.info(f'Starting upload of {local} to {remote}')
+        self.log.info(f"Starting upload of {local} to {remote}")
 
         # TODO: Verify permissions to remote_dir? Check for overwrite scenario?
 
@@ -514,13 +507,17 @@ class TACCSSHClient(SSHClient2FA):
             remote_parent, remote_fname = posixpath.split(remote)
             tempname = next(tempfile._get_candidate_names())
             local_tar_file = f".{fname}-{tempname}.taccjm.tar"
-            self.log.info(f'Packing local tar file {local_tar_file}')
-            tar_file(str(Path(local).resolve()), local_tar_file,
-                     arc_name=remote_fname, file_filter='*')
-            self.log.info('Succesfully compressed file')
+            self.log.info(f"Packing local tar file {local_tar_file}")
+            tar_file(
+                str(Path(local).resolve()),
+                local_tar_file,
+                arc_name=remote_fname,
+                file_filter="*",
+            )
+            self.log.info("Succesfully compressed file")
 
             # Send tar file
-            if remote_parent != '':
+            if remote_parent != "":
                 destination = f"{remote_parent}/{local_tar_file}"
             else:
                 destination = local_tar_file
@@ -594,9 +591,9 @@ class TACCSSHClient(SSHClient2FA):
         local = os.path.abspath(local.rstrip(os.sep))
         remote = remote.rstrip("/")
 
-        self.log.info('Starting download of folder {remote} to {local}')
+        self.log.info("Starting download of folder {remote} to {local}")
 
-        self.log.info('Getting info on path {remote}')
+        self.log.info("Getting info on path {remote}")
         sftp = self._get_sftp()
         fileattr = sftp.stat(remote)
         is_dir = stat.S_ISDIR(fileattr.st_mode)
@@ -609,7 +606,7 @@ class TACCSSHClient(SSHClient2FA):
             to_download = remote
             download_path = local
 
-        self.log.info(f'Download of {to_download} to {download_path}')
+        self.log.info(f"Download of {to_download} to {download_path}")
         try:
             sftp.get(to_download, download_path)
         except FileNotFoundError as f:
@@ -629,7 +626,7 @@ class TACCSSHClient(SSHClient2FA):
             os.remove(download_path)
             self.execute_command(f"rm -rf {remote_tar_file}")
 
-        self.log.info(f'Download complete of {remote} to {local}')
+        self.log.info(f"Download complete of {remote} to {local}")
 
     def write(self, data: Union[str, dict], path: str) -> None:
         """

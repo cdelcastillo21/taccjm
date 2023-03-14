@@ -6,6 +6,7 @@ Class defining abstract unit for job execution in a SLURM job.
 """
 import time
 
+
 class Slot:
     """
     Combination of (host, idx) that can run a SLURM task. A slot can have
@@ -31,7 +32,7 @@ class Slot:
     Attributes
     ----------
     host : str
-        Name of compute node on a SLURM execution system. Corresponds to a host 
+        Name of compute node on a SLURM execution system. Corresponds to a host
         listed in the environment variable SLURM_JOB_NODELIST.
     idx : int
         Index of task in total available SLURM task slots. See above for more
@@ -95,4 +96,3 @@ class Slot:
     def __repr__(self):
         s = f"Slot({self.host}, {self.idx})"
         return s
-

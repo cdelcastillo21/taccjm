@@ -1,15 +1,11 @@
 """
 TACCJM Scripts CLI
 """
-import pdb
-import re
 from pathlib import Path
 
 import click
-from prettytable import PrettyTable
 
-import taccjm.taccjm_client as tjm
-from taccjm.exceptions import TACCJMError
+from taccjm.cli.utils import _get_client, _get_files_str
 from taccjm.utils import filter_res
 
 __author__ = "Carlos del-Castillo-Negrete"
@@ -19,27 +15,21 @@ __license__ = "MIT"
 
 @click.group(short_help="list/deploy/run")
 @click.option(
-    "-j",
-    "--jm_id",
+    "-c",
+    "--conn_id",
     default=None,
     help="Job Manager to execute operation on. Defaults to first available.",
 )
 @click.pass_context
-def scripts(ctx, jm_id):
+def scripts(ctx, conn_id):
     """
     TACC Job Manager Scripts
 
     CLI Entrypoint for commands related to scripts.
     """
-    if jm_id is None:
-        jms = tjm.list_jms()
-        if len(jms) == 0:
-            raise TACCJMError(
-                "No JM specified (--jm_id) and no JMs already initialized."
-            )
-        jm_id = tjm.list_jms()[0]["jm_id"]
+    client = _get_client(conn_id)
     ctx.ensure_object(dict)
-    ctx.obj["jm_id"] = jm_id
+    ctx.obj["client"] = client
 
 
 @scripts.command(short_help="List deployed scripts.")
@@ -55,11 +45,17 @@ def list(ctx, match):
     """
     List scripts deployed on JM_ID
     """
-    jm_id = ctx.obj["jm_id"]
-    res = tjm.list_scripts(jm_id)
-    str_res = filter_res(
-        [{"name": x} for x in res], ["name"], search="name", match=match
+    client = ctx.obj["client"]
+    str_res = _get_files_str(
+        client,
+        client.scripts_dir,
+        attrs=['name', 'modified_time'],
+        recurse=True,
+        hidden=False,
+        search=['name'],
+        match=match,
     )
+    click.echo(f'Scripts on {client.id} at {client.scripts_dir}:')
     click.echo(str_res)
 
 
@@ -71,33 +67,75 @@ def list(ctx, match):
     default=None,
     help="Name to give to deployed script. Defaults to script file name.",
 )
+@click.option(
+    "-c",
+    "--cmnd",
+    default=None,
+    help="Command string to write to script name",
+)
 @click.pass_context
-def deploy(ctx, path, rename):
+def deploy(ctx, path, rename, cmnd):
     """
     Deploy Script
 
     Deploy a local script onto a TACC system.
     """
-    jm_id = ctx.obj["jm_id"]
+    client = ctx.obj["client"]
+    local_file = None
     if rename is None:
         script_name = str(Path(path).stem)
-        res = tjm.deploy_script(jm_id, path)
     else:
         script_name = str(Path(rename).stem)
-        res = tjm.deploy_script(jm_id, rename, local_file=path)
-    res = tjm.list_scripts(jm_id)
-    str_res = filter_res(
-        [{"name": x} for x in res], ["name"], search="name", match=script_name
+        local_file = path
+    client.deploy_script(script_name, local_file=local_file, script_str=cmnd)
+    str_res = _get_files_str(
+        client,
+        client.scripts_dir,
+        attrs=['name', 'modified_time'],
+        recurse=True,
+        hidden=False,
+        search='name',
+        match=script_name,
     )
+    click.echo(f'Deployed {script_name} on {client.id}:')
     click.echo(str_res)
 
 
 @scripts.command(short_help="Run deployed script.")
 @click.argument("script", type=str)
-@click.argument("wait", type=bool, default=True)
-@click.argument("args", nargs=-1, default=None)
+@click.option(
+    "-j",
+    "--job_id",
+    default=None,
+    show_default=True,
+    help="If specified, job_id will be passed as first argument to script.",
+)
+@click.option(
+    "-a",
+    "--args",
+    multiple=True,
+    default=[],
+    show_default=True,
+    help="List of arguments to pass to script",
+)
+@click.option(
+    "-l/-nl",
+    "--logfile/--no-logfile",
+    is_flag=True,
+    default=False,
+    show_default=True,
+    help="Whether to re-direct stdout to a log file.",
+)
+@click.option(
+    "-e/-ne",
+    "--errfile/--no-errfile",
+    is_flag=True,
+    default=False,
+    show_default=True,
+    help="Whether to re-direct stderr to a err file.",
+)
 @click.pass_context
-def run(ctx, script, args, wait):
+def run(ctx, script, job_id, args, logfile, errfile):
     """
     Run Deployed Script
 
@@ -106,6 +144,18 @@ def run(ctx, script, args, wait):
     amount of data. It is better practice for large output to be sent to a log
     file and for that to be downloaded seperately.
     """
-    jm_id = ctx.obj["jm_id"]
-    res = tjm.run_script(jm_id, script, args=args, wait=wait)
-    click.echo(res)
+    client = ctx.obj["client"]
+    res = client.run_script(
+        script,
+        job_id=job_id,
+        args=[],
+        logfile=logfile,
+        errfile=errfile,
+        )
+    click.echo(f"RUNNING: {client.user}@{client.id}$ " +
+               f"{client.scripts_dir}/{script}")
+    click.echo(filter_res([res], ["id", "status", "ts"]))
+    click.echo(
+        f"... use `taccjm process {res['id']} -w` to wait for "
+        + "script to finish"
+    )

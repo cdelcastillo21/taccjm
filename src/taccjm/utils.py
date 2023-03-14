@@ -4,27 +4,28 @@ TACCJobManager Utility Function
 
 """
 
+import concurrent.futures
+import json  # For reading/writing dictionary<->json
+import logging
+import math
+import os  # OS system utility functions
+import pdb
+import re
 import stat
 import sys
-import pdb
-import os  # OS system utility functions
 import tarfile  # For sending compressed directories
-import re
-import pandas as pd
-from fnmatch import fnmatch  # For unix-style filename pattern matching
-import json  # For reading/writing dictionary<->json
-from typing import Tuple  # For type hinting
-from taccjm.constants import JOB_TEMPLATE, APP_TEMPLATE, APP_SCRIPT_TEMPLATE
-from prettytable import PrettyTable
-from pathlib import Path
-import logging
-from pythonjsonlogger import jsonlogger
-import math
-from datetime import datetime, timedelta
 import time
-import numpy as np
-import concurrent.futures
+from datetime import datetime, timedelta
+from fnmatch import fnmatch  # For unix-style filename pattern matching
+from pathlib import Path
+from typing import Tuple  # For type hinting
 
+import numpy as np
+import pandas as pd
+from prettytable import PrettyTable
+from pythonjsonlogger import jsonlogger
+
+from taccjm.constants import APP_SCRIPT_TEMPLATE, APP_TEMPLATE, JOB_TEMPLATE
 
 DEFAULT_SCRIPTS_PATH = Path(__file__).parent / "scripts"
 
@@ -150,7 +151,8 @@ def filter_files(
     return files
 
 
-def filter_res(res, fields, search=None, match=r".", filter_fun=None):
+def filter_res(res, fields, search=None, match=r".", filter_fun=None,
+               max_n=int(1e6)):
     """
     Print results
 
@@ -189,6 +191,9 @@ def filter_res(res, fields, search=None, match=r".", filter_fun=None):
         else:
             x.add_row([r[f] for f in fields])
             filtered_res.append(dict([(f, r[f]) for f in fields]))
+
+        if len(filtered_res) > max_n:
+            break
 
     return str(x)
 
@@ -237,24 +242,23 @@ def get_default_script(script_name, ret="path"):
         return script_text
 
 
-def init_logger(name,
-                log_config: dict = {'output': sys.stdout,
-                                    'fmt': 'json',
-                                    'level': logging.INFO}):
+def init_logger(
+    name,
+    log_config: dict = {"output": sys.stdout, "fmt": "json", "level": logging.INFO},
+):
     """
     Format a logger instance
     """
-    def_config = {'output': sys.stdout,
-                  'fmt': 'json',
-                  'level': logging.CRITICAL}
+    def_config = {"output": sys.stdout, "fmt": "json", "level": logging.CRITICAL}
     if log_config is None:
         log_config = def_config
-        def_config['output'] = None
+        def_config["output"] = None
     else:
         bad = [x for x in log_config.keys() if x not in def_config.keys()]
         if len(bad) > 0:
             raise ValueError(
-                f"Invalid log config keys {bad}. Valid: {def_config.keys()}")
+                f"Invalid log config keys {bad}. Valid: {def_config.keys()}"
+            )
         def_config.update(log_config)
         log_config = def_config
 
@@ -262,11 +266,11 @@ def init_logger(name,
     if logger.hasHandlers():
         return log_config, logger
 
-    if isinstance(log_config['output'], str):
-        logHandler = logging.FileHandler(log_config['output'])
+    if isinstance(log_config["output"], str):
+        logHandler = logging.FileHandler(log_config["output"])
     else:
-        logHandler = logging.StreamHandler(log_config['output'])
-    if log_config['fmt'] == "json":
+        logHandler = logging.StreamHandler(log_config["output"])
+    if log_config["fmt"] == "json":
         formatter = jsonlogger.JsonFormatter(
             "%(asctime)s %(name)s - %(levelname)s:%(message)s"
         )
@@ -277,8 +281,8 @@ def init_logger(name,
 
     logHandler.setFormatter(formatter)
     logger.addHandler(logHandler)
-    logger.setLevel(log_config['level'])
-    logger.info(f"Logger {name} initialized", extra={'config': log_config})
+    logger.setLevel(log_config["level"])
+    logger.info(f"Logger {name} initialized", extra={"config": log_config})
 
     return log_config, logger
 
@@ -346,10 +350,8 @@ def get_ts(fmt="%Y%m%d %H:%M:%S"):
     return datetime.fromtimestamp(time.time()).strftime(fmt)
 
 
-def tar_file(to_compress, tar_file, arc_name=None, file_filter='*'):
-    """
-
-    """
+def tar_file(to_compress, tar_file, arc_name=None, file_filter="*"):
+    """ """
     with tarfile.open(tar_file, "w:gz") as tar:
 
         def filter_fun(x):
@@ -359,33 +361,35 @@ def tar_file(to_compress, tar_file, arc_name=None, file_filter='*'):
 
 
 def get_log_level_str(log_int):
-    """
-    """
+    """ """
     loglevels = np.array([0, 10, 20, 30, 40, 50])
     max_log_level = np.max(loglevels[loglevels < log_int])
 
-    loglevels = {'50': 'critical',
-                 '40': 'error',
-                 '30': 'warning',
-                 '20': 'info',
-                 '10': 'debug',
-                 '0': 'notset'}
+    loglevels = {
+        "50": "critical",
+        "40": "error",
+        "30": "warning",
+        "20": "info",
+        "10": "debug",
+        "0": "notset",
+    }
 
     return loglevels[str(int(max_log_level))]
 
 
 def get_log_level(loglevel):
-    """
-    """
-    loglevels = {'critical': logging.CRITICAL,
-                 'error': logging.ERROR,
-                 'warning': logging.WARNING,
-                 'info': logging.INFO,
-                 'debug': logging.DEBUG,
-                 'notset': logging.NOTSET}
+    """ """
+    loglevels = {
+        "critical": logging.CRITICAL,
+        "error": logging.ERROR,
+        "warning": logging.WARNING,
+        "info": logging.INFO,
+        "debug": logging.DEBUG,
+        "notset": logging.NOTSET,
+    }
 
     if loglevel not in loglevels.keys():
-        raise ValueError(f'Invalid loglevel:{loglevel}: {loglevels.keys()}')
+        raise ValueError(f"Invalid loglevel:{loglevel}: {loglevels.keys()}")
 
     return loglevels[loglevel]
 
@@ -396,8 +400,7 @@ def parse_allocations_string(allocs_return):
     parse available allocations for a user.
     """
     # Parse allocation info
-    allocations = set(
-        [x.strip() for x in allocs_return.split("\n")[2].split("|")])
+    allocations = set([x.strip() for x in allocs_return.split("\n")[2].split("|")])
     allocations.remove("")
     allocations = [x.split() for x in allocations]
     allocations = [
@@ -409,31 +412,25 @@ def parse_allocations_string(allocs_return):
 
 
 def stat_file_or_folder(full_path):
-    """
-    """
+    """ """
     try:
         stat_result = os.stat(full_path)
         return (full_path, stat_result)
     except Exception as e:
-        return (f"Error getting stats for {full_path}: {e}")
+        return f"Error getting stats for {full_path}: {e}"
 
 
-def stat_all_files_and_folders(path,
-                               f_attrs=[
-                                 "st_atime",
-                                 "st_gid",
-                                 "st_mode",
-                                 "st_mtime",
-                                 "st_size",
-                                 "st_uid"
-                                 ],
-                               recurse=False,
-                               ):
+def stat_all_files_and_folders(
+    path,
+    f_attrs=["st_atime", "st_gid", "st_mode", "st_mtime", "st_size", "st_uid"],
+    recurse=False,
+):
     """
     Stats all files and folders at a path.
     """
+
     def _process(res):
-        d = {'filename': res[0]}
+        d = {"filename": res[0]}
         for x in f_attrs:
             d[x] = res[1].__getattribute__(x)
         return d
@@ -473,7 +470,7 @@ def check_path(path: str):
             path.endswith("/.."),
             "/../" in path,
         ]
-      ):
+    ):
         return False
     else:
         return True

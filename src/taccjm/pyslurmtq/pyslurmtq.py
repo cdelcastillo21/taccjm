@@ -20,13 +20,13 @@ References:
     - https://pip.pypa.io/en/stable/reference/pip_install
 """
 
-import pdb
 import argparse
 import logging
+import pdb
 import sys
-from pyslurmtq.SLURMTaskQueue import SLURMTaskQueue
 
 from pyslurmtq import __version__
+from pyslurmtq.SLURMTaskQueue import SLURMTaskQueue
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -35,6 +35,7 @@ __license__ = "MIT"
 _logger = logging.getLogger(__name__)
 
 # ---- CLI ----
+
 
 def parse_args(args):
     """Parse command line parameters
@@ -52,9 +53,9 @@ def parse_args(args):
         action="version",
         version="pyslurmqt {ver}".format(ver=__version__),
     )
-    parser.add_argument(dest="infile",
-            help="input json file with tasks to execute",
-            type=str)
+    parser.add_argument(
+        dest="infile", help="input json file with tasks to execute", type=str
+    )
     parser.add_argument(
         "-w",
         "--workdir",
@@ -113,7 +114,7 @@ def parse_args(args):
     return parser.parse_args(args)
 
 
-def setup_logging(loglevel): #, logfile):
+def setup_logging(loglevel):  # , logfile):
     """Setup json logging
 
     Parameters
@@ -150,12 +151,13 @@ def main(args):
 
     _logger.info(f"Initializing Task Queue from file {args.infile}")
     tq = SLURMTaskQueue(
-            task_file=args.infile,
-            workdir=args.workdir,
-            task_max_runtime=args.task_max_rt,
-            max_runtime=args.max_rt,
-            delay=args.delay,
-            loglevel=args.loglevel)
+        task_file=args.infile,
+        workdir=args.workdir,
+        task_max_runtime=args.task_max_rt,
+        max_runtime=args.max_rt,
+        delay=args.delay,
+        loglevel=args.loglevel,
+    )
     _logger.info("Running Task Queue")
     tq.run()
     _logger.info("Done Running Tasks in Queue")
@@ -163,7 +165,6 @@ def main(args):
     _logger.info(f"Slot Ussage Summary:\n{tq.summary_by_slot()}")
     if args.cleanup:
         tq.cleanup()
-
 
 
 def run():
@@ -176,4 +177,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-

@@ -3,21 +3,24 @@ TACCJM CLI
 
 CLI for using TACCJM Client.
 """
-import pdb
-import re
 import os
-from pathlib import Path
 
 import click
-from datetime import datetime
 
-import taccjm.taccjm_client as tjm
+import taccjm.tacc_ssh_api as tacc_api
+from taccjm.cli.files import file_commands as files_cli
+from taccjm.cli.scripts import script_commands as scripts_cli
+from taccjm.cli.jobs import job_commands as jobs_cli
+from taccjm.cli.utils import _get_client, build_table
 from taccjm.utils import filter_res
 
-from .files import file_commands as files_cli
-from .apps import app_commands as apps_cli
-from .jobs import job_commands as jobs_cli
-from .scripts import script_commands as scripts_cli
+from rich.console import Console
+from rich.traceback import install
+install(suppress=[click])
+
+# from .apps import app_commands as apps_cli
+# from .jobs import job_commands as jobs_cli
+# from .scripts import script_commands as scripts_cli
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -26,7 +29,19 @@ __license__ = "MIT"
 TACC_PW = os.getenv("TACC_PW")
 
 # Available return fields per command
-_jm_fields = ["jm_id", "sys", "user", "apps_dir", "jobs_dir"]
+_conn_fields = [
+    "id",
+    "sys",
+    "user",
+    "start",
+    "last_ts",
+    "log_level",
+    "log_file",
+    "home_dir",
+    "work_dir",
+    "scratch_dir",
+]
+
 _queue_fields = [
     "job_id",
     "job_name",
@@ -37,6 +52,7 @@ _queue_fields = [
     "start_time",
 ]
 _allocation_fields = ["name", "service_units", "exp_date"]
+CONSOLE = Console()
 
 
 class NaturalOrderGroup(click.Group):
@@ -58,21 +74,30 @@ class NaturalOrderGroup(click.Group):
 def cli(server):
     if server is not None:
         host, port = server
-        _ = tjm.set_host(host, port)
+        _ = tacc_api.set_host(host, port)
 
 
-cli.add_command(apps_cli.apps)
-cli.add_command(jobs_cli.jobs)
 cli.add_command(files_cli.files)
 cli.add_command(scripts_cli.scripts)
+cli.add_command(jobs_cli.jobs)
+# cli.add_command(apps_cli.apps)
 
 
-@cli.command(short_help="List active job managers")
+@cli.command(short_help="List active ssh connections")
+@click.option(
+    "-c",
+    "--cols",
+    multiple=True,
+    type=click.Choice(_conn_fields, case_sensitive=False),
+    default=["id", "sys", "user", "last_ts", "work_dir"],
+    help="Column to search.",
+    show_default=True,
+)
 @click.option(
     "-s",
     "--search",
-    type=click.Choice(_jm_fields, case_sensitive=False),
-    default="jm_id",
+    type=click.Choice(_conn_fields, case_sensitive=False),
+    default="id",
     help="Column to search.",
     show_default=True,
 )
@@ -83,26 +108,39 @@ cli.add_command(scripts_cli.scripts)
     show_default=True,
     help="Regular expression to match.",
 )
-def list(search, match):
+def list(cols, search, match):
     """
-    List TACC Job Managers
+    List TACC SSH Connections
 
-    List available Job Managers on server, along with info: jm_id, system, user,
-    application directory, and jobs directory. Can filter results on any column
-    by specifying the column in the `--search` option and the regular expression
-    to match on in the `--match` option.
+    List available connections on server, along with info:
+        id: str
+        sys: str
+        user: str
+        start: datetime
+        last_ts: datetime
+        log_level: str
+        log_file: str
+        home_dir: str
+        work_dir: str
+        scratch_dir: str
+    Can filter results on any column by specifying the column in the `--search`
+    option and the regular expression to match on in the `--match` option.
     """
-    res = tjm.list_jms()
-    str_res = filter_res(res, _jm_fields, search=search, match=match)
-    click.echo(str_res)
+    res = tacc_api.list_sessions()
+    table = build_table(res, cols, search=search, match=match)
+    CONSOLE.print(table)
+    # click.echo(str_res)
 
 
-@cli.command(short_help="Initialize a TACC connection.")
-@click.argument(
-    "jm_id",
-)
+@cli.command(short_help="Initialize a TACC SSH connection.")
 @click.argument("system")
 @click.argument("user")
+@click.option(
+    "--conn_id",
+    default=None,
+    help="TACC connection id to show queue for. If none specified, then "
+    + "defaults to first connection from a `taccjm list` command.",
+)
 @click.option(
     "-p",
     "--password",
@@ -118,30 +156,48 @@ def list(search, match):
     type=bool,
     help="Restart the job manager or not.",
 )
-def init(jm_id, system, user, password, mfa, restart):
+def init(system, user, conn_id, password, mfa, restart):
     """
-    Initialize TACC Job Manager
+    Initialize TACC SSH Connection
 
-    Logs in USER via an ssh connection to SYSTEM and labels it with job manager
-    id JM_ID. JM_ID must be unique and not present in a `taccjm list`.
+    Logs in USER via an ssh connection to SYSTEM and labels it with connection
+    id conn_id. JM_ID must be unique and not present in a `taccjm list`.
     """
-    res = tjm.init_jm(jm_id, system, user, password, mfa, restart)
-    str_res = filter_res([res], _jm_fields)
+    connection_id = f"taccjm-{system}" if conn_id is None else conn_id
+    res = tacc_api.init(connection_id, system, user, password, mfa, restart)
+    str_res = filter_res([res], ["id", "sys", "user", "last_ts", "work_dir"])
+    click.echo(str_res)
+
+
+@cli.command(short_help="Remove TACC SSH connection.")
+@click.argument("conn_id")
+def rm(conn_id):
+    """
+    Stop TACC SSH Connection
+    """
+    client = tacc_api.stop_session(conn_id)
+    click.echo(f'Stopped {conn_id}:')
+    str_res = filter_res([client], ["id", "sys", "user", "last_ts"],
+                         search=search, match=match)
     click.echo(str_res)
 
 
 @cli.command(short_help="Show SLURM job queue on JM_ID for USER.")
 @click.option(
-    "--jm_id",
+    "-c",
+    "--conn_id",
     default=None,
-    help="Job Manager to show queue for. If none specified, then defaults to first job manager from a `taccjm list` command.",
+    help="TACC connection id to show queue for. If none specified, then "
+    + "defaults to first connection from a `taccjm list` command.",
 )
 @click.option(
+    "-u",
     "--user",
     default=None,
-    help="User to show job queue for. To show queue for all users, specify 'all' as the user",
+    help="User to show job queue for. Use `all` ti show queue for all users",
 )
 @click.option(
+    "-s",
     "--search",
     type=click.Choice(_queue_fields, case_sensitive=False),
     help="Column to search.",
@@ -149,9 +205,13 @@ def init(jm_id, system, user, password, mfa, restart):
     default="username",
 )
 @click.option(
-    "--match", default=r".", show_default=True, help="Regular expression to match."
+    "-m",
+    "--match",
+    default=r".",
+    show_default=True,
+    help="Regular expression to match.",
 )
-def queue(jm_id, user, search, match):
+def showq(conn_id, user, search, match):
     """
     Show TACC SLURM Job Queue
 
@@ -167,19 +227,21 @@ def queue(jm_id, user, search, match):
 
     Use `--search` and `--match` flags to filter results.
     """
-    if jm_id is None:
-        jms = tjm.list_jms()
-        if len(jms) == 0:
-            raise TACCJMError("No JM specified (--jm_id) and no JM")
-        jm_id = tjm.list_jms()[0]["jm_id"]
-    res = tjm.get_queue(jm_id, user)
+    client = _get_client(conn_id)
+    res = client.showq(user=user)
     str_res = filter_res(res, _queue_fields)
-    click.echo(f"SLURM Queue for {user} on {jm_id}:")
+    click.echo(f"SLURM Queue for {user} on {conn_id}:")
     click.echo(str_res)
 
 
 @cli.command()
-@click.option("--jm_id", default=None)
+@click.option(
+    "-c",
+    "--conn_id",
+    default=None,
+    help="TACC connection id to get allocatiosn for. If none specified, then "
+    + "defaults to first connection from a `taccjm list` command.",
+)
 @click.option(
     "--search",
     type=click.Choice(_allocation_fields, case_sensitive=False),
@@ -190,27 +252,24 @@ def queue(jm_id, user, search, match):
 @click.option(
     "--match", default=r".", show_default=True, help="Regular expression to match."
 )
-def allocations(jm_id, search, match):
+def allocations(conn_id, search, match):
     """
     Get TACC Allocations
 
-    Return TACC allocations on system connected to by JM_ID. For each
-    allocation, returns remaining SUs.
+    Return TACC allocations on system connected to by conn_id. For each
+    allocation, returns remaining SUs. if no conn_id specified, defaults to
+    first SSH connection in `taccjm list`.
     """
-    if jm_id is None:
-        jms = tjm.list_jms()
-        if len(jms) == 0:
-            raise TACCJMError("No JM specified (--jm_id) and no JM")
-        jm_id = tjm.list_jms()[0]["jm_id"]
-    res = tjm.get_allocations(jm_id)
+    client = _get_client(conn_id)
+    res = client.get_allocations()
     str_res = filter_res(res, _allocation_fields, search, match)
-    click.echo(f"Allocations for {jm_id}:")
+    click.echo(f"Allocations for {conn_id}:")
     click.echo(str_res)
 
 
 @cli.command(short_help="Locate TACCJM server")
-@click.option("--start/--no-start", default=False)
-@click.option("--kill/--no-kill", default=False)
+@click.option("-s/-ns", "--start/--no-start", is_flag=True, default=False)
+@click.option("-k/-nk", "--kill/--no-kill", is_flag=True, default=False)
 def find_server(start, kill):
     """
     Find TACCJM Server
@@ -220,7 +279,7 @@ def find_server(start, kill):
     (host, port) being used. To change (host, port) combo, use
     `taccjm --server hostname 1111 find-server` with appropriate host and port.
     """
-    res = tjm.find_tjm_processes(start, kill)
+    res = tacc_api.find_server(start, kill)
     res = [
         {
             "type": x,
@@ -232,3 +291,107 @@ def find_server(start, kill):
     # str_res = filter_res(res, ["type", "pid", "create_time"])
     str_res = filter_res(res, ["type", "pid"])
     click.echo(str_res)
+
+
+@cli.command(short_help="Execute command on system via ssh")
+@click.argument("command")
+@click.option(
+    "-c",
+    "--conn_id",
+    default=None,
+    help="TACC connection id to run command on. If none specified, then "
+    + "defaults to first connection from a `taccjm list` command.",
+)
+@click.option(
+    "-w/-nw",
+    "--wait/--no-wait",
+    is_flag=True,
+    default=True,
+    help="Wait for command to execute",
+)
+@click.option(
+    "-e/-ne",
+    "--error/--no-error",
+    is_flag=True,
+    default=True,
+    help="Throw error if encountered.",
+)
+@click.option(
+    "-l/-nl",
+    "--local/--no-local",
+    is_flag=True,
+    default=False,
+    help="Run comand locally or remotely",
+)
+def exec(command, conn_id, wait, error, local):
+    """
+    Execute an arbitrary command via ssh.
+    """
+    client = _get_client(conn_id)
+    res = client.exec(command, wait, error, local)
+    str_command = command[:20] + "..." if len(command) > 20 else command
+    if wait:
+        click.echo(filter_res([res], ["id", "status", "rt"]))
+        click.echo(f"{client.user}@{client.id}$ {str_command}" + f"\n{res['stdout']}")
+    else:
+        click.echo(filter_res([res], ["id", "status", "ts"]))
+        click.echo(
+            f"Use `taccjm process {res['id']} -w` to wait for command " + "to finish"
+        )
+
+
+@cli.command(short_help="Process a command that was executed via ssh")
+@click.argument("command_id")
+@click.option(
+    "-c",
+    "--conn_id",
+    default=None,
+    help="TACC connection id to run command on. If none specified, then "
+    + "defaults to first connection from a `taccjm list` command.",
+)
+@click.option(
+    "-w/-nw",
+    "--wait/--no-wait",
+    is_flag=True,
+    default=True,
+    help="Wait for command to execute",
+    show_default=True,
+)
+@click.option(
+    "-e/-ne",
+    "--error/--no-error",
+    is_flag=True,
+    default=True,
+    help="Throw error if encountered.",
+    show_default=True,
+)
+@click.option(
+    "-nbytes", default=0, show_default=True, help="Run comand locally or remotely"
+)
+@click.option(
+    "-l/-nl",
+    "--local/--no-local",
+    is_flag=True,
+    default=False,
+    help="Run comand locally or remotely",
+    show_default=True,
+)
+def process(command_id, conn_id, wait, error, nbytes, local):
+    """
+    Execute an arbitrary command via ssh.
+    """
+    max_cmnd_str_len = 50
+    client = _get_client(conn_id)
+    res = client.process(command_id, wait, error, nbytes, local)
+    str_c = res["cmd"][:max_cmnd_str_len] + "..." if len(
+            res["cmd"]) > max_cmnd_str_len else res["cmd"]
+    if wait:
+        click.echo(filter_res([res], ["id", "status", "rt"]))
+        click.echo(f"{client.user}@{client.id}$ {str_c}" + f"\n{res['stdout']}")
+    else:
+        click.echo(filter_res([res], ["id", "status", "ts"]))
+        click.echo(f"{client.user}@{client.id}$ {str_c}")
+        click.echo(
+            f"... use `taccjm process {res['id']} -w` to wait for "
+            + "command to finish"
+        )

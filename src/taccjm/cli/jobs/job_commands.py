@@ -1,15 +1,11 @@
 """
 TACCJM Jobs CLI
 """
-import pdb
-import re
 from pathlib import Path
 
 import click
-from prettytable import PrettyTable
 
-import taccjm.taccjm_client as tjm
-from taccjm.exceptions import TACCJMError
+from taccjm.cli.utils import _get_client, _get_files_str
 from taccjm.utils import filter_res, format_job_dict
 
 __author__ = "Carlos del-Castillo-Negrete"
@@ -17,32 +13,33 @@ __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
 
-def _get_default():
-    jms = tjm.list_jms()
-    if len(jms) != 1:
-        raise TACCJMError("More than one or no job managers intialized.")
-    return jms[0]["jm_id"]
-
-
 @click.group(short_help="list/deploy/submit/cancel/remove/restore")
 @click.option(
-    "--jm_id",
+    "-c",
+    "--conn_id",
     default=None,
-    help="Job Manager to execute operation on. Defaults to first available.",
+    help="SSH Connection to execute operation on. Defaults to first available.",
 )
 @click.pass_context
-def jobs(ctx, jm_id):
+def jobs(ctx, conn_id):
     """
     TACC Job Manager Jobs
 
-    TACCJM Job operations. If no jm_id is specified, then jobs are on system
-    connected to by first job manager in a `taccjm list` operation.
+    TACCJM Job operations. If no conn_id is specified, then jobs are on system
+    connected to by first connection in a `taccjm list` operation.
     """
     ctx.ensure_object(dict)
-    ctx.obj["jm_id"] = jm_id
+    ctx.obj["client"] = _get_client(conn_id)
 
 
 @jobs.command(short_help="List jobs deployed.")
+@click.option(
+    "-n",
+    "--max_num_jobs",
+    default=10,
+    show_default=True,
+    help="Max number of jobs to display",
+)
 @click.option(
     "--match",
     default=r".",
@@ -50,15 +47,25 @@ def jobs(ctx, jm_id):
     help="Regular expression to search job ids on.",
 )
 @click.pass_context
-def list(ctx, match):
+def list(ctx, match, max_num_jobs):
     """
     List jobs
 
     List jobs deployed on job manager. Can filter results using --match option.
     """
-    jm_id = ctx.obj["jm_id"] if ctx.obj["jm_id"] is not None else _get_default()
-    res = [{"job_id": j} for j in tjm.list_jobs(jm_id)]
-    str_res = filter_res(res, ["job_id"], search="job_id", match=match)
+    client = ctx.obj["client"]
+    str_res = _get_files_str(
+        client,
+        client.jobs_dir,
+        attrs=['name', 'modified_time'],
+        recurse=True,
+        hidden=False,
+        search='name',
+        match=match,
+        fnames=True,
+        max_n=max_num_jobs,
+    )
+    click.echo(f'Jobs on {client.id} at {client.scripts_dir}:')
     click.echo(str_res)
 
 
