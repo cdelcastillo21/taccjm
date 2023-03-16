@@ -14,7 +14,7 @@ from typing import List, Union
 
 import pandas as pd
 
-from taccjm import tacc_ssh_api as tsa
+from taccjm.client import tacc_ssh_api as tsa
 from taccjm.exceptions import TACCCommandError
 from taccjm.utils import (check_path, filter_files, get_default_script,
                           hours_to_runtime_str, init_logger,
@@ -300,6 +300,7 @@ class TACCClient:
         wait: bool = True,
         error: bool = True,
         local: bool = False,
+        key: str = 'SYSTEM',
     ):
         """
         Run Command
@@ -320,6 +321,7 @@ class TACCClient:
 
             cmnd_config = {
                 "id": f"{len(self.local_commands.keys())}",
+                "key": key,
                 "cmd": cmnd,
                 "ts": datetime.now(),
                 "status": "STARTED",
@@ -332,6 +334,7 @@ class TACCClient:
             self.local_commands[str(cmnd_config["id"])] = cmnd_config
         else:
             cmnd_config = tsa.exec(self.id, cmnd, wait=wait)
+            cmnd_config[key] = key
             self.remote_commands[str(cmnd_config["id"])] = cmnd_config
 
         if wait:
@@ -339,9 +342,12 @@ class TACCClient:
         else:
             return cmnd_config
 
-    def process(self, cmnd_id, wait=True, error=True, nbytes=None, local: bool = False):
+    def process(self, cmnd_id, wait=True, error=True,
+                nbytes=None, local: bool = False):
         """
         Poll an executed command to see if it has completed.
+
+        TODO: implement cmnd_id = None -> Process all
         """
         if self.ssh_client is None or local:
             self.log.info(f"Getting command {cmnd_id} from local command list")

@@ -1,14 +1,20 @@
 """
 TACCJM Files CLI
 """
+import pdb
 from pathlib import Path
 
-import click
-
-from taccjm.cli.utils import _file_field_names, _get_client, _get_files_str
-from taccjm.utils import filter_res
-
 from rich.console import Console
+from rich.traceback import install
+from rich.syntax import Syntax
+from rich.panel import Panel
+from rich.table import Table
+import rich_click as click
+
+from taccjm.cli.utils import _command_field_fmts, _file_field_fmts, \
+        _get_client, build_table
+
+install(suppress=[click], max_frames=3)
 CONSOLE = Console()
 
 __author__ = "Carlos del-Castillo-Negrete"
@@ -50,35 +56,13 @@ def files(ctx, conn_id, job_id):
 @files.command(short_help="List files.")
 @click.option("-p", "--path", type=str, default=".", help="Path to list files.")
 @click.option(
-    "--attrs",
-    type=click.Choice(_file_field_names, case_sensitive=False),
-    multiple=True,
-    default=["name", "is_dir", "size_bytes", "modified_time"],
-    help="File attributes to include in output.",
-    show_default=True,
-)
-@click.option(
     "-r/-nr", "--recurse/--no-recurse", default=True, help="Get dir contents or not."
 )
 @click.option(
     "-h/-nh", "--hidden/--no-hidden", default=False, help="Include hidden output flag."
 )
-@click.option(
-    "--search",
-    type=click.Choice(_file_field_names, case_sensitive=False),
-    default="name",
-    help="Column to search.",
-    show_default=True,
-)
-@click.option(
-    "-m",
-    "--match",
-    default=r".",
-    show_default=True,
-    help="Regular expression to match.",
-)
 @click.pass_context
-def list(ctx, path, attrs, recurse, hidden, search, match):
+def list(ctx, path, recurse, hidden):
     """
     List Files
 
@@ -86,19 +70,21 @@ def list(ctx, path, attrs, recurse, hidden, search, match):
     regular expressions on any given output attribute.
     """
     client = ctx.obj["client"]
-    table = _get_files_str(
-        client,
-        path,
-        attrs=attrs,
+    rows = client.list_files(
+        path=path,
         recurse=recurse,
         hidden=hidden,
-        search=search,
-        match=match,
-        job_id=ctx.obj["job_id"],
+        job_id=ctx.obj['job_id'],
+        local=False,
     )
-    table.title = ("[not italic magenta bold]:desktop_computer:" +
-                   f"  {client.id}  :open_file_folder: {path}[/]")
-    CONSOLE.print(table)
+
+    str_res = build_table(
+            rows,
+            fields=ctx.obj['cols'],
+            fmts=_file_field_fmts,
+            search=ctx.obj['search'], match=ctx.obj['match'])
+
+    CONSOLE.print(str_res)
 
 
 @files.command(short_help="Show head/tail of file")
@@ -128,20 +114,31 @@ def peak(ctx, path, head, tail):
     text file. Output of operation is returned.
     """
     client = ctx.obj["client"]
-    pre = None
     job_id = ctx.obj["job_id"]
+
     if job_id is not None:
         path = client.job_path(job_id, path)
     else:
         path = client.abspath(path)
+
+    file_type = Path(path).suffix[1:]
+    table = Table(show_header=False, title_justify='left', box=None)
+    table.add_row("")
     if head > 0:
         res = client.exec(f"head -n {head} {path}")
-        pre = f"First {head}"
+        table.add_row(Panel(Syntax(res['stdout'], file_type,
+                                   theme="monokai", line_numbers=True),
+                            title=f"First {head} line(s)", expand=True))
     if tail > 0:
-        pre = f"Last {tail}" if pre is None else f"{pre} & Last {tail}"
+        if head > 0:
+            table.add_row("")
         res = client.exec(f"tail -n {tail} {path}")
-    click.echo(f"{pre} line(s) of {path} on {client.id} :")
-    click.echo(res["stdout"])
+        table.add_row(Panel(Syntax(res['stdout'], file_type,
+                                   theme="monokai", line_numbers=True),
+                            title=f"Last {tail} line(s)", expand=True))
+    table.add_row("")
+    CONSOLE.print(Panel(table, expand=False, title=f"{path}",
+                        title_align='left'))
 
 
 @files.command(short_help="Send a local file or directory.")
@@ -168,17 +165,23 @@ def upload(ctx, local_path, remote_path, file_filter):
 
     """
     client = ctx.obj["client"]
-    job_id = ctx.obj["job_id"]
-    client.upload(local_path, remote_path, job_id=job_id, file_filter=file_filter)
-    click.echo(f"{local_path} uploaded to {remote_path} on {client.id}:")
-    str_res = _get_files_str(
-        client,
-        remote_path,
+    client.upload(local_path, remote_path, job_id=ctx.obj['job_id'],
+                  file_filter=file_filter)
+    rows = client.list_files(
+        path=remote_path,
         recurse=True,
-        hidden=True,
-        job_id=job_id,
+        hidden=False,
+        job_id=ctx.obj['job_id'],
+        local=False,
     )
-    click.echo(str_res)
+    table = build_table(
+            rows,
+            fields=['filename', 'st_size'],
+            fmts=_file_field_fmts,
+            search=ctx.obj['search'], match=ctx.obj['match'])
+    table.title = (f"[not italic] {local_path} uploaded to " +
+                   f"{remote_path} on {client.id}:")
+    CONSOLE.print(table)
 
 
 @files.command(short_help="Get a remote file or directory")
@@ -208,10 +211,76 @@ def download(ctx, remote_path, local_path, file_filter):
     """
     client = ctx.obj["client"]
     job_id = ctx.obj["job_id"]
-    res = client.download(
+    _ = client.download(
         remote_path, local_path, job_id=job_id, file_filter=file_filter
     )
-    click.echo(f"{remote_path} downloaded to {res} on {client.id}:")
+    rows = client.list_files(
+        path=local_path,
+        recurse=True,
+        hidden=False,
+        local=True,
+    )
+    table = build_table(
+            rows,
+            fields=['filename', 'st_size'],
+            fmts=_file_field_fmts,
+            search=ctx.obj['search'], match=ctx.obj['match'])
+    table.title = (f"[not italic] {remote_path} from {client.id} " +
+                   f"downloaded to {local_path}")
+    CONSOLE.print(table)
+
+
+@files.command(short_help="Stream data directly to a remote file.")
+@click.argument("remote_path", type=str)
+@click.argument("data", type=str)
+@click.pass_context
+def write(ctx, data, remote_path):
+    """
+    Write Data
+
+    Write string DATA directly to a file on a remote system. WARNING: Will
+    overwrite existing file. REMOTE_PATH is assumed to be relative to a user's
+    home directory, unless job_id is specified, in which case the path is
+    assumed to be relative to the job directory.
+    """
+    # TODO: Update
+    client = ctx.obj["client"]
+    job_id = ctx.obj["job_id"]
+    client.write(data, remote_path, job_id)
+
+    remote_path = (
+        client.abspath(remote_path)
+        if job_id is None
+        else client.job_path(job_id, remote_path)
+    )
+    str_res = _get_files_str(
+        client,
+        str(Path(remote_path).parent),
+        search="name",
+        recurse=True,
+        match=str(Path(remote_path).name),
+    )
+    click.echo(f"Succesfully wrote file {remote_path}")
+    click.echo(str_res)
+
+
+@files.command(short_help="Stream data directly from a remote file.")
+@click.argument("remote_path", type=str)
+@click.pass_context
+def read(ctx, remote_path):
+    """
+    Read Data
+
+    Read data directly from REMOTE_PATH to stdout. REMOTE_PATH is assumed to be
+    relative to a user's home directory, unless job_id is specified, in which
+    case the path is assumed to be relative to the job directory.
+    """
+    # TODO: Update
+    client = ctx.obj["client"]
+    job_id = ctx.obj["job_id"]
+    res = client.read(remote_path, job_id)
+    click.echo(f"File {remote_path} contents:")
+    click.echo(res)
 
 
 @files.command(short_help="Send a remote file/directory to trash.")
@@ -244,49 +313,29 @@ def rm(ctx, remote_path, restore, wait):
     msg = f"{action} of {remote_path} on {client.id} starting."
     if wait:
         msg += " Waiting for it to complete..."
-        click.echo(msg)
+        CONSOLE.print(msg)
         client.process(res["id"], wait=True)
-        click.echo("Done!")
+        CONSOLE.print("Done!")
     else:
         msg += (
             " Performing in background. use `taccjm process [id] -w`"
             + " to wait for completion."
         )
-        click.echo(msg)
-        click.echo(filter_res([res], ["id", "status", "ts"]))
+        table = build_table([res], fmts=_command_field_fmts)
+        table.caption = (msg)
+        CONSOLE.print(table)
 
 
-@files.command(short_help="Send a remote file/directory to trash.")
+@files.command(short_help="View contents of trash directory")
 @click.pass_context
-@click.option(
-    "--attrs",
-    type=click.Choice(_file_field_names, case_sensitive=False),
-    multiple=True,
-    default=["name", "is_dir", "size_bytes", "modified_time"],
-    help="File attributes to include in output.",
-    show_default=True,
-)
-@click.option(
-    "--search",
-    type=click.Choice(_file_field_names, case_sensitive=False),
-    default="name",
-    help="Column to search.",
-    show_default=True,
-)
-@click.option(
-    "-m",
-    "--match",
-    default=r".",
-    show_default=True,
-    help="Regular expression to match.",
-)
-def trash(ctx, attrs, search, match):
+def ls_trash(ctx, attrs, search, match):
     """
     View Trash
 
     View contents of trash directory.
     """
     client = ctx.obj["client"]
+    fmts = _file_field_fmts = {
     str_res = _get_files_str(
         client,
         client.trash_dir,
@@ -297,56 +346,24 @@ def trash(ctx, attrs, search, match):
         match=match,
         trash_dir=True,
     )
-    click.echo(f"Trash dir for {client.id}:")
+    click.echo()
     click.echo(str_res)
 
-
-@files.command(short_help="Stream data directly to a remote file.")
-@click.argument("remote_path", type=str)
-@click.argument("data", type=str)
-@click.pass_context
-def write(ctx, data, remote_path):
-    """
-    Write Data
-
-    Write string DATA directly to a file on a remote system. WARNING: Will
-    overwrite existing file. REMOTE_PATH is assumed to be relative to a user's
-    home directory, unless job_id is specified, in which case the path is
-    assumed to be relative to the job directory.
-    """
     client = ctx.obj["client"]
-    job_id = ctx.obj["job_id"]
-    client.write(data, remote_path, job_id)
-
-    remote_path = (
-        client.abspath(remote_path)
-        if job_id is None
-        else client.job_path(job_id, remote_path)
+    rows = client.list_files(
+        path=client.trash_dir,
+        recurse=recurse,
+        hidden=hidden,
+        local=False,
     )
-    str_res = _get_files_str(
-        client,
-        str(Path(remote_path).parent),
-        search="name",
-        recurse=True,
-        match=str(Path(remote_path).name),
-    )
-    click.echo(f"Succesfully wrote file {remote_path}")
-    click.echo(str_res)
+
+    table = build_table(
+            rows,
+            fields=ctx.obj['cols'],
+            fmts=_trash_field_fmts,
+            search=ctx.obj['search'], match=ctx.obj['match'])
+    table.title = f"[not italic] Trash dir for {client.id}"
 
 
-@files.command(short_help="Stream data directly from a remote file.")
-@click.argument("remote_path", type=str)
-@click.pass_context
-def read(ctx, remote_path):
-    """
-    Read Data
+    CONSOLE.print(str_res)
 
-    Read data directly from REMOTE_PATH to stdout. REMOTE_PATH is assumed to be
-    relative to a user's home directory, unless job_id is specified, in which
-    case the path is assumed to be relative to the job directory.
-    """
-    client = ctx.obj["client"]
-    job_id = ctx.obj["job_id"]
-    res = client.read(remote_path, job_id)
-    click.echo(f"File {remote_path} contents:")
-    click.echo(res)

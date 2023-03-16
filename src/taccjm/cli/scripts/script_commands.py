@@ -3,7 +3,7 @@ TACCJM Scripts CLI
 """
 from pathlib import Path
 
-import click
+import rich_click as click
 
 from taccjm.cli.utils import _get_client, _get_files_str
 from taccjm.utils import filter_res

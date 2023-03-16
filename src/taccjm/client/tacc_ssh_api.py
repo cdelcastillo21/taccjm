@@ -132,12 +132,13 @@ def find_server(
     processes_found = {}
 
     # Strings defining commands
-    srv_cmd = f"python {os.path.join(TACCJM_SOURCE, 'tacc_ssh_server.py')}"
+    srv_script_path = os.path.join(TACCJM_SOURCE, 'client', 'tacc_ssh_server.py')
+    srv_cmd = f"python {srv_script_path}"
     srv_cmd += f" {TACC_SSH_HOST} {TACC_SSH_PORT}"
 
-    # TODO: implement heartbeat?
-    hb_path = f"{os.path.join(TACCJM_SOURCE, 'tacc_ssh_server_heartbeat.py')}"
-    hb_cmd = f"python {hb_path}"
+    hb_script_path = os.path.join(TACCJM_SOURCE,
+                                  'client', 'tacc_ssh_server_heartbeat.py')
+    hb_cmd = f"python {hb_script_path}"
     hb_cmd += f" --host={TACC_SSH_HOST} --port={TACC_SSH_PORT} "
 
     for proc in psutil.process_iter(["name", "pid", "cmdline"]):
@@ -412,12 +413,12 @@ def get(connection_id: str) -> dict:
     return res
 
 
-def exec(connection_id: str, cmnd: str, wait: bool = True):
+def exec(connection_id: str, cmnd: str, wait: bool = True, key: str = 'API'):
     """
     Exec a command
     """
 
-    json_data = {"cmnd": cmnd, "wait": wait}
+    json_data = {"cmnd": cmnd, "wait": wait, "key": key}
 
     # Make API call
     try:
@@ -444,6 +445,23 @@ def process(
         res = api_call("POST", f"{connection_id}/process", json_data=json_data)
     except TACCJMError as e:
         e.message = f"Error processing command {cmnd_id}"
+        logger.error(e.message)
+        raise e
+
+    return res
+
+
+def list_commands(
+    connection_id: str,
+):
+    """
+    List commands for an SSH connection
+    """
+
+    try:
+        res = api_call("GET", f"{connection_id}/commands")
+    except TACCJMError as e:
+        e.message = f"Error getting commands for {connection_id}"
         logger.error(e.message)
         raise e
 
@@ -641,3 +659,37 @@ def download(
         raise e
 
     return res
+
+
+def get_log(
+    connection_id: str = None,
+) -> str:
+    """
+    Get Log Files
+
+    Parameters
+    ----------
+    connection_id : str, optional
+        ID of Job Manager instance. If specified, will pull logs for this a
+        sepcific ssh session. Else pulls the servers log itself.
+
+    Returns
+    -------
+    """
+    pass
+#     data = {
+#         "source_path": remote_path,
+#         "dest_path": local_path,
+#         "file_filter": file_filter,
+#     }
+#     try:
+#         res = api_call("GET", f"{connection_id}/download", params=data)
+#     except TACCJMError as e:
+#         e.message = "download error"
+#         logger.error(e.message)
+#         raise e
+# 
+#     return res
+
+
+

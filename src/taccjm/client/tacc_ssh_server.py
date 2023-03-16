@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from taccjm.constants import TACCJM_DIR, make_taccjm_dir
-from taccjm.TACCSSHClient import TACCSSHClient
+from taccjm.client.TACCSSHClient import TACCSSHClient
 from taccjm.utils import get_log_level, get_log_level_str, init_logger
 
 __author__ = "Carlos del-Castillo-Negrete"
@@ -154,7 +154,7 @@ def get(
         return ret
 
 
-@app.delete("/{connection_id}", response_model=Connection)
+@app.delete("/{connection_id}")
 def stop(
     connection_id: str,
 ):
@@ -163,12 +163,13 @@ def stop(
         raise HTTPException(status_code=404, detail=f"ssh_error: {msg}")
     else:
         connection = CONNECTIONS.pop(connection_id)
-        connection.close()
+        connection['client'].close()
 
 
 class CommandRequest(BaseModel):
     cmnd: str
     wait: Union[bool, None] = True
+    key: Union[str, None] = None
 
 
 class ProcessRequest(BaseModel):
@@ -179,6 +180,7 @@ class ProcessRequest(BaseModel):
 
 class Command(BaseModel):
     id: int
+    key: str
     cmd: str
     ts: datetime
     status: str
@@ -196,7 +198,10 @@ def exec(connection_id: str, cmnd_req: CommandRequest):
     logger.info(
         f"Executing new command on {connection_id}", extra={"command_request": cmnd_req}
     )
-    res = ssh_client.execute_command(cmnd_req.cmnd, wait=cmnd_req.wait, error=False)
+    res = ssh_client.execute_command(cmnd_req.cmnd,
+                                     wait=cmnd_req.wait,
+                                     error=False,
+                                     key=cmnd_req.key)
     res = {i: res[i] for i in res if i != "channel"}
     CONNECTIONS[connection_id]["last_ts"] = datetime.now()
     logger.info(
@@ -236,6 +241,16 @@ def process(connection_id: str, proc_req: ProcessRequest):
 
     CONNECTIONS[connection_id]["last_ts"] = datetime.now()
 
+    return res
+
+
+@app.get("/{connection_id}/commands",
+         response_model=Union[Command, List[Command]])
+def list_commands(connection_id: str):
+    """Process command"""
+    ssh_client = _get_client(connection_id)
+    ssh_client.commands
+    res = [{i: r[i] for i in r if i != "channel"} for r in ssh_client.commands]
     return res
 
 
@@ -367,6 +382,7 @@ if __name__ == "__main__":
     HOST = sys.argv[1] if len(sys.argv) > 1 else "0.0.0.0"
     PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8000
     LOGLEVEL = get_log_level(sys.argv[3]) if len(sys.argv) > 3 else logging.INFO
+
     LOGFILE = f"{TACCJM_DIR}/ssh_server_{HOST}_{PORT}_log.json"
     serialize = True if "fmt" == "json" else False
     logger.add(LOGFILE, rotation="10 MB", filter="tacc_ssh_server",

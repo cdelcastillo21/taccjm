@@ -9,7 +9,7 @@ import begin
 import numpy as np
 from pythonjsonlogger import jsonlogger
 
-from taccjm import tacc_ssh_api as tsa
+from taccjm.client import tacc_ssh_api as tsa
 from taccjm.constants import TACCJM_DIR
 from taccjm.utils import get_log_level, init_logger, parse_allocations_string
 

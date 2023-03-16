@@ -5,7 +5,7 @@ import pdb
 import re
 from pathlib import Path
 
-import click
+import rich_click as click
 from prettytable import PrettyTable
 
 import taccjm.taccjm_client as tjm

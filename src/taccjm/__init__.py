@@ -17,4 +17,4 @@ except PackageNotFoundError:  # pragma: no cover
 finally:
     del version, PackageNotFoundError
 
-from .TACCJobManager import TACCJobManager
+from .client.TACCClient import TACCClient

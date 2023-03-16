@@ -25,7 +25,7 @@ from taccjm.constants import *  # For application configs
 # Custom exception for handling remote command errors
 from taccjm.exceptions import SSHCommandError
 # Modified paramiko ssh client and common paramiko exceptions
-from taccjm.SSHClient2FA import SSHClient2FA
+from taccjm.client.SSHClient2FA import SSHClient2FA
 from taccjm.utils import init_logger, tar_file
 
 __author__ = "Carlos del-Castillo-Negrete"
@@ -51,6 +51,7 @@ class TACCSSHClient(SSHClient2FA):
     -------
     execute_command
     process_command
+    process_active
     list_files
     upload
     download
