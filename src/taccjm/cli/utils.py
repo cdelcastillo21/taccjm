@@ -35,7 +35,7 @@ num_style = Style(color="blue", bgcolor=bgcolor)
 key_style = Style(color="cyan", bold=True, bgcolor=bgcolor)
 err_style = Style(color="red", bold=True, bgcolor=bgcolor)
 done_style = Style(color="green", bgcolor=bgcolor)
-run_style = Style(color="blue", bgcolor=bgcolor)
+run_style = Style(color="yellow", bgcolor=bgcolor)
 
 custom_theme = Theme({
     "key": "bold cyan",
@@ -45,7 +45,7 @@ custom_theme = Theme({
 })
 
 
-def _get_client(conn_id):
+def _get_client(conn_id, init=True):
     """
     Get first available client if conn_id is None, else client with conn_id.
     """
@@ -54,8 +54,9 @@ def _get_client(conn_id):
         if len(connections) == 0:
             raise ValueError("No connections found")
         conn_id = connections[0]["id"]
-    client = TACCClient(conn_id=conn_id)
-    return client
+    if init:
+        return TACCClient(conn_id=conn_id)
+    return conn_id
 
 
 def _trim(st, max_len):
@@ -121,7 +122,7 @@ def _fmt_path(path, trash_dir=False, fnames=False, search=False, match=r'.'):
     text = str(path)
     if trash_dir:
         text = basename(text).replace("___", "/")
-    elif fnames:
+    if fnames:
         text = basename(text)
 
     if search and re.search(match, text) is None:
@@ -131,7 +132,8 @@ def _fmt_path(path, trash_dir=False, fnames=False, search=False, match=r'.'):
 
 
 def _fmt_trash(path, search=False, match=r'.'):
-    return _fmt_path(path, trash_dir=True, search=search, match=match)
+    return _fmt_path(path, trash_dir=True, fnames=True,
+                     search=search, match=match)
 
 
 def _fmt_permissions(ls_str, search=False, match=r'.'):
@@ -206,9 +208,10 @@ def _fmt_status(status, search=False, match=r'.'):
     Go from commmand status to formatted string
     """
     text = str(status)
+    style = run_style
     if text == 'COMPLETE':
         style = done_style
-    elif text  == 'FAILED':
+    elif text == 'FAILED':
         style = err_style
 
     return Text.assemble(text, style=style)
@@ -382,12 +385,18 @@ _file_field_fmts = {
         "st_gid": ("Group", _fmt_user, key_style),
         "st_mode": ("Mode", _fmt_mode, key_style),
 }
-_trash_field_fmts = _file_field_fmts.copy()
-_trash_field_fmts['filename'] = ("Name", _fmt_trash, file_style)
+
+# When listing trash directory
+_trash_field_fmts ={
+        "filename": ("Name", _fmt_trash, file_style),
+        "st_size": ("Size", _fmt_bytes, num_style),
+        "st_mtime": ("Modified Time", _fmt_ts, ts_style),
+}
 
 # Available return fields for commands
 _command_field_fmts = {
         "id": ("ID", _fmt_id, key_style),
+        "key": ("Key", _fmt_id, key_style),
         "cmd": ("Command", _fmt_cmd, text_style),
         "status": ("Status", _fmt_status, done_style),
         "stdout": ("Output", _fmt_output, text_style),

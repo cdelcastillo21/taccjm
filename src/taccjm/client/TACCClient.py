@@ -298,7 +298,7 @@ class TACCClient:
         self,
         cmnd: str = "pwd",
         wait: bool = True,
-        error: bool = True,
+        fail: bool = True,
         local: bool = False,
         key: str = 'SYSTEM',
     ):
@@ -327,80 +327,117 @@ class TACCClient:
                 "status": "STARTED",
                 "stdout": "",
                 "stderr": "",
+                "rt": None,
+                "fail": fail,
                 "history": [],
                 "process": sub_proc,
-                "rt": None,
             }
             self.local_commands[str(cmnd_config["id"])] = cmnd_config
         else:
-            cmnd_config = tsa.exec(self.id, cmnd, wait=wait)
-            cmnd_config[key] = key
+            cmnd_config = tsa.exec(self.id, cmnd, wait=wait,
+                                   key=key, fail=fail)
             self.remote_commands[str(cmnd_config["id"])] = cmnd_config
 
         if wait:
-            return self.process(cmnd_config["id"], wait=wait, error=error)
+            return self.process(cmnd_config["id"], wait=wait)
         else:
             return cmnd_config
 
-    def process(self, cmnd_id, wait=True, error=True,
-                nbytes=None, local: bool = False):
+    def _process_local(self, cmnd_id, wait=True):
+        """
+        Process a local command
+        """
+        self.log.info(f"Getting command {cmnd_id} from local command list")
+        cmnd_config = self.local_commands[str(cmnd_id)]
+        prev_status = {"status": cmnd_config["status"], "ts": cmnd_config["ts"]}
+        proc = cmnd_config["process"]
+        cmnd_config["rc"] = proc.poll()
+        if wait or cmnd_config["rc"] is not None:
+            self.log.info(f"Waiting for command {cmnd_id} to finish....")
+            cmnd_config["rc"] = proc.wait()
+            self.log.info(f"Command {cmnd_id} done. Reading output.")
+            cmnd_config["stdout"] = proc.stdout.read().decode("utf-8")
+            cmnd_config["stderr"] = proc.stderr.read().decode("utf-8")
+
+            # update statuses
+            cmnd_config["history"].append(prev_status)
+            ts = datetime.now()
+            cmnd_config["ts"] = ts
+            cmnd_config["rt"] = (
+                cmnd_config["ts"] - cmnd_config["history"][-1]["ts"]
+            ).seconds
+            if cmnd_config["rc"] != 0:
+                cmnd_config["status"] = "FAILED"
+                self.log.info(f"Command {cmnd_id} failed!")
+            else:
+                cmnd_config["status"] = "COMPLETE"
+                self.log.info(f"Command {cmnd_id} completed!")
+        else:
+            self.log.info(f"Command {cmnd_id} is still running.")
+            cmnd_config["stdout"] = proc.stdout.read()
+            cmnd_config["status"] = "RUNNING"
+            cmnd_config["ts"] = datetime.now()
+            if cmnd_config["status"] != prev_status["status"]:
+                cmnd_config["history"].append(prev_status)
+
+        return cmnd_config
+
+    def process(self,
+                cmnd_id=None,
+                poll=True,
+                wait=True,
+                error=True,
+                nbytes=None,
+                local: bool = False):
         """
         Poll an executed command to see if it has completed.
 
         TODO: implement cmnd_id = None -> Process all
         """
         if self.ssh_client is None or local:
-            self.log.info(f"Getting command {cmnd_id} from local command list")
-            cmnd_config = self.local_commands[str(cmnd_id)]
-            prev_status = {"status": cmnd_config["status"], "ts": cmnd_config["ts"]}
-            proc = cmnd_config["process"]
-            cmnd_config["rc"] = proc.poll()
-            if wait or cmnd_config["rc"] is not None:
-                self.log.info(f"Waiting for command {cmnd_id} to finish....")
-                cmnd_config["rc"] = proc.wait()
-                self.log.info(f"Command {cmnd_id} done. Reading output.")
-                cmnd_config["stdout"] = proc.stdout.read().decode("utf-8")
-                cmnd_config["stderr"] = proc.stderr.read().decode("utf-8")
-
-                # update statuses
-                cmnd_config["history"].append(prev_status)
-                ts = datetime.now()
-                cmnd_config["ts"] = ts
-                cmnd_config["rt"] = (
-                    cmnd_config["ts"] - cmnd_config["history"][-1]["ts"]
-                ).seconds
-                if cmnd_config["rc"] != 0:
-                    cmnd_config["status"] = "FAILED"
-                    self.log.info(f"Command {cmnd_id} failed!")
-                else:
-                    cmnd_config["status"] = "COMPLETE"
-                    self.log.info(f"Command {cmnd_id} completed!")
+            if cmnd_id is None:
+                self.log.info("Getting active all active local commands")
+                active = [c for c in self.local_comands.values()
+                          if c['status'] == 'RUNNING']
             else:
-                self.log.info(f"Command {cmnd_id} is still running.")
-                cmnd_config["stdout"] = proc.stdout.read()
-                cmnd_config["status"] = "RUNNING"
-                cmnd_config["ts"] = datetime.now()
-                if cmnd_config["status"] != prev_status["status"]:
-                    cmnd_config["history"].append(prev_status)
+                active = [self.local_commands[str(cmnd_id)]]
 
-            self.local_commands[str(cmnd_config["id"])] = cmnd_config
+            if not poll:
+                return active
+
+            processed_commands = [self._process_local(c, wait)
+                                  for c in active]
         else:
-            cmnd_config = tsa.process(self.id, cmnd_id, nbytes=nbytes, wait=wait)
-            self.remote_commands[str(cmnd_config["id"])] = cmnd_config
+            processed_commands = tsa.process(
+                    self.id, cmnd_id=cmnd_id,
+                    nbytes=nbytes, wait=wait,
+                    poll=poll)
 
-        logconfig = {i: cmnd_config[i] for i in cmnd_config if i != "process"}
-        if cmnd_config["status"] == "FAILED":
-            msg = f"Command {cmnd_id} failed"
-            self.log.error(msg, extra={"cmnd_config": logconfig})
-            if error:
-                raise TACCCommandError(self.system, self.user, cmnd_config)
+            for cmnd_config in processed_commands:
+                self.remote_commands[str(cmnd_config["id"])] = cmnd_config
 
-        self.log.info(
-            f"Processed command {cmnd_id}",
-            extra={"cmnd_config": self._trim_cmnd_dict(cmnd_config)},
-        )
+            if not poll:
+                return processed_commands
 
-        return cmnd_config
+        failed = []
+        for cmnd_config in processed_commands:
+            logconfig = {i: cmnd_config[i] for i in cmnd_config
+                         if i != "process"}
+            if cmnd_config["status"] == "FAILED":
+                msg = f"Command {cmnd_id} failed"
+                self.log.error(msg, extra={"cmnd_config": logconfig})
+                if cmnd_config['fail']:
+                    failed.append(cmnd_config)
+
+            self.log.info(
+                f"Processed command {cmnd_id}",
+                extra={"cmnd_config": self._trim_cmnd_dict(cmnd_config)},
+            )
+
+        if error and len(failed) > 0:
+            raise TACCCommandError(self.system, self.user, failed)
+
+        return processed_commands
 
     def rm(self, remote_path: str, restore=False) -> None:
         """
@@ -700,7 +737,7 @@ class TACCClient:
         # Submit to SLURM queue -> Note we do this from the job_directory
         cmnd = f"cd {job_config['job_dir']} && "
         cmnd += f"sbatch {job_config['submit_script']}"
-        ret = self.exec(cmnd, error=True)
+        ret = self.exec(cmnd, fail=True)
         job_config["slurm_id"] = ret["stdout"].split("\n")[-2].split(" ")[-1]
 
         # Save job config
@@ -809,7 +846,7 @@ class TACCClient:
 
         rm_cmnd = self.rm(job_dir, restore=True)
         try:
-            self.process(rm_cmnd["id"], wait=True, error=True)
+            self.process(rm_cmnd["id"], wait=True)
         except TACCCommandError as t:
             msg = f"restore_job - Job {job_id} restore command failed."
             self.log.error(msg, extra={"command_config": t.command_config})
@@ -852,9 +889,9 @@ class TACCClient:
         """
         mamba_res = self.exec("mamba --help", wait=False)
         conda_res = self.exec("conda --help", wait=False)
-        mamba_res = self.process(mamba_res["id"], wait=True, error=False)
+        mamba_res = self.process(mamba_res["id"], wait=True)
         if mamba_res["rc"] != 0:
-            conda_res = self.process(conda_res["id"], wait=True, error=False)
+            conda_res = self.process(conda_res["id"], wait=True)
             if conda_res["rc"] == 0:
                 self.pm = "conda"
         else:
@@ -884,7 +921,7 @@ class TACCClient:
             cmnd = f"{self.pm} list --name {env}"
             cols = ["name", "version", "build", "channel"]
             skiprows = 3
-        res = self.exec(cmnd, wait=True, error=True)
+        res = self.exec(cmnd, wait=True, fail=True)
         fp = StringIO(res["stdout"].replace("*", " "))
 
         if env is not None:

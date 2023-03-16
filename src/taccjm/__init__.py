@@ -18,3 +18,4 @@ finally:
     del version, PackageNotFoundError
 
 from .client.TACCClient import TACCClient
+from .sim.TACCSimulation import TACCSimulation

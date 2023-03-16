@@ -15,12 +15,12 @@ patch()
 
 from taccjm.client.tacc_ssh_api import set_host
 from taccjm.constants import TACC_SSH_HOST, TACC_SSH_PORT
-from taccjm.cli.server import server_commands as server_cli
-from taccjm.cli.sessions import session_commands as session_cli
-from taccjm.cli.files import file_commands as files_cli
-# from taccjm.cli.scripts import script_commands as scripts_cli
+from taccjm.cli.server import server_cli
+from taccjm.cli.sessions import sessions_cli
+from taccjm.cli.files import files_cli
+from taccjm.cli.commands import commands_cli
+from taccjm.cli.scripts import scripts_cli
 # from taccjm.cli.jobs import job_commands as jobs_cli
-# from taccjm.cli.shell import shell_commands as shell_cli
 # from taccjm.cli.utils import _get_client, build_table
 
 __author__ = "Carlos del-Castillo-Negrete"
@@ -39,6 +39,12 @@ TACC_PW = os.getenv("TACC_PW")
     type=(str, int),
     default=(TACC_SSH_HOST, TACC_SSH_PORT),
     help="Host and port of location of TACC JM server to talk to.",
+)
+@click.option(
+    "-s",
+    "--session_id",
+    default=None,
+    help="Session to execute operation on. Defaults to first available.",
 )
 @click.option(
     "-c",
@@ -61,23 +67,33 @@ TACC_PW = os.getenv("TACC_PW")
     show_default=True,
     help="Regular expression to match on result column.",
 )
+@click.option(
+    "-n",
+    "--max_n",
+    default=100,
+    show_default=True,
+    help="Maximum number of entries to show from top. Use <0 for bottom.",
+)
 @click.pass_context
 def cli(ctx, server=(TACC_SSH_HOST, TACC_SSH_PORT),
-        cols=None, search=None, match=r'.'):
+        session_id=None, cols=None, search=None, match=r'.', max_n=100):
     """
     TODO: Add explanation here
     """
     ctx.ensure_object(dict)
     if server[0] != TACC_SSH_HOST or server[1] != TACC_SSH_PORT:
         ctx.obj['host'], ctx.obj['port'] = set_host(server[0], server[1])
+    ctx.obj["session_id"] = session_id
     ctx.obj["cols"] = cols
     ctx.obj["search"] = search
     ctx.obj["match"] = match
+    ctx.obj["max_n"] = max_n
 
 
 cli.add_command(server_cli.server)
-cli.add_command(session_cli.sessions)
+cli.add_command(sessions_cli.sessions)
 cli.add_command(files_cli.files)
-# cli.add_command(scripts_cli.scripts)
+cli.add_command(commands_cli.commands)
+cli.add_command(scripts_cli.scripts)
 # cli.add_command(jobs_cli.jobs)
 # cli.add_command(shell_cli.shell)

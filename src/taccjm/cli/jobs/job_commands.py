@@ -32,6 +32,91 @@ def jobs(ctx, conn_id):
     ctx.obj["client"] = _get_client(conn_id)
 
 
+@cli.command(short_help="Show SLURM job queue on JM_ID for USER.")
+@click.option(
+    "-c",
+    "--conn_id",
+    default=None,
+    help="TACC connection id to show queue for. If none specified, then "
+    + "defaults to first connection from a `taccjm list` command.",
+)
+@click.option(
+    "-u",
+    "--user",
+    default=None,
+    help="User to show job queue for. Use `all` ti show queue for all users",
+)
+@click.option(
+    "-s",
+    "--search",
+    type=click.Choice(_queue_fields, case_sensitive=False),
+    help="Column to search.",
+    show_default=True,
+    default="username",
+)
+@click.option(
+    "-m",
+    "--match",
+    default=r".",
+    show_default=True,
+    help="Regular expression to match.",
+)
+def showq(conn_id, user, search, match):
+    """
+    Show TACC SLURM Job Queue
+
+    Returns the active SLURM Job queue on TACC system that JM_ID is connected
+    to, with fields:\n
+        - job_id : SLURM job id. NOT TACCJM Job ID.\n
+        - job_name : SLURM job name.\n
+        - username : User that launched job.\n
+        - state : State of job.\n
+        - nodes : Nodes request.\n
+        - remaining : Time remaining in job if running.\n
+        - start_time : Start time of job.
+
+    Use `--search` and `--match` flags to filter results.
+    """
+    client = _get_client(conn_id)
+    res = client.showq(user=user)
+    str_res = build_table(res, _queue_fields)
+    click.echo(f"SLURM Queue for {user} on {conn_id}:")
+    click.echo(str_res)
+
+
+@cli.command()
+@click.option(
+    "-c",
+    "--conn_id",
+    default=None,
+    help="TACC connection id to get allocatiosn for. If none specified, then "
+    + "defaults to first connection from a `taccjm list` command.",
+)
+@click.option(
+    "--search",
+    type=click.Choice(_allocation_fields, case_sensitive=False),
+    help="Column to search.",
+    show_default=True,
+    default="name",
+)
+@click.option(
+    "--match", default=r".", show_default=True, help="Regular expression to match."
+)
+def allocations(conn_id, search, match):
+    """
+    Get TACC Allocations
+
+    Return TACC allocations on system connected to by conn_id. For each
+    allocation, returns remaining SUs. if no conn_id specified, defaults to
+    first SSH connection in `taccjm list`.
+    """
+    client = _get_client(conn_id)
+    res = client.get_allocations()
+    str_res = build_table(res, _allocation_fields, search, match)
+    click.echo(f"Allocations for {conn_id}:")
+    click.echo(str_res)
+
+
 @jobs.command(short_help="List jobs deployed.")
 @click.option(
     "-n",
@@ -172,3 +257,5 @@ def restore(ctx, job_id):
     job = tjm.restore_job(jm_id, job_id)
     str_res = format_job_dict(job)
     click.echo(str_res)
+
+

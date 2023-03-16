@@ -237,7 +237,11 @@ class TACCSSHClient(SSHClient2FA):
         path = path if posixpath.isabs(path) else posixpath.join(self.scratch_dir, path)
         return path
 
-    def execute_command(self, cmnd, wait=True, error=True) -> None:
+    def execute_command(self, cmnd,
+                        wait=True,
+                        fail=True,
+                        key='SYSTEM'
+                        ) -> None:
         """
         Executes a shell command through ssh on a TACC resource.
 
@@ -275,6 +279,7 @@ class TACCSSHClient(SSHClient2FA):
         ts = datetime.now()
         command_config = {
             "id": command_id,
+            "key": key,
             "cmd": cmnd,
             "ts": ts,
             "status": "STARTED",
@@ -283,11 +288,12 @@ class TACCSSHClient(SSHClient2FA):
             "history": [],
             "channel": channel,
             "rt": None,
+            "fail": fail,
         }
         self.commands.append(command_config)
 
         if wait:
-            return self.process_command(command_id, wait=True, error=error)
+            return self.process_command(command_id, wait=True)
         else:
             return command_config
 
@@ -296,7 +302,7 @@ class TACCSSHClient(SSHClient2FA):
         command_id: int,
         nbytes: int = None,
         wait=False,
-        error=True,
+        error=False,
         max_nbytes: int = 1000000,
     ):
         """
@@ -329,16 +335,10 @@ class TACCSSHClient(SSHClient2FA):
             command_config["rt"] = (ts - command_config["history"][0]["ts"]).seconds
             if command_config["rc"] != 0:
                 command_config["status"] = "FAILED"
-                if error:
-                    # Build SSH Command Error, only place this should be done
-                    t = SSHCommandError(self.system, self.user, command_config)
-
-                    # Only log the actual SSHCommandError object once, here
-                    self.log.error(t.__str__())
-
-                    # Update command list before erroring out
-                    self.commands[command_id - 1] = command_config
-                    raise t
+                self.commands[command_id - 1] = command_config
+                if error and command_config["fail"]:
+                    raise SSHCommandError(self.system,
+                                          self.user, command_config)
             else:
                 command_config["status"] = "COMPLETE"
         else:
@@ -356,12 +356,14 @@ class TACCSSHClient(SSHClient2FA):
 
         return command_config
 
-    def process_active(self, nbytes: int = None):
+    def process_active(self, poll: bool = True, nbytes: int = None):
         """
         Poll all active commands.
         """
         ds = ["COMPLETE", "FAILED"]
         active_commands = [c for c in self.commands if c["status"] not in ds]
+        if not poll:
+            return active_commands
         self.log.info(f"Polling {len(active_commands)} active commands.")
         still_active = []
         for cmnd in active_commands:

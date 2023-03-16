@@ -18,6 +18,12 @@ from taccjm.constants import TACCJM_DIR, make_taccjm_dir
 from taccjm.client.TACCSSHClient import TACCSSHClient
 from taccjm.utils import get_log_level, get_log_level_str, init_logger
 
+from rich.traceback import install
+from rich.console import Console
+
+install(max_frames=3, show_locals=True)
+CONSOLE = Console()
+
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
@@ -170,17 +176,19 @@ class CommandRequest(BaseModel):
     cmnd: str
     wait: Union[bool, None] = True
     key: Union[str, None] = None
+    fail: Union[bool, None] = True
 
 
 class ProcessRequest(BaseModel):
     cmnd_id: Union[int, None] = None
     nbytes: Union[int, None] = None
     wait: Union[bool, None] = True
+    poll: Union[bool, None] = True
 
 
 class Command(BaseModel):
     id: int
-    key: str
+    key: Union[str, None]
     cmd: str
     ts: datetime
     status: str
@@ -189,6 +197,7 @@ class Command(BaseModel):
     history: List[Dict]
     rt: Union[float, int, None]
     rc: Union[int, None]
+    fail: Union[bool, None] = True
 
 
 @app.post("/{connection_id}/exec", response_model=Command)
@@ -196,12 +205,13 @@ def exec(connection_id: str, cmnd_req: CommandRequest):
     """Execute command"""
     ssh_client = _get_client(connection_id)
     logger.info(
-        f"Executing new command on {connection_id}", extra={"command_request": cmnd_req}
+        f"Executing new command on {connection_id}",
+        extra={"command_request": cmnd_req}
     )
     res = ssh_client.execute_command(cmnd_req.cmnd,
                                      wait=cmnd_req.wait,
-                                     error=False,
-                                     key=cmnd_req.key)
+                                     key=cmnd_req.key,
+                                     fail=cmnd_req.fail)
     res = {i: res[i] for i in res if i != "channel"}
     CONNECTIONS[connection_id]["last_ts"] = datetime.now()
     logger.info(
@@ -218,21 +228,30 @@ def process(connection_id: str, proc_req: ProcessRequest):
 
     ssh_client = _get_client(connection_id)
     if proc_req.cmnd_id is not None:
+        if not proc_req.poll:
+            logger.info(
+                f"Returning command {proc_req.cmnd_id} without polling",
+                extra={"process_request": proc_req},
+            )
+            return [ssh_client.commands[proc_req.cmnd_id]]
+
         logger.info(
-            f"Processing command {proc_req.cmnd_id} on {connection_id}",
+            f"Processing command {proc_req.cmnd_id}",
             extra={"process_request": proc_req},
         )
         res = ssh_client.process_command(
-            proc_req.cmnd_id, nbytes=proc_req.nbytes, wait=proc_req.wait, error=False
+            proc_req.cmnd_id, nbytes=proc_req.nbytes,
+            wait=proc_req.wait, error=False,
         )
-        res = {i: res[i] for i in res if i != "channel"}
+        res = [{i: res[i] for i in res if i != "channel"}]
         logger.info(
-            f"Command {res['id']} execute/processed on {connection_id}.",
-            extra={"command_config": res},
+            f"Command {res[0]['id']} execute/processed on {connection_id}.",
+            extra={"command_config": res[0]},
         )
     else:
         logger.info("Polling all active commands", extra={"process_request": proc_req})
-        res = ssh_client.process_active(nbytes=proc_req.nbytes)
+        res = ssh_client.process_active(poll=proc_req.poll,
+                                        nbytes=proc_req.nbytes)
         res = [{i: r[i] for i in r if i != "channel"} for r in res]
         logger.info(
             f"{len(res)} commands still active n {connection_id}.",

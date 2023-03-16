@@ -20,6 +20,9 @@ from fnmatch import fnmatch  # For unix-style filename pattern matching
 from pathlib import Path
 from typing import Tuple  # For type hinting
 
+from loguru import logger
+from rich.logging import RichHandler
+
 import numpy as np
 import pandas as pd
 from prettytable import PrettyTable
@@ -266,6 +269,8 @@ def init_logger(
     if logger.hasHandlers():
         return log_config, logger
 
+    logHandler = RichHandler(level=log_config['level'],
+                             )
     if isinstance(log_config["output"], str):
         logHandler = logging.FileHandler(log_config["output"])
     else:
@@ -474,3 +479,4 @@ def check_path(path: str):
         return False
     else:
         return True
+

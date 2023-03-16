@@ -12,7 +12,7 @@ from rich.table import Table
 import rich_click as click
 
 from taccjm.cli.utils import _command_field_fmts, _file_field_fmts, \
-        _get_client, build_table
+        _get_client, build_table, _trash_field_fmts
 
 install(suppress=[click], max_frames=3)
 CONSOLE = Console()
@@ -23,12 +23,6 @@ __license__ = "MIT"
 
 
 @click.group(short_help="list/peak/download/upload/read/write/rm/trash")
-@click.option(
-    "-c",
-    "--conn_id",
-    default=None,
-    help="Connection to execute operation on. Defaults to first available.",
-)
 @click.option(
     "-j",
     "--job_id",
@@ -47,10 +41,9 @@ def files(ctx, conn_id, job_id):
     paths, if not absolute, are releative to home directory on TACC system.
     If job_id is specified, then remote paths are relative to job directory.
     """
-    client = _get_client(conn_id)
     ctx.ensure_object(dict)
     ctx.obj["job_id"] = job_id
-    ctx.obj["client"] = client
+    ctx.obj['client'] = _get_client(ctx.obj['session_id'])
 
 
 @files.command(short_help="List files.")
@@ -69,7 +62,7 @@ def list(ctx, path, recurse, hidden):
     List files in a given directory (defaults to home). Can search using
     regular expressions on any given output attribute.
     """
-    client = ctx.obj["client"]
+    client = ctx.obj['client']
     rows = client.list_files(
         path=path,
         recurse=recurse,
@@ -243,7 +236,6 @@ def write(ctx, data, remote_path):
     home directory, unless job_id is specified, in which case the path is
     assumed to be relative to the job directory.
     """
-    # TODO: Update
     client = ctx.obj["client"]
     job_id = ctx.obj["job_id"]
     client.write(data, remote_path, job_id)
@@ -253,15 +245,16 @@ def write(ctx, data, remote_path):
         if job_id is None
         else client.job_path(job_id, remote_path)
     )
-    str_res = _get_files_str(
-        client,
-        str(Path(remote_path).parent),
-        search="name",
-        recurse=True,
-        match=str(Path(remote_path).name),
+    rows = client.list_files(
+        path=remote_path,
+        local=False,
     )
-    click.echo(f"Succesfully wrote file {remote_path}")
-    click.echo(str_res)
+    table = build_table(
+            rows,
+            fields=['filename', 'st_size'],
+            fmts=_file_field_fmts)
+    table.title = (f"[not italic] Succesfully wrote file {remote_path}")
+    CONSOLE.print(table)
 
 
 @files.command(short_help="Stream data directly from a remote file.")
@@ -275,12 +268,14 @@ def read(ctx, remote_path):
     relative to a user's home directory, unless job_id is specified, in which
     case the path is assumed to be relative to the job directory.
     """
-    # TODO: Update
     client = ctx.obj["client"]
     job_id = ctx.obj["job_id"]
     res = client.read(remote_path, job_id)
-    click.echo(f"File {remote_path} contents:")
-    click.echo(res)
+    file_type = Path(remote_path).suffix[1:]
+    CONSOLE.print(Panel(Syntax(res, file_type,
+                               theme="monokai", line_numbers=True),
+                        title=f"[not italic] File {remote_path} contents:",
+                        expand=True))
 
 
 @files.command(short_help="Send a remote file/directory to trash.")
@@ -328,32 +323,16 @@ def rm(ctx, remote_path, restore, wait):
 
 @files.command(short_help="View contents of trash directory")
 @click.pass_context
-def ls_trash(ctx, attrs, search, match):
+def trash(ctx):
     """
     View Trash
 
     View contents of trash directory.
     """
     client = ctx.obj["client"]
-    fmts = _file_field_fmts = {
-    str_res = _get_files_str(
-        client,
-        client.trash_dir,
-        attrs=attrs,
-        recurse=True,
-        hidden=False,
-        search=search,
-        match=match,
-        trash_dir=True,
-    )
-    click.echo()
-    click.echo(str_res)
-
-    client = ctx.obj["client"]
     rows = client.list_files(
         path=client.trash_dir,
-        recurse=recurse,
-        hidden=hidden,
+        recurse=True,
         local=False,
     )
 
@@ -362,8 +341,7 @@ def ls_trash(ctx, attrs, search, match):
             fields=ctx.obj['cols'],
             fmts=_trash_field_fmts,
             search=ctx.obj['search'], match=ctx.obj['match'])
-    table.title = f"[not italic] Trash dir for {client.id}"
-
-
-    CONSOLE.print(str_res)
+    icon = ":litter_in_bin_sign:"
+    table.title = f"[not italic]{icon} {client.trash_dir}{icon}" 
+    CONSOLE.print(table)
 

@@ -413,12 +413,14 @@ def get(connection_id: str) -> dict:
     return res
 
 
-def exec(connection_id: str, cmnd: str, wait: bool = True, key: str = 'API'):
+def exec(connection_id: str, cmnd: str,
+         wait: bool = True, key: str = 'API',
+         fail: bool = True,):
     """
     Exec a command
     """
 
-    json_data = {"cmnd": cmnd, "wait": wait, "key": key}
+    json_data = {"cmnd": cmnd, "wait": wait, "key": key, 'fail': fail}
 
     # Make API call
     try:
@@ -432,13 +434,15 @@ def exec(connection_id: str, cmnd: str, wait: bool = True, key: str = 'API'):
 
 
 def process(
-    connection_id: str, cmnd_id: int = None, nbytes: int = None, wait: bool = True
+        connection_id: str, cmnd_id: int = None, poll: bool = True,
+        nbytes: int = None, wait: bool = True
 ):
     """
     Process a command
     """
 
-    json_data = {"cmnd_id": cmnd_id, "nbytes": nbytes, "wait": wait}
+    json_data = {"cmnd_id": cmnd_id, "poll": poll,
+                 "nbytes": nbytes, "wait": wait}
 
     # Make API call
     try:

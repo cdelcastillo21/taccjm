@@ -7,10 +7,19 @@ from pathlib import Path
 
 import __main__
 
+from loguru import logger
+from rich.traceback import install
+from rich.logging import RichHandler
+
 from taccjm.exceptions import TACCCommandError
-from taccjm.TACCClient import TACCClient
+from taccjm.client.TACCClient import TACCClient
 from taccjm.utils import (get_default_script, get_log_level_str,
-                          hours_to_runtime_str, init_logger, read_log)
+                          hours_to_runtime_str, read_log)
+
+install()
+logger.configure(handlers=[{"sink": RichHandler(markup=True,
+                                                rich_tracebacks=True),
+                            "format": "{message}"}])
 
 submit_script_template = get_default_script("submit_script.sh", ret="text")
 
@@ -26,7 +35,47 @@ main_clause = """if __name__ == '__main__':
 
 class TACCSimulation:
     """
-    Base class for a simulation job.
+    Base class for a TACC Simulation
+
+    This class should be inherited from to construct HPC workflows that execute
+    on TACC systems. It is environment agnostic in the sense that the HPC job
+    will always run on TACC, but it can be called from any environment, even
+    one running outside of TACC clusters. The two main entrypoints for the class
+    are the `setup` and `run` methods. These should not be modified by the
+    inherited classes. 
+
+    The main components that need to be modified for a user's particular
+    simulation case are the following:
+
+        - JOB_DEFAULTS (optional) : Dictionary with defaults for a job of this
+        simulation time. This includes:
+            - allocation : TACC allocation to use for Slurm job
+            - node_count : Number of TACC Nodes to allocation for job
+            - processors_per_node : Max number of processes per node.
+            - max_run_time : Max runtime, either in decimal hours or HH:MM:SS.
+            - queue : Queue to run on (note this correspond to system queues).
+            - dependencies : Slurm IDs that this job is dependant upon.
+        - ARGUMENTS (optional) : List of dictionaries defining arguments that
+        should be passed to this simulation on a per job basis. Each dictioanry
+        should include:
+            - name : Name of argument. This name will be the name of the key in
+            the classes `job_config` attribute during execution time of the job.
+            - type : Either `argument` or `input`. Arguments are just passed
+            as values to the run_job() method while inputs are assumed to be
+            paths to files/folders that need to be copied to the job directory
+            upon staging the job. The corresponding path to the file/folder
+            within the job directory is then passed as the argument value to
+            the job_config dictionary at job run time.
+            - label/desc (optional) : Short/long descriptions of arguments.
+        - ENV_CONFIG : Dictionary
+            - modules : List of TACC modules the simulation is dependant upon.
+            - conda_env : Name of conda environment on TACC system the
+            simulation should run under. Note this will be created if it does
+            not exist.
+            - conda_packages : List of conda packages required by this
+            simulation to run.
+            - pip_packages : List of pip packages required for this
+            simulation to run.
     """
 
     JOB_DEFAULTS = {
@@ -55,11 +104,18 @@ class TACCSimulation:
         },
     ]
 
-    ENV_CONFIG = {
+    # TODO: Base environment config? for TACC simulation
+    BASE_ENV_CONFIG = {
         "modules": ["remora"],
-        "conda_env": "taccjm",
         "conda_packages": "pip",
         "pip_packages": "git+https://github.com/cdelcastillo21/taccjm.git@0.0.5-improv",
+    }
+
+    ENV_CONFIG = {
+        "conda_env": "taccjm",
+        "modules": [],
+        "conda_packages": [],
+        "pip_packages": [],
     }
 
     def __init__(
@@ -70,20 +126,18 @@ class TACCSimulation:
         script_file: str = None,
         class_name: str = None,
     ):
-        self.log_config, self.log = init_logger(__name__, log_config)
-
         if "__file__" in dir(__main__):
             self.is_script = True
             self.script_file = __main__.__file__
-            self.log.info(f"Running from main script {self.script_file}")
+            logger.info(f"Initializing sim from main at {self.script_file}")
         else:
             self.is_script = False
             if script_file is None:
                 self.script_file = __file__
-                self.log.info(f"Running from base class at {self.script_file}")
+                logger.info(f"Initalizing from base at {self.script_file}")
             else:
                 self.script_file = script_file
-                self.log.info(f"Running from inherited class at {self.script_file}")
+                logger.info(f"Initializing from script at {self.script_file}")
 
         self.name = name if name is not None else Path(self.script_file).stem
         self.client = TACCClient(system=system, log_config=log_config)
@@ -97,9 +151,9 @@ class TACCSimulation:
         Parse a job config submit script text, with proper directives.
         """
         extra_directives = ""
-        dependency = job_config["slurm"].get("dependency")
-        if dependency is not None:
-            extra_directives += "\n#SBATCH --dependency=afterok:" + str(dependency)
+        dep = job_config["slurm"].get("dependency")
+        if dep is not None:
+            extra_directives += "\n#SBATCH --dependency=afterok:" + str(dep)
 
         rt = job_config["slurm"]["max_run_time"]
         rt = hours_to_runtime_str(rt) if not isinstance(rt, str) else rt
@@ -148,7 +202,7 @@ class TACCSimulation:
         Set up simulation on TACC
         """
         # Checking execution python environment
-        self.log.info(
+        logger.info(
             "Starting simulation set-up.",
             extra={
                 "inputs": {
@@ -161,7 +215,7 @@ class TACCSimulation:
         )
 
         # Checking python env set-up
-        self.log.info("Setting up python execution environment")
+        logger.info("Setting up python execution environment")
         envs = self.client.get_python_env()
         if not any(envs["name"] == self.ENV_CONFIG["conda_env"]):
             python_setup = True
@@ -172,7 +226,7 @@ class TACCSimulation:
                 pip=self.ENV_CONFIG["pip_packages"],
             )
 
-        self.log.info("Creating job config.")
+        logger.info("Creating job config.")
         job_config = {}
         job_config["name"] = self.name
         name = job_config["name"]
@@ -190,16 +244,16 @@ class TACCSimulation:
         if job_config["slurm"]["allocation"] is None:
             allocations = self.client.get_allocations()
             def_alloc = allocations[0]["name"]
-            self.log.info(
+            logger.info(
                 f"Allocation not specified. Using {def_alloc}.",
                 extra={"allocations": allocations},
             )
             job_config["slurm"]["allocation"] = def_alloc
-        self.log.info(
+        logger.info(
             "Slurm settings configured", extra={"slurm_config": job_config["slurm"]}
         )
 
-        self.log.info("Processing Arguments")
+        logger.info("Processing Arguments")
         job_config["args"] = {}
         to_stage = []
         # Process arguments, don't stage yet
@@ -209,12 +263,12 @@ class TACCSimulation:
                     continue
                 elif "default" not in arg.keys():
                     msg = f"Missing argument {arg['name']}"
-                    self.log.error(msg, extra={"job_args": args})
+                    logger.error(msg, extra={"job_args": args})
                     raise ValueError(msg)
                 else:
-                    self.log.info("Setting arg default value")
+                    logger.info("Setting arg default value")
                     args[arg["name"]] = arg["default"]
-            self.log.info(f"Found {arg['type']} {arg['name']}", extra={"arg": arg})
+            logger.info(f"Found {arg['type']} {arg['name']}", extra={"arg": arg})
             if arg["type"] == "input":
                 # Argument is passed as path to file in job directory
                 job_path = self.client.job_path(
@@ -233,18 +287,18 @@ class TACCSimulation:
             run_cmd += f"./{self.name}.py"
         # run_cmd += f"{conda_path}/bin/{self.client.pm} run"
         # run_cmd += f" -n {self.ENV_CONFIG['conda_env']} {self.name}.py"
-        self.log.info("Parsing submit script", extra={"run_cmd": run_cmd})
+        logger.info("Parsing submit script", extra={"run_cmd": run_cmd})
         job_config["submit_script"] = self._parse_submit_script(
             job_config, run_cmd=run_cmd
         )
 
         conda_path = envs["path"][envs["name"] == self.ENV_CONFIG["conda_env"]].iloc[0]
-        self.log.info(f"Reading sim script at {self.script_file}")
+        logger.info(f"Reading sim script at {self.script_file}")
         job_config["sim_script"] = f"#!{conda_path}/bin/python\n\n"
         with open(self.script_file, "r") as fp:
             job_config["sim_script"] += fp.read()
         if "\nif __name__ == '__main__':" not in job_config["sim_script"]:
-            self.log.info("Detected no main clause... adding.")
+            logger.info("Detected no main clause... adding.")
             job_config["sim_script"] += "\n\n"
             job_config["sim_script"] += main_clause.format(
                 name=self.name,
@@ -254,7 +308,7 @@ class TACCSimulation:
                 level=get_log_level_str(self.log_config["level"]).upper(),
             )
 
-        self.log.info(
+        logger.info(
             "Job configuration done!",
             extra={"job_config": self._trim_job_dict(job_config)},
         )
@@ -263,7 +317,7 @@ class TACCSimulation:
 
         # Create a temp local job directory
         tmpdir = tempfile.mkdtemp()
-        self.log.info(
+        logger.info(
             f"Staging job to {tmpdir}", extra={"job_dir": job_config["job_dir"]}
         )
         self.client.exec(f"mkdir {job_config['job_dir']}")
@@ -272,7 +326,7 @@ class TACCSimulation:
         stage_commands = []
         for s in to_stage:
             tmp_path = str(Path(tmpdir) / os.path.basename(s[0]))
-            self.log.info(
+            logger.info(
                 "Staging job input locally", extra={"src": s[0], "dest": tmp_path}
             )
             stage_commands.append(
@@ -282,7 +336,7 @@ class TACCSimulation:
         # Write submit script
         path = str(Path(tmpdir) / "submit_script.sh")
         script_text = job_config.pop("submit_script")
-        self.log.info("Writing submit script", extra={"path": path})
+        logger.info("Writing submit script", extra={"path": path})
         self.client.write(script_text, path, local=True)
         job_config["submit_script"] = self.client.job_path(
             job_config["job_id"], "submit_script.sh"
@@ -291,7 +345,7 @@ class TACCSimulation:
         # Write sim.py
         path = str(Path(tmpdir) / f"{self.name}.py")
         script_text = job_config.pop("sim_script")
-        self.log.info("Writing sim script", extra={"path": path})
+        logger.info("Writing sim script", extra={"path": path})
         self.client.write(script_text, path, local=True)
         job_config["sim_script"] = self.client.job_path(
             job_config["job_id"], f"{self.name}.py"
@@ -299,11 +353,11 @@ class TACCSimulation:
 
         # Write job_config
         path = str(Path(tmpdir) / "job.json")
-        self.log.info("Writing job config", extra={"path": path})
+        logger.info("Writing job config", extra={"path": path})
         self.client.write(job_config, path, local=True)
 
         # Wait for stage commands to finish
-        self.log.info(
+        logger.info(
             "Waiting for inputs to finish staging",
             extra={"stage_commands": stage_commands},
         )
@@ -311,19 +365,19 @@ class TACCSimulation:
             self.client.process(s["id"], local=True, wait=True, error=True)
 
         # Upload tmpdir to job_path - Non-local operation if necessary
-        self.log.info("Uploading job directory", extra={"path": path})
+        logger.info("Uploading job directory", extra={"path": path})
         self.client.upload(tmpdir, "", job_id=job_config["job_id"])
 
         if not run:
             return job_config
 
-        self.log.info("Submitting job")
+        logger.info("Submitting job")
         try:
             job_config = self.client.submit_job(job_config["job_id"])
         except TACCCommandError as t:
-            self.log.error("Failed to submit job", extra={"err": t})
+            logger.error("Failed to submit job", extra={"err": t})
             raise t
-        self.log.info("Job submitted", extra={"slurm_config": job_config["slurm"]})
+        logger.info("Job submitted", extra={"slurm_config": job_config["slurm"]})
 
         return job_config
 
@@ -345,7 +399,7 @@ class TACCSimulation:
         # See if running from within execution environment
         job_dir = os.getenv("SLURM_SUBMIT_DIR")
         if job_dir is None:
-            self.log.info("Not in execution environment. Setting up job...")
+            logger.info("Not in execution environment. Setting up job...")
             job_config = self.setup(
                 args=args,
                 slurm_config=slurm_config,
@@ -354,13 +408,13 @@ class TACCSimulation:
                 python_setup=python_setup,
                 remora=remora,
             )
-            self.log.info(
+            logger.info(
                 "Job {job_config['job_id']} set up and submitted",
                 extra={"job_config": job_config},
             )
             return job_config
         self.job_config = self.client.get_job(job_dir)
-        self.log.info(
+        logger.info(
             "Loaded job config. starting job.", extra={"job_config": self.job_config}
         )
         self.setup_job()
@@ -372,9 +426,9 @@ class TACCSimulation:
 
         This is a skeleton method that should be over-written.
         """
-        self.log.info("Job set-up Start")
+        logger.info("Job set-up Start")
         self.client.exec("sleep 5")
-        self.log.info("Job set-up Start")
+        logger.info("Job set-up Start")
 
     def run_job(self):
         """
@@ -386,6 +440,6 @@ class TACCSimulation:
         """
         input_file = self.job_config["args"]["input_file"]
         param = self.job_config["args"]["param"]
-        self.log.info("Starting Simulation")
+        logger.info("Starting Simulation")
         self.client.exec(f"tail -n {param} {input_file} > out.txt; sleep 10")
-        self.log.info("Simulation Done")
+        logger.info("Simulation Done")
