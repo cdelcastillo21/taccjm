@@ -7,19 +7,13 @@ from pathlib import Path
 
 import __main__
 
-from loguru import logger
-from rich.traceback import install
-from rich.logging import RichHandler
-
 from taccjm.exceptions import TACCCommandError
 from taccjm.client.TACCClient import TACCClient
 from taccjm.utils import (get_default_script, get_log_level_str,
                           hours_to_runtime_str, read_log)
+from taccjm.log import logger
 
-install()
-logger.configure(handlers=[{"sink": RichHandler(markup=True,
-                                                rich_tracebacks=True),
-                            "format": "{message}"}])
+# install()
 
 submit_script_template = get_default_script("submit_script.sh", ret="text")
 

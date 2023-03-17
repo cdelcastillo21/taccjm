@@ -3,36 +3,28 @@ TACC SSH FastAPI Server
 
 Server for managing instances of TACCSSHClient classes using the FastAPI framework
 """
-import logging
-from loguru import logger
 import os
 import pdb
 import sys
+import uvicorn
+import fastapi
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict, List, Union
-
-from fastapi import FastAPI, HTTPException
+from fastapi import HTTPException
 from pydantic import BaseModel
-
 from taccjm.constants import TACCJM_DIR, make_taccjm_dir
 from taccjm.client.TACCSSHClient import TACCSSHClient
-from taccjm.utils import get_log_level, get_log_level_str, init_logger
-
-from rich.traceback import install
+from taccjm.utils import get_log_level, get_log_level_str
+from taccjm.log import enable
 from rich.console import Console
 
-install(max_frames=3, show_locals=True)
-CONSOLE = Console()
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
-# Initialize server logger
-if not os.path.exists(TACCJM_DIR):
-    os.makedirs(TACCJM_DIR)
-
-app = FastAPI()
+app = fastapi.FastAPI()
 
 # Dictionary containing all job manager instances being managed
 # Note there could be multiple instance if managing more than one system
@@ -41,7 +33,9 @@ PORT = None
 CONNECTIONS = {}
 LOGFILE = None
 LOGLEVEL = None
-
+SERVER_DIR = None
+logger = None
+CONSOLE = Console()
 
 def _get_config(connection_id):
     """
@@ -52,6 +46,7 @@ def _get_config(connection_id):
         res = {i: res[i] for i in res if i != "client"}
         return res
     else:
+        logger.exception(msg)
         raise ValueError(f"No active SSH Connection with id {connection_id}")
 
 
@@ -68,8 +63,6 @@ class Connection(BaseModel):
     user: str
     start: datetime
     last_ts: datetime
-    log_level: str
-    log_file: str
     home_dir: str
     work_dir: str
     scratch_dir: str
@@ -81,12 +74,10 @@ class ConnectionRequest(BaseModel):
     psw: str
     mfa: str
     restart: Union[bool, None] = False
-    loglevel: Union[str, None] = None
-    logfile: Union[str, None] = None
 
 
 @app.get("/", response_model=List[Connection])
-def list_jm():
+def list_sessions():
     """Show initialized job managers"""
     out = []
     for c in CONNECTIONS.keys():
@@ -97,23 +88,21 @@ def list_jm():
 
 @app.post("/{connection_id}", response_model=Connection)
 async def init(connection_id: str, req: ConnectionRequest):
+    """
+    Initialize an SSH connection.
+    """
     if connection_id in CONNECTIONS.keys() and not req.restart:
         msg = f"Connection {connection_id} already exists."
         raise HTTPException(status_code=409, detail=msg)
 
-    logger.info(f"Init {connection_id} with on {req.system} for {req.user}")
-    loglevel = get_log_level(req.loglevel) if req.loglevel is not None else LOGLEVEL
-    def_log = f"{TACCJM_DIR}/{connection_id}_{req.system}_{req.user}_log.json"
-    logfile = req.logfile if req.logfile is not None else def_log
-    logger.info(f"Log at {logfile} with level {get_log_level_str(loglevel)}")
-
+    # TODO: Implement options for logging to custom file?
+    logger.info(f"Initalizing {connection_id} on {req.system}")
     try:
         client = TACCSSHClient(
             req.system,
             user=req.user,
             psw=req.psw,
             mfa=req.mfa,
-            log_config={"output": logfile, "fmt": "json", "level": loglevel},
         )
     except ValueError as v:
         msg = f"Init failed on {req.system} for {req.user}: {v}"
@@ -130,8 +119,6 @@ async def init(connection_id: str, req: ConnectionRequest):
         "user": client.user,
         "start": datetime.now(),
         "last_ts": datetime.now(),
-        "log_level": loglevel,
-        "log_file": logfile,
         "scratch_dir": client.scratch_dir,
         "home_dir": client.home_dir,
         "work_dir": client.work_dir,
@@ -142,6 +129,8 @@ async def init(connection_id: str, req: ConnectionRequest):
     )
     CONNECTIONS[connection_id] = ret
     CONNECTIONS[connection_id]["client"] = client
+
+    1/0
 
     return ret
 
@@ -215,8 +204,8 @@ def exec(connection_id: str, cmnd_req: CommandRequest):
     res = {i: res[i] for i in res if i != "channel"}
     CONNECTIONS[connection_id]["last_ts"] = datetime.now()
     logger.info(
-        f"Command {res['id']} executed on {connection_id}.",
-        extra={"command_config": res},
+            f"Command {res['id']} executed on {connection_id}",
+            extra={"command_config": [res]},
     )
 
     return res
@@ -246,7 +235,7 @@ def process(connection_id: str, proc_req: ProcessRequest):
         res = [{i: res[i] for i in res if i != "channel"}]
         logger.info(
             f"Command {res[0]['id']} execute/processed on {connection_id}.",
-            extra={"command_config": res[0]},
+            extra={"command_config": res0},
         )
     else:
         logger.info("Polling all active commands", extra={"process_request": proc_req})
@@ -255,7 +244,7 @@ def process(connection_id: str, proc_req: ProcessRequest):
         res = [{i: r[i] for i in r if i != "channel"} for r in res]
         logger.info(
             f"{len(res)} commands still active n {connection_id}.",
-            extra={"active_commands": res},
+            extra={"command_config": [res]},
         )
 
     CONNECTIONS[connection_id]["last_ts"] = datetime.now()
@@ -396,16 +385,12 @@ async def upload(connection_id: str, req: DataRequest):
 
 
 if __name__ == "__main__":
-    import uvicorn
-
     HOST = sys.argv[1] if len(sys.argv) > 1 else "0.0.0.0"
     PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8000
-    LOGLEVEL = get_log_level(sys.argv[3]) if len(sys.argv) > 3 else logging.INFO
-
-    LOGFILE = f"{TACCJM_DIR}/ssh_server_{HOST}_{PORT}_log.json"
-    serialize = True if "fmt" == "json" else False
-    logger.add(LOGFILE, rotation="10 MB", filter="tacc_ssh_server",
-               serialize=serialize)
-    logger.info("Starting TACC SSH Server.")
-    uvicorn.run(app, host=HOST, port=PORT)
-    logger.info("TACC SSH Server shut down.")
+    LOGLEVEL = sys.argv[3] if len(sys.argv) > 3 else "INFO"
+    log_file = f'{TACCJM_DIR}/ssh_server_{HOST}_{PORT}/log.txt'
+    with open(log_file, 'w') as lf:
+        logger = enable(file=lf, level=LOGLEVEL)
+        logger.info(f"Starting TACC SSH Server on {HOST}:{PORT}.")
+        uvicorn.run(app, host=HOST, port=PORT, log_level=LOGLEVEL.lower())
+        logger.info("TACC SSH Server shut down.")

@@ -32,7 +32,7 @@ __license__ = "MIT"
     + "directory with given job_id.",
 )
 @click.pass_context
-def files(ctx, conn_id, job_id):
+def files(ctx, job_id):
     """
     TACC Job Manager Files
 

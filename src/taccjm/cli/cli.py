@@ -27,7 +27,7 @@ __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
-install(suppress=[click], max_frames=10, show_locals=True)
+install(suppress=[click], max_frames=3, show_locals=True)
 CONSOLE = Console()
 
 TACC_PW = os.getenv("TACC_PW")

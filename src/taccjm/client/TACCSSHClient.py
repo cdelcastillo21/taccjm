@@ -7,12 +7,9 @@ A class that defines an ssh connection to a TACC system.
 """
 import errno  # For error messages
 import json  # For saving and loading job configs to disk
-import logging  # Used to setup the Paramiko log file
 import os  # OS system utility functions for local system
-import pdb  # Debug
 import posixpath  # Paths on remote system (assumed UNIX)
 import stat  # For reading file stat codes
-import sys
 import tarfile  # For sending compressed directories
 import tempfile
 from datetime import datetime  # Date time functionality
@@ -22,11 +19,10 @@ from typing import List, Tuple, Union  # Type hints
 from paramiko import AuthenticationException, BadHostKeyException, SSHException
 
 from taccjm.constants import *  # For application configs
-# Custom exception for handling remote command errors
 from taccjm.exceptions import SSHCommandError
-# Modified paramiko ssh client and common paramiko exceptions
 from taccjm.client.SSHClient2FA import SSHClient2FA
-from taccjm.utils import init_logger, tar_file
+from taccjm.utils import tar_file
+from taccjm.log import logger
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -35,7 +31,8 @@ __license__ = "MIT"
 
 class TACCSSHClient(SSHClient2FA):
     """
-    Class defining an ssh connection to a TACC system .
+    Class defining an ssh connection to a TACC system. tacc_ssh_server.py
+    manages sets of these classes.
 
     Attributes
     ----------
@@ -79,7 +76,6 @@ class TACCSSHClient(SSHClient2FA):
         user=None,
         psw=None,
         mfa=None,
-        log_config={"output": sys.stdout, "fmt": "txt", "level": logging.ERROR},
     ):
         """
         Initialize Job Manager connection and directories.
@@ -98,7 +94,6 @@ class TACCSSHClient(SSHClient2FA):
             2-Factor Authenticaion token for user.. If non provided
             input prompt will appear
         """
-
         # Initialize parent class with appropriate prompts for login to TACC systems
         super().__init__(
             user_prompt=self.USER_PROMPT,
@@ -106,11 +101,11 @@ class TACCSSHClient(SSHClient2FA):
             mfa_prompt=self.MFA_PROMPT,
         )
 
-        self.log_config, self.log = init_logger(__name__, log_config=log_config)
+        self.log = logger.bind(system=system, user=user)
 
         if system not in self.SYSTEMS:
             m = f"Unrecognized system {system}. Options - {self.SYSTEMS}."
-            self.log.error(m)
+            logger.error(m)
             raise ValueError(m)
 
         # Connect to system
@@ -123,17 +118,18 @@ class TACCSSHClient(SSHClient2FA):
         # Initialize list of commands run to be empty
         self.commands = []
 
-        # Scratch directory - Used by default for all operations
-        self.scratch_dir = self.execute_command(f"echo {self.SCRATCH_DIR}")[
-            "stdout"
-        ].strip()
-        self.log.info(f"{self.SCRATCH_DIR} resolved to {self.scratch_dir}")
+        # get SCRATCH, HOME, and WORK dirs
+        self._resolve_tacc_dirs()
 
-        # home and work dirs -> Good to stash for later usage
-        self.home_dir = self.execute_command(f"echo {self.HOME_DIR}")["stdout"].strip()
-        self.log.info(f"{self.HOME_DIR} resolved to {self.home_dir}")
-        self.work_dir = self.execute_command(f"echo {self.WORK_DIR}")["stdout"].strip()
-        self.log.info(f"{self.WORK_DIR} resolved to {self.work_dir}")
+    def _resolve_tacc_dirs(self):
+        """
+        Resolve HOME, SCRATCH, and WORK dirs for later usage.
+        """
+        cmnd = f"echo {self.HOME_DIR} {self.WORK_DIR} {self.SCRATCH_DIR}"
+        self.home_dir, self.work_dir, self.scratch_dir = self.execute_command(
+                cmnd)["stdout"].strip().split(' ')
+        self.log.info(f"TACC dirs resolved to:\nwork : {self.work_dir}\n" +
+                      f"home : {self.home_dir}\nscracth : {self.scratch_dir}")
 
     def _get_sftp(self):
         """
@@ -248,13 +244,22 @@ class TACCSSHClient(SSHClient2FA):
         Parameters
         ----------
         cmnd : str
-            Command to execute. Be careful! rm commands and such will delete
-            things permenantly!
+            Command to execute. Be careful! 
+        wait : bool, optional
+            If set to true, wait for the command to finish. Default = True
+        fail : bool, optional
+            If set to true, exception will be raised upon failure of command.
+            Default = True
+        key : str, optiona;
+            Key to tag the command with. Defaults to 'SYSTEM' for commands run
+            internallby the class, but a user can tag commands with certain
+            values to search/filter the command table based off the key.
+            
 
         Returns
         -------
-        out : str
-            stdout return from command.
+        cmnd_config : dict
+            Dictionary containing command info.
 
         Raises
         ------
@@ -263,16 +268,18 @@ class TACCSSHClient(SSHClient2FA):
         """
         # Gets underlying transport object for main ssh connection.
         # Won't fail since not requesting a new conection yet.
+        self.log.info("Opening channel to execute command")
         transport = self.get_transport()
         try:
             # This part will fail with SSH exception if request is refused
             channel = transport.open_session()
         except SSHException as ssh_error:
             # Will only occur if ssh connection is broken
-            msg = "TACCJM ssh connection error: {ssh_error.__str__()}"
-            self.log.error(msg)
+            self.log.exception(
+                    "TACCJM ssh connection error: {ssh_error.__str__()}")
             raise ssh_error
 
+        self.log.info("Submitting command")
         channel.exec_command(cmnd)
 
         command_id = len(self.commands) + 1
@@ -292,7 +299,11 @@ class TACCSSHClient(SSHClient2FA):
         }
         self.commands.append(command_config)
 
+        self.log.info("Adding command to commands list",
+                      extra={'config': command_config})
+
         if wait:
+            self.log.info("Waiting for command to finish")
             return self.process_command(command_id, wait=True)
         else:
             return command_config
@@ -308,8 +319,22 @@ class TACCSSHClient(SSHClient2FA):
         """
         Process command
 
-        Wait until a command finishes and read stdout and stderr. Raise error if
-        anything in stderr, else return stdout.
+        Poll a command and if set, wait for it to finishes and read stdout and
+        stderr. Raise error if rc != 0, the command that failed has fail=True,
+        and error is set, else return completed cmnd config.
+
+        Parameters
+        ----------
+        command_id : int
+            ID of command to poll.
+        nbytes : int, optional
+            Read nbytes from the process. Note that if no output available, 
+            will hang until output is available, and read up to nbytes.
+        wait : bool, optional
+            If set to true, wait for the command to finish. Default = True
+        error : bool, optional
+            If set to true, exception will be raised upon failure of command,
+            that also has it fail parameter set to True. Default = False.
         """
         if command_id > len(self.commands) or command_id < 1:
             raise ValueError(f"Invalid id {command_id} (1<={len(self.commands)}).")
@@ -358,7 +383,20 @@ class TACCSSHClient(SSHClient2FA):
 
     def process_active(self, poll: bool = True, nbytes: int = None):
         """
-        Poll all active commands.
+        Process Active
+
+        Get all active commands, and if poll is set, poll them to see if
+        they've completed.
+
+        Parameters
+        ----------
+        poll : bool, optional
+            If set to True, will poll the commands to update their statuses.
+            Note polling is done with no wait, unless nbytes is set.
+        nbytes : int, optional
+            Read nbytes from each active process. Note that if no output
+            available, will hang until output is available, and read up to
+            nbytes.
         """
         ds = ["COMPLETE", "FAILED"]
         active_commands = [c for c in self.commands if c["status"] not in ds]

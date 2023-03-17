@@ -4,67 +4,39 @@ TACCJM Client
 Client for managing TACCJM hug servers and accessing TACCJM API end points.
 """
 import json
-import logging
 import os
-import pdb
-import re
+from pathlib import Path
 import subprocess
 from getpass import getpass
 from time import sleep
 from typing import List, Tuple
-
 import psutil
 import requests
-from prettytable import PrettyTable
 
 from taccjm.constants import (TACC_SSH_HOST, TACC_SSH_PORT, TACCJM_DIR,
                               TACCJM_SOURCE)
 from taccjm.exceptions import TACCJMError
 from taccjm.utils import filter_files, validate_file_attrs
+from taccjm.log import logger
+
+from rich.traceback import install
+from rich.console import Console
+from rich import inspect
+
+install(suppress=[requests])
+CONSOLE = Console()
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
-# Make log dirs and initialize logger
-logger = logging.getLogger(__name__)
 
-
-def _print_res(res, fields, search=None, match=r"."):
+def _get_taccjm_dirs():
     """
-    Print results
-
-    Prints dictionary keys in list `fields` for each dictionary in res,
-    filtering on the search column if specified with regular expression
-    if desired.
-
-    Parameters
-    ----------
-    res : List[dict]
-        List of dictionaries containing response of an AgavePy call
-    fields : List[string]
-        List of strings containing names of fields to extract for each element.
-    search : string, optional
-        String containing column to perform string patter matching on to
-        filter results.
-    match : str, default='.'
-        Regular expression to match strings in search column.
-
     """
-    # Initialize Table
-    x = PrettyTable()
-    x.field_names = fields
-
-    # Build table from results
-    for r in res:
-        if search is not None:
-            if re.search(match, r[search]) is not None:
-                x.add_row([r[f] for f in fields])
-        else:
-            x.add_row([r[f] for f in fields])
-
-    # Print Table
-    print(x)
+    server_dir = Path(f"{TACCJM_DIR}") / f"ssh_server_{TACC_SSH_HOST}_{TACC_SSH_PORT}"
+    server_hb_dir = server_dir / "heartbeat"
+    return server_dir, server_hb_dir
 
 
 def set_host(host: str = TACC_SSH_HOST, port: int = TACC_SSH_PORT) -> Tuple[str, int]:
@@ -103,7 +75,7 @@ def set_host(host: str = TACC_SSH_HOST, port: int = TACC_SSH_PORT) -> Tuple[str,
 def find_server(
     start: bool = False,
     kill: bool = False,
-    loglevel: str = "info",
+    loglevel: str = "INFO",
     heartbeat_interval: float = 0.5,
 ) -> dict:
     """
@@ -162,16 +134,19 @@ def find_server(
     if not start:
         return processes_found
 
+    server_dir, server_hb_dir = _get_taccjm_dirs()
+    Path(TACCJM_DIR).mkdir(exist_ok=True)
+    Path(server_dir).mkdir(exist_ok=True)
+    Path(server_hb_dir).mkdir(exist_ok=True)
+
     if not os.path.exists(TACCJM_DIR):
         os.makedirs(TACCJM_DIR)
 
     srv_cmd += f" {loglevel}"
     if "server" not in processes_found.keys():
-        log_base_path = os.path.join(
-            TACCJM_DIR, f"ssh_server_{TACC_SSH_HOST}_{TACC_SSH_PORT}"
-        )
-        with open(f"{log_base_path}_out.txt", "w") as out:
-            with open(f"{log_base_path}_err.txt", "w") as err:
+        log_base_path = str(server_dir)
+        with open(f"{log_base_path}/stdout.txt", "w") as out:
+            with open(f"{log_base_path}/stderr.txt", "w") as err:
                 processes_found["server"] = subprocess.Popen(
                     srv_cmd.split(" "), stdout=out, stderr=err
                 )
@@ -180,11 +155,9 @@ def find_server(
 
     hb_cmd += f"--loglevel={loglevel} --heartbeat-interval={heartbeat_interval}"
     if "hb" not in processes_found.keys():
-        log_base_path = os.path.join(
-            TACCJM_DIR, f"ssh_hb_{TACC_SSH_HOST}_{TACC_SSH_PORT}"
-        )
-        with open(f"{log_base_path}_out.txt", "w") as out:
-            with open(f"{log_base_path}_err.txt", "w") as err:
+        log_base_path = str(server_hb_dir)
+        with open(f"{log_base_path}/stdout.txt", "w") as out:
+            with open(f"{log_base_path}/stderr.txt", "w") as err:
                 processes_found["hb"] = subprocess.Popen(
                     hb_cmd.split(" "), stdout=out, stderr=err
                 )
@@ -253,6 +226,7 @@ def api_call(
     if res.status_code == 200:
         return json.loads(res.text)
     else:
+        inspect(res)
         raise TACCJMError(res)
 
 
@@ -665,35 +639,30 @@ def download(
     return res
 
 
-def get_log(
-    connection_id: str = None,
-) -> str:
+def get_logs() -> dict:
     """
     Get Log Files
 
     Parameters
     ----------
-    connection_id : str, optional
-        ID of Job Manager instance. If specified, will pull logs for this a
-        sepcific ssh session. Else pulls the servers log itself.
+    logs: str, optional
+        Only return these logs.
 
     Returns
     -------
+    Dictionary with text loaded for each log config specified in the logs
+    parameter.
     """
-    pass
-#     data = {
-#         "source_path": remote_path,
-#         "dest_path": local_path,
-#         "file_filter": file_filter,
-#     }
-#     try:
-#         res = api_call("GET", f"{connection_id}/download", params=data)
-#     except TACCJMError as e:
-#         e.message = "download error"
-#         logger.error(e.message)
-#         raise e
-# 
-#     return res
+    server_dir, server_hb_dir = _get_taccjm_dirs()
+    logs = {'sv_log':  {'path': Path(server_dir / 'log.txt')},
+            'sv_stdout':  {'path': Path(server_dir / 'stdout.txt')},
+            'sv_stderr':  {'path': Path(server_dir / 'stderr.txt')},
+            'hb_stdout':  {'path': Path(server_hb_dir / 'stdout.txt')},
+            'hb_stderr':  {'path': Path(server_hb_dir / 'stderr.txt')},
+            }
+    for log_file in logs.keys():
+        if logs[log_file]['path'].exists():
+            with open(str(logs[log_file]['path']), 'r') as lf:
+                logs[log_file]['contents']  = lf.read()
 
-
-
+    return logs

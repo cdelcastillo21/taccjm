@@ -366,8 +366,6 @@ _session_field_fmts = {
         "user": ("User", _fmt_user, key_style,),
         "start": ("Started", _fmt_ts, ts_style),
         "last_ts": ("Last Accessed", _fmt_ts, ts_style),
-        "log_level": ("Log Level", _fmt_loglevel, err_style),
-        "log_file": ("Log File", _fmt_path, file_style),
         "home_dir": ("TACC Home Directory", _fmt_path, file_style),
         "work_dir": ("TACC Work Directory", _fmt_path, file_style),
         "scratch_dir": ("TACC Scratch Directory", _fmt_path, file_style),

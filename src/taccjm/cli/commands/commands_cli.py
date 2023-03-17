@@ -45,13 +45,6 @@ def commands(ctx):
     help="Wait for command to execute",
 )
 @click.option(
-    "-e/-ne",
-    "--error/--no-error",
-    is_flag=True,
-    default=True,
-    help="Throw error if encountered.",
-)
-@click.option(
     "-k",
     "--key",
     default=None,
@@ -65,7 +58,7 @@ def commands(ctx):
     help="Whether command should generate an exception on failure.",
 )
 @click.pass_context
-def exec(ctx, command, wait=False, error=True, key='CLI'):
+def exec(ctx, command, wait=False, fail=True, key='CLI'):
     """
     Execute an arbitrary command via ssh.
     """

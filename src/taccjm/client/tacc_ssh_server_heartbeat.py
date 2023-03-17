@@ -7,15 +7,14 @@ from threading import Timer
 
 import begin
 import numpy as np
-from pythonjsonlogger import jsonlogger
 
 from taccjm.client import tacc_ssh_api as tsa
 from taccjm.constants import TACCJM_DIR
-from taccjm.utils import get_log_level, init_logger, parse_allocations_string
+from taccjm.utils import get_log_level, parse_allocations_string
+from taccjm.log import enable
 
 global stats
 stats = np.array([])
-_logger = None
 
 
 def get_stats():
@@ -44,31 +43,50 @@ class RepeatingTimer(Timer):
             self.finished.wait(self.interval)
 
 
+def poll_processes():
+    """
+    Poll active processes for each session and update process tables
+    """
+    # TODO: Implement polling processes on heartbeats
+    pass
+
+
+def pull_allocations(session):
+    """
+    Pull allocation information
+    """
+    # TODO: Log allocation information to seperate table
+    # TODO: Only poll each system once
+    _logger.info(
+        f"Checking session {session['id']}'s allocations.",
+        extra={"connection_config": session},
+    )
+    try:
+        allocs = parse_allocations_string(
+            tsa.exec(session["id"], "/usr/local/etc/taccinfo")["stdout"]
+        )
+        for a in allocs:
+            _logger.info(
+                f"Found allocation {a['name']}",
+                extra={
+                    "SUs": a["service_units"],
+                    "expiration": a["exp_date"],
+                },
+            )
+    except Exception as e:
+        _logger.info(f"Error checking allocations {e}")
+
+
 def heartbeat():
     try:
         global stats
         _logger.info("Starting heartbeat list_sessions() call")
         with timing("list_sessions()") as api_time:
             res = tsa.list_sessions()
-            for c in res:
-                _logger.info(
-                    f"Checking connection {c['id']}'s allocations.",
-                    extra={"connection_config": c},
-                )
-                try:
-                    allocs = parse_allocations_string(
-                        tsa.exec(c["id"], "/usr/local/etc/taccinfo")["stdout"]
-                    )
-                    for a in allocs:
-                        _logger.info(
-                            f"Found allocation {a['name']}",
-                            extra={
-                                "SUs": a["service_units"],
-                                "expiration": a["exp_date"],
-                            },
-                        )
-                except Exception as e:
-                    _logger.info(f"Error checking allocations {e}")
+            # TODO: Poll active commands on heartbeat for each session
+            # TODO: Dail (hourly?) update allocation stats
+            # for session in res:
+            #     pull_allocatons(session)
         stats = np.append(stats, api_time()[1])
         _logger.info(
             "%s Done in %.6f s" % api_time(),
@@ -85,7 +103,7 @@ def run(
     host: "Host where server is running" = "localhost",
     port: "Port on which server is listening on" = "8221",
     heartbeat_interval: "Time in minutes between heartbeats" = 0.5,
-    loglevel: "Level for logging" = "info",
+    loglevel: "Level for logging" = "INFO",
 ):
     """
     Run
@@ -107,15 +125,13 @@ def run(
     """
     global _logger
 
-    LOGFILE = f"{TACCJM_DIR}/ssh_server_hb_{host}_{port}_log.json"
-    _, _logger = init_logger(
-        "tacc_ssh_hb",
-        log_config={"output": LOGFILE, "fmt": "json", "level": get_log_level(loglevel)},
-    )
+    # LOGFILE = f"{TACCJM_DIR}/ssh_server_{host}_{port}/heartbeat/log.txt"
+    _logger = enable(level=loglevel)
 
     # Set endpoint for taccjm server
     _logger.info(
-        f"Setting host and port to ({host}, {port})", extra={"host": host, "port": port}
+        f"Setting host and port to ({host}, {port})",
+        extra={"host": host, "port": port}
     )
     tsa.set_host(host=host, port=port)
 
