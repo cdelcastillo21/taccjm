@@ -5,9 +5,10 @@ TACCJobManager Log functionality
 """
 from loguru import logger
 from rich.logging import RichHandler
-from rich.console import Console
+
 
 logger.disable('taccjm')
+
 
 def enable(file=None,
            level='INFO', fmt="{message}"):
@@ -15,12 +16,14 @@ def enable(file=None,
     Turn on logging for module with appropriate message format
     """
     if file is None:
-        sink = RichHandler(markup=True, rich_tracebacks=True)
+        logger.configure(handlers=[
+            {"sink": RichHandler(markup=True, rich_tracebacks=True),
+             "level": level, "format": fmt}])
     else:
-        sink = RichHandler(console=Console(file=file),
-                           markup=True,
-                           rich_tracebacks=True)
-    logger.configure(handlers=[{"sink": sink, "level":level, "format": fmt}])
+        logger.configure(handlers=[
+            {"sink": file, "serialize": True,
+             "level": level, "format": fmt, "rotation": "10 MB",
+             "enqueue": True}])
     logger.enable('taccjm')
     logger.info('Logger initialized')
 

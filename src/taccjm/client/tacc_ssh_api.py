@@ -9,7 +9,7 @@ from pathlib import Path
 import subprocess
 from getpass import getpass
 from time import sleep
-from typing import List, Tuple
+from typing import List, Tuple, Union
 import psutil
 import requests
 
@@ -431,6 +431,7 @@ def process(
 
 def list_commands(
     connection_id: str,
+    key: Union[List[str], str] = None,
 ):
     """
     List commands for an SSH connection
@@ -442,6 +443,10 @@ def list_commands(
         e.message = f"Error getting commands for {connection_id}"
         logger.error(e.message)
         raise e
+
+    if key is not None:
+        keys = [key] if not isinstance(key, list) else key
+        res = [r for r in res if r['key'] in keys]
 
     return res
 
@@ -639,14 +644,14 @@ def download(
     return res
 
 
-def get_logs() -> dict:
+def get_logs(max_entries: int = 20) -> dict:
     """
     Get Log Files
 
     Parameters
     ----------
-    logs: str, optional
-        Only return these logs.
+    max_entries: int, optional
+        Max number of log entries to get (from end of log files).
 
     Returns
     -------
@@ -654,15 +659,36 @@ def get_logs() -> dict:
     parameter.
     """
     server_dir, server_hb_dir = _get_taccjm_dirs()
-    logs = {'sv_log':  {'path': Path(server_dir / 'log.txt')},
-            'sv_stdout':  {'path': Path(server_dir / 'stdout.txt')},
-            'sv_stderr':  {'path': Path(server_dir / 'stderr.txt')},
-            'hb_stdout':  {'path': Path(server_hb_dir / 'stdout.txt')},
-            'hb_stderr':  {'path': Path(server_hb_dir / 'stderr.txt')},
-            }
+    logs = {'sv_log':  {'path': Path(server_dir / 'log.json')}}
+#             'sv_stdout':  {'path': Path(server_dir / 'stdout.txt')},
+#             'sv_stderr':  {'path': Path(server_dir / 'stderr.txt')},
+#             'hb_stdout':  {'path': Path(server_hb_dir / 'stdout.txt')},
+#             'hb_stderr':  {'path': Path(server_hb_dir / 'stderr.txt')},
+#             }
+    def _process_entry(le):
+        """
+        Process a log entry dictionary
+        """
+        le = le['record']
+        res = {'ts': le['time']['timestamp'],
+               'level': le['level']['name'],
+               'msg': le['message'],
+               'fun': f"{le['function']}",
+               'module': f"{le['module']}",
+               'line': f"{le['line']}",
+               }
+        return res
+
     for log_file in logs.keys():
         if logs[log_file]['path'].exists():
             with open(str(logs[log_file]['path']), 'r') as lf:
-                logs[log_file]['contents']  = lf.read()
+                lines = lf.readlines()
+                if max_entries is not None:
+                    lines = lines[-max_entries:]
+                contents = []
+                for line in lines:
+                    contents.append(_process_entry(json.loads(line)))
+                logs[log_file]['contents'] = contents
+
 
     return logs

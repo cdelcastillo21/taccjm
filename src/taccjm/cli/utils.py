@@ -405,6 +405,16 @@ _command_field_fmts = {
         "history": ("Status History", _fmt_cmnd_hist, text_style),
 }
 
+# Available return fields for commands
+_log_field_fmts = {
+        "ts": ("Time", _fmt_ts, ts_style),
+        "level": ("Log Level", _fmt_id, key_style),
+        "msg": ("Message", _fmt_cmd, text_style),
+        "module": ("Module", _fmt_status, done_style),
+        "fun": ("Function", _fmt_id, key_style),
+        "line": ("Line Number", _fmt_id, num_style),
+}
+
 # CLI Table Formats:
 # - [+] TODO: Server
 # - [+] TODO: Session

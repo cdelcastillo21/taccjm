@@ -304,7 +304,7 @@ class TACCSSHClient(SSHClient2FA):
 
         if wait:
             self.log.info("Waiting for command to finish")
-            return self.process_command(command_id, wait=True)
+            return self.process_command(command_id, wait=True, error=fail)
         else:
             return command_config
 
@@ -632,7 +632,7 @@ class TACCSSHClient(SSHClient2FA):
         local = os.path.abspath(local.rstrip(os.sep))
         remote = remote.rstrip("/")
 
-        self.log.info("Starting download of folder {remote} to {local}")
+        self.log.info(f"Starting download of folder {remote} to {local}")
 
         self.log.info("Getting info on path {remote}")
         sftp = self._get_sftp()

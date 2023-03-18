@@ -142,15 +142,22 @@ def get(ctx, command_id=None, wait=False, error=True, nbytes=None, poll=True):
         #               f"\n{res['stdout']}")
     else:
         table.title = (
-            f"[not italic] Use [red bold]taccjm process <ID> -w[/] " +
-            f"to wait for command to finish"
+            "[not italic] Use [red bold]taccjm process <ID> -w[/] " +
+            "to wait for command to finish"
         )
     CONSOLE.print(table)
 
 
 @commands.command(short_help="List commands.")
+@click.option(
+    "-k",
+    "--key",
+    default=None,
+    show_default=True,
+    help=("Key to filter commands on that have been tagged with given key.")
+)
 @click.pass_context
-def list(ctx):
+def list(ctx, key):
     """
     List commands
 
@@ -158,9 +165,12 @@ def list(ctx):
     regular expressions on any given output attribute.
     """
     session_id = _get_client(ctx.obj['session_id'], init=False)
+    cols = ["id", "key", "cmd", "status", "ts"]
+    if ctx.obj['cols'] != ():
+        cols = ctx.obj['cols']
     table = build_table(
-            tacc_api.list_commands(session_id),
-            fields=ctx.obj['cols'],
+            tacc_api.list_commands(session_id, key=key),
+            fields=cols,
             fmts=_command_field_fmts,
             search=ctx.obj['search'], match=ctx.obj['match'],
             max_n=ctx.obj['max_n'])

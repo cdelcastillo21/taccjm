@@ -6,8 +6,8 @@ Server for managing instances of TACCSSHClient classes using the FastAPI framewo
 import os
 import pdb
 import sys
-import uvicorn
 import fastapi
+import uvicorn
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Union
@@ -130,8 +130,6 @@ async def init(connection_id: str, req: ConnectionRequest):
     CONNECTIONS[connection_id] = ret
     CONNECTIONS[connection_id]["client"] = client
 
-    1/0
-
     return ret
 
 
@@ -235,7 +233,7 @@ def process(connection_id: str, proc_req: ProcessRequest):
         res = [{i: res[i] for i in res if i != "channel"}]
         logger.info(
             f"Command {res[0]['id']} execute/processed on {connection_id}.",
-            extra={"command_config": res0},
+            extra={"command_config": res},
         )
     else:
         logger.info("Polling all active commands", extra={"process_request": proc_req})
@@ -388,9 +386,8 @@ if __name__ == "__main__":
     HOST = sys.argv[1] if len(sys.argv) > 1 else "0.0.0.0"
     PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8000
     LOGLEVEL = sys.argv[3] if len(sys.argv) > 3 else "INFO"
-    log_file = f'{TACCJM_DIR}/ssh_server_{HOST}_{PORT}/log.txt'
-    with open(log_file, 'w') as lf:
-        logger = enable(file=lf, level=LOGLEVEL)
-        logger.info(f"Starting TACC SSH Server on {HOST}:{PORT}.")
-        uvicorn.run(app, host=HOST, port=PORT, log_level=LOGLEVEL.lower())
-        logger.info("TACC SSH Server shut down.")
+    log_file = f'{TACCJM_DIR}/ssh_server_{HOST}_{PORT}/log.json'
+    logger = enable(file=log_file, level=LOGLEVEL)
+    logger.info(f"Starting TACC SSH Server on {HOST}:{PORT}.")
+    uvicorn.run(app, host=HOST, port=PORT, log_level=LOGLEVEL.lower())
+    logger.info("TACC SSH Server shut down.")

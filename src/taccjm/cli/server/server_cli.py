@@ -6,11 +6,14 @@ CLI for using TACCJM Client.
 import pdb
 import time
 from rich.console import Console
+from rich.syntax import Syntax
+from rich.panel import Panel
+from rich.table import Table
 from rich.traceback import install
 import rich_click as click
-from taccjm.constants import TACC_SSH_HOST, TACC_SSH_PORT
-from taccjm.cli.utils import build_table, _server_field_fmts
-from taccjm.client.tacc_ssh_api import set_host, find_server
+from taccjm.cli.utils import build_table, _server_field_fmts, _log_field_fmts
+from taccjm.client.tacc_ssh_api import find_server, get_logs
+from rich import print
 
 __author__ = "Carlos del-Castillo-Negrete"
 __copyright__ = "Carlos del-Castillo-Negrete"
@@ -47,7 +50,7 @@ def find(ctx, kill, start):
     Locate (host,port) where server is running. Can kill/start server as
     needed with appropriate flags. Note that will only show server for the
     default taccjm (host, port) being used. To change (host, port) combo, use
-    `taccjm --server <host> <port> find-server` with appropriate host and port.
+    `taccjm --server <host> <port> server find` with appropriate host and port.
     """
     res = find_server(start, kill)
     rows = []
@@ -69,10 +72,34 @@ def find(ctx, kill, start):
     cols = ["name", "pid", "started"]
     if ctx.obj['cols'] != ():
         cols = ctx.obj['cols']
-    str_res = build_table(
+    table = build_table(
             rows,
-            fields=ctx.obj['cols'],
+            fields=cols,
             fmts=_server_field_fmts,
             search=ctx.obj['search'], match=ctx.obj['match'])
+    table.title = f"[not italic] Servers on {ctx.obj['host']}:{ctx.obj['port']}"
 
-    CONSOLE.print(str_res)
+    CONSOLE.print(table)
+
+
+@server.command(short_help="Read TACCJM Logs")
+@click.option("-m", "max_len",
+              default=1000000, show_default=True,
+              help='Max length of log string to retrive (from end of file)')
+@click.pass_context
+def logs(ctx, max_len):
+    """
+    Read server logs
+    """
+    logs = get_logs(max_len)
+    cols = None
+    if ctx.obj['cols'] != ():
+        cols = ctx.obj['cols']
+    table = build_table(
+            logs['sv_log']['contents'],
+            fields=cols,
+            fmts=_log_field_fmts,
+            search=ctx.obj['search'], match=ctx.obj['match'])
+    table.title = f"[not italic] Server {ctx.obj['host']}:{ctx.obj['port']} Logs"
+
+    CONSOLE.print(table)

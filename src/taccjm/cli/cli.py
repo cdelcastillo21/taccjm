@@ -55,7 +55,7 @@ TACC_PW = os.getenv("TACC_PW")
     show_default=True,
 )
 @click.option(
-    "-s",
+    "-k",
     "--search",
     default=None,
     help="Column to filter results on.",
@@ -83,6 +83,8 @@ def cli(ctx, server=(TACC_SSH_HOST, TACC_SSH_PORT),
     ctx.ensure_object(dict)
     if server[0] != TACC_SSH_HOST or server[1] != TACC_SSH_PORT:
         ctx.obj['host'], ctx.obj['port'] = set_host(server[0], server[1])
+    else:
+        ctx.obj['host'], ctx.obj['port'] = TACC_SSH_HOST, TACC_SSH_PORT
     ctx.obj["session_id"] = session_id
     ctx.obj["cols"] = cols
     ctx.obj["search"] = search
