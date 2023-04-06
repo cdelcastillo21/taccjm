@@ -31,6 +31,13 @@ __copyright__ = "Carlos del-Castillo-Negrete"
 __license__ = "MIT"
 
 
+def _resolve(path: str) -> str:
+    """
+    Make a path absolute
+    """
+    return str(Path(path).resolve())
+
+
 def _get_taccjm_dirs():
     """
     """
@@ -72,6 +79,33 @@ def set_host(host: str = TACC_SSH_HOST, port: int = TACC_SSH_PORT) -> Tuple[str,
     return (TACC_SSH_HOST, TACC_SSH_PORT)
 
 
+def _find_proc(
+
+) -> dict:
+    """
+    Utility function for `find_server` to find server/heartbeat processes.
+
+    """
+    processes_found = {}
+
+    # Strings defining commands
+    srch_srv_cmd = f"tacc_ssh_server.py {TACC_SSH_HOST} {TACC_SSH_PORT}"
+    srch_hb_cmd = f"tacc_ssh_server_heartbeat.py --host={TACC_SSH_HOST} " + \
+        f"--port={TACC_SSH_PORT} "
+
+    for proc in psutil.process_iter(["name", "pid", "cmdline"]):
+        if proc.info["cmdline"] is not None:
+            cmd = " ".join(proc.info["cmdline"])
+            if srch_srv_cmd in cmd:
+                logger.info(f"Found server process at {proc.info['pid']}")
+                processes_found["server"] = proc
+            if srch_hb_cmd in cmd:
+                logger.info(f"Found heartbeat process at {proc.info['pid']}")
+                processes_found["hb"] = proc
+
+    return processes_found
+
+
 def find_server(
     start: bool = False,
     kill: bool = False,
@@ -101,7 +135,6 @@ def find_server(
         dictionary will always empty.
 
     """
-    processes_found = {}
 
     # Strings defining commands
     srv_script_path = os.path.join(TACCJM_SOURCE, 'client', 'tacc_ssh_server.py')
@@ -113,23 +146,26 @@ def find_server(
     hb_cmd = f"python {hb_script_path}"
     hb_cmd += f" --host={TACC_SSH_HOST} --port={TACC_SSH_PORT} "
 
-    for proc in psutil.process_iter(["name", "pid", "cmdline"]):
-        if proc.info["cmdline"] is not None:
-            cmd = " ".join(proc.info["cmdline"])
-            if srv_cmd in cmd:
-                logger.info(f"Found server process at {proc.info['pid']}")
-                processes_found["server"] = proc
-            if hb_cmd in cmd:
-                logger.info(f"Found heartbeat process at {proc.info['pid']}")
-                processes_found["hb"] = proc
-
+    processes_found = _find_proc()
     if kill:
-        # Kill processes found and return empty dictionary
+        # Try to terminate processes found
         for key, val in processes_found.items():
-            msg = f"Killing {key} process with pid {val.info['pid']}"
+            msg = f"Terminating {key} process with pid {val.info['pid']}"
             logger.info(msg)
             val.terminate()
-        processes_found = {}
+
+        # IF weren't terminated, kill forcefully
+        processes_found = _find_proc()
+        for key, val in processes_found.items():
+            msg = f"Unsuccessfully terminated {key}. Killing {key}"
+            logger.error(msg)
+            val.kill()
+            processes_found = _find_proc()
+
+        if len(processes_found.items()) > 0:
+            msg = 'Unable to termiante server/heartbeat processes'
+            logger.error('Unable to termiante server/heartbeat processes')
+            raise RuntimeError(msg)
 
     if not start:
         return processes_found
@@ -591,7 +627,7 @@ def upload(
     -------
     """
     data = {
-        "source_path": local_path,
+        "source_path": _resolve(local_path),
         "dest_path": remote_path,
         "file_filter": file_filter,
     }
@@ -631,7 +667,7 @@ def download(
     """
     data = {
         "source_path": remote_path,
-        "dest_path": local_path,
+        "dest_path": _resolve(local_path),
         "file_filter": file_filter,
     }
     try:

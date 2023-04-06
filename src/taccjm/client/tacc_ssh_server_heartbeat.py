@@ -43,38 +43,40 @@ class RepeatingTimer(Timer):
             self.finished.wait(self.interval)
 
 
-def poll_processes():
+def poll_session(session_id: str) -> None:
     """
-    Poll active processes for each session and update process tables
-    """
-    # TODO: Implement polling processes on heartbeats
-    pass
+    Poll session by:
 
+        1. Sending a command (checking allocations on system) to the shell
+        session, therefore keeping it alive. 
+        2. Poll all active commands to update there status server side.
 
-def pull_allocations(session):
+    Parameters
+    ----------
+    session_id : str
+        ID of session to poll
     """
-    Pull allocation information
-    """
-    # TODO: Log allocation information to seperate table
-    # TODO: Only poll each system once
+    alloc_command = tsa.exec(session["id"], "/usr/local/etc/taccinfo",
+                 key='HEARTBEAT', wait=False, fail=False)
     _logger.info(
-        f"Checking session {session['id']}'s allocations.",
-        extra={"connection_config": session},
+        f"Polling active processes for session {session['id']}",
+        extra={"session": session},
     )
-    try:
-        allocs = parse_allocations_string(
-            tsa.exec(session["id"], "/usr/local/etc/taccinfo")["stdout"]
-        )
-        for a in allocs:
-            _logger.info(
-                f"Found allocation {a['name']}",
-                extra={
-                    "SUs": a["service_units"],
-                    "expiration": a["exp_date"],
-                },
-            )
-    except Exception as e:
-        _logger.info(f"Error checking allocations {e}")
+    active = tsa.process(session["id"], poll=True, wait=False)
+    _logger.info(
+        f"Found {len(active)} commands on {session_id}.",
+        extra={"session_id": session_id, "active": active},
+    )
+    # See if alloc_command still amongst active commands
+    cmnd = [c for c in active if alloc_command['id'] == c['id']]
+    if len(cmnd) != 0:
+        cmnd = [tsa.process(session["id"], cmnd_id=alloc_command['id'],
+                           poll=True, wait=True)]
+    allocs = parse_allocations_string(cmnd[0]["stdout"])
+    _logger.info(
+            f"Found {len(allocs)} allocations.",
+            extra=[allocs],
+    )
 
 
 def heartbeat():

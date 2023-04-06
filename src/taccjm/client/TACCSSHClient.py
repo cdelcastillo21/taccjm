@@ -299,8 +299,9 @@ class TACCSSHClient(SSHClient2FA):
         }
         self.commands.append(command_config)
 
-        self.log.info("Adding command to commands list",
-                      extra={'config': command_config})
+        # TODO: Add command config? Clean it so we can log it 
+        #  extra={'config': command_config})
+        self.log.info("Adding command to commands list")
 
         if wait:
             self.log.info("Waiting for command to finish")
