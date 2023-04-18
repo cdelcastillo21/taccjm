@@ -15,7 +15,7 @@ import requests
 
 from taccjm.constants import (TACC_SSH_HOST, TACC_SSH_PORT, TACCJM_DIR,
                               TACCJM_SOURCE)
-from taccjm.exceptions import TACCJMError
+from taccjm.exceptions import TACCJMError, SSHCommandError
 from taccjm.utils import filter_files, validate_file_attrs
 from taccjm.log import logger
 
@@ -425,20 +425,20 @@ def get(connection_id: str) -> dict:
 
 def exec(connection_id: str, cmnd: str,
          wait: bool = True, key: str = 'API',
-         fail: bool = True,):
+         fail: bool = True):
     """
     Exec a command
     """
 
-    json_data = {"cmnd": cmnd, "wait": wait, "key": key, 'fail': fail}
+    json_data = {"cmnd": cmnd, "wait": wait, "key": key}
 
     # Make API call
-    try:
-        res = api_call("POST", f"{connection_id}/exec", json_data=json_data)
-    except TACCJMError as e:
-        e.message = f"Error executing command {cmnd}"
-        logger.error(e.message)
-        raise e
+    res = api_call("POST", f"{connection_id}/exec", json_data=json_data)
+
+    if fail and res[0]['rc'] != 0:
+        raise SSHCommandError(connection_id, 'api',
+                              res[0],
+                              message="Non-zero return code.")
 
     return res
 
