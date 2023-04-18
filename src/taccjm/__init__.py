@@ -19,3 +19,4 @@ finally:
 
 from .client.TACCClient import TACCClient
 from .sim.TACCSimulation import TACCSimulation
+from .sim.EnsembleTACCSimulation import EnsembleTACCSimulation

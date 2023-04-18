@@ -2,6 +2,7 @@ import os
 import pdb
 import tempfile
 import time
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -155,7 +156,8 @@ class TACCSimulation:
             job_name=job_config["name"],
             job_id=job_config["job_id"],
             job_dir=job_config["job_dir"],
-            module_list=" ".join(self.ENV_CONFIG["modules"]),
+            module_list=" ".join(self.ENV_CONFIG["modules"] +
+                                 self.BASE_ENV_CONFIG["modules"]),
             allocation=job_config["slurm"]["allocation"],
             queue=job_config["slurm"]["queue"],
             run_time=rt,
@@ -298,8 +300,8 @@ class TACCSimulation:
                 name=self.name,
                 class_name=self.class_name,
                 output=f"'{self.name}-log'",
-                fmt=self.log_config["fmt"],
-                level=get_log_level_str(self.log_config["level"]).upper(),
+                fmt="{message}",
+                level=get_log_level_str(logging.INFO).upper(),
             )
 
         logger.info(

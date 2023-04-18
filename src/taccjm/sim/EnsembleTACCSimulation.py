@@ -5,7 +5,7 @@ Ensemble TACC Simulation
 import logging
 
 from taccjm.pyslurmtq.SLURMTaskQueue import SLURMTaskQueue
-from taccjm.TACCSimulation import TACCSimulation
+from taccjm import TACCSimulation
 
 
 class EnsembleTACCSimulation(TACCSimulation):

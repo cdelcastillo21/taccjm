@@ -339,7 +339,7 @@ class TACCClient:
             self.remote_commands[str(cmnd_config["id"])] = cmnd_config
 
         if wait:
-            return self.process(cmnd_config["id"], wait=wait)
+            return self.process(cmnd_config["id"], wait=wait)[0]
         else:
             return cmnd_config
 
@@ -889,9 +889,9 @@ class TACCClient:
         """
         mamba_res = self.exec("mamba --help", wait=False)
         conda_res = self.exec("conda --help", wait=False)
-        mamba_res = self.process(mamba_res["id"], wait=True)
+        mamba_res = self.process(mamba_res["id"], wait=True)[0]
         if mamba_res["rc"] != 0:
-            conda_res = self.process(conda_res["id"], wait=True)
+            conda_res = self.process(conda_res["id"], wait=True)[0]
             if conda_res["rc"] == 0:
                 self.pm = "conda"
         else:
