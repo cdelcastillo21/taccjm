@@ -197,7 +197,7 @@ def exec(connection_id: str, cmnd_req: CommandRequest):
     res = ssh_client.execute_command(cmnd_req.cmnd,
                                      wait=cmnd_req.wait,
                                      key=cmnd_req.key,
-                                     faile=False)
+                                     fail=False)
     res = {i: res[i] for i in res if i != "channel"}
     CONNECTIONS[connection_id]["last_ts"] = datetime.now()
     logger.info(

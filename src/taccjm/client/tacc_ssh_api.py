@@ -435,9 +435,9 @@ def exec(connection_id: str, cmnd: str,
     # Make API call
     res = api_call("POST", f"{connection_id}/exec", json_data=json_data)
 
-    if fail and res[0]['rc'] != 0:
+    if wait and fail and res['rc'] != 0:
         raise SSHCommandError(connection_id, 'api',
-                              res[0],
+                              res,
                               message="Non-zero return code.")
 
     return res

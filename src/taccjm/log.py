@@ -1,7 +1,6 @@
 """
 TACCJobManager Log functionality
 
-
 """
 from loguru import logger
 from rich.logging import RichHandler
@@ -14,6 +13,16 @@ def enable(file=None,
            level='INFO', fmt="{message}"):
     """
     Turn on logging for module with appropriate message format
+
+    Parameters
+    ----------
+    file : str, optional
+        Path to file to log to. If None, log to stdout and use RichHandler
+        for colorful output. If not output to file, with data serialized in json.
+    level : str, optional
+        Logging level. Default is INFO.
+    fmt : str, optional
+        Message format. Default is "{message}".
     """
     if file is None:
         logger.configure(handlers=[
@@ -35,4 +44,3 @@ def disable():
     Turn of logging
     """
     logger.disable('taccjm')
-# 
