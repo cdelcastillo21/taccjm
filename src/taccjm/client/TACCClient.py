@@ -5,12 +5,13 @@ import posixpath
 import socket
 import stat
 import subprocess
+from typing import Any, str
 import tempfile
 import time
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
-from typing import List, Union
+from typing import List, Union, Any, str
 
 import pandas as pd
 
@@ -859,25 +860,41 @@ class TACCClient:
 
     def _mamba_install(
         self,
-        exe="Mambaforge-pypy3-Linux-x86_64.sh",
-        url="https://github.com/conda-forge/miniforge/" + "releases/latest/download",
-    ):
+        exe: str = "Mambaforge-pypy3-Linux-x86_64.sh",
+        url: str = "https://github.com/conda-forge/miniforge/releases/latest/download"
+    ) -> Any:
         """
-        Install mamba on TACC system
+        Install mamba on TACC system.
+
+        Parameters
+        ----------
+        exe : str, optional
+            Name of the executable for Mamba, by default "Mambaforge-pypy3-Linux-x86_64.sh"
+        url : str, optional
+            URL for downloading Mamba, by default "https://github.com/conda-forge/miniforge/releases/latest/download"
+
+        Returns
+        -------
+        Any
+            Result of the installation command.
         """
+
         exe_path = posixpath.join(self.work_dir, exe)
         install_path = posixpath.join(self.work_dir, "mambaforge")
         mamba_path = posixpath.join(install_path, "mambafore/bin/mamba")
         conda_path = posixpath.join(install_path, "mambafore/bin/conda")
-        install_cmd = f"rm -rf {exe_path} && "
-        install_cmd += f"wget -P {self.work_dir} {url}/{exe} && "
-        install_cmd += f"chmod +x {exe_path} && "
-        install_cmd += f"{exe_path} -b -p $WORK/mambaforge && "
-        install_cmd += f"rm {exe_path} && "
-        install_cmd += f"{conda_path} init && "
-        install_cmd += f"{mamba_path} init"
 
-        pdb.set_trace()
+        install_cmd = (
+            f"rm -rf {exe_path} && "
+            f"wget -P {self.work_dir} {url}/{exe} && "
+            f"chmod +x {exe_path} && "
+            f"{exe_path} -b -p $WORK/mambaforge && "
+            f"rm {exe_path} && "
+            f"{conda_path} init && "
+            f"{mamba_path} init"
+        )
+
+        # pdb.set_trace()
         install_cmd = self.exec(install_cmd)
 
         return install_cmd

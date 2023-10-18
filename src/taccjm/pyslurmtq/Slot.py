@@ -43,6 +43,15 @@ class Slot:
         List of Task objects that have been executed on this slot. If the
         slot is currently occupied, the last element in the list corresponds to
         the currently running task.
+
+    Methods
+    -------
+    occupy(task: Task) -> None:
+        Occupy the slot with a task.
+    release() -> None:
+        Release the slot.
+    is_free() -> bool:
+        Check whether the slot is free.
     """
 
     def __init__(self, host, idx):

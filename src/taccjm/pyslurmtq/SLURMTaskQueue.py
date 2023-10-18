@@ -24,7 +24,6 @@ import traceback
 from pathlib import Path
 from typing import List
 
-from prettytable import PrettyTable
 from pythonjsonlogger import jsonlogger
 
 from taccjm.pyslurmtq.Slot import Slot
