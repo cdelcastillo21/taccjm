@@ -447,7 +447,7 @@ class TACCClient:
             )
 
         if error and len(failed) > 0:
-            raise TACCCommandError(self.system, self.user, failed)
+            raise TACCCommandError(self.system, self.user, failed[0])
 
         return processed_commands
 

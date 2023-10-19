@@ -419,25 +419,57 @@ class TACCSimulation:
         the job to be run, returning the job_config.
         """
         # See if running from within execution environment
-        job_dir = os.getenv("SLURM_SUBMIT_DIR")
-        if job_dir is None:
-            logger.info("Not in execution environment. Setting up job...")
-            job_config = self.setup(
-                args=args,
-                slurm_config=slurm_config,
-                stage=stage,
-                run=run,
-                python_setup=python_setup,
-                remora=remora,
-            )
+        slurm_env = self.client.parse_slurm_env()
+        logger.info(f'SLURM env: {slurm_env}')
+        if not slurm_env['TACC_JOBNAME'] == 'tap_jupyter':
+            job_dir = os.getenv("SLURM_SUBMIT_DIR")
+            if job_dir is None:
+                logger.info("Not in execution environment. Setting up job...")
+                job_config = self.setup(
+                    args=args,
+                    slurm_config=slurm_config,
+                    stage=stage,
+                    run=run,
+                    python_setup=python_setup,
+                    remora=remora,
+                )
+                logger.info(
+                    f"Job {job_config['job_id']} set up and submitted: {job_config}",
+                )
+                return job_config
+            self.job_config = self.client.get_job(job_dir)
             logger.info(
-                f"Job {job_config['job_id']} set up and submitted: {job_config}",
+                "Loaded job config. starting job.", extra={"job_config": self.job_config}
             )
-            return job_config
-        self.job_config = self.client.get_job(job_dir)
-        logger.info(
-            "Loaded job config. starting job.", extra={"job_config": self.job_config}
-        )
+        else:
+            # TODO: ADD Cases when in idev (not jupyter)
+            # start_ts = datetime.datetime.now().strftime("%H:%M:%S")
+            # slurm_job_config = {
+            #         'job_id': slurm_env['JOB_ID'],
+            #         'job_name': 'tap_jupyter',
+            #         'username': slurm_env['JOB_USER'],
+            #         'state': 'Running',
+            #         'nodes': slurm_env['JOB_NNODES'],
+            #         'remaining': '1',
+            #         'start_time': start_ts,
+            # }
+            job_config = {
+                    'name': 'tap_jupyter',
+                    'job_id' : 'ADCIRCSim_20231019_101108bb32gb98',
+                    'job_dir' : str(Path.cwd()),
+                    'slurm' : {
+                        'allocation': slurm_env['TACC_ACCOUNT'],
+                        'node_count': 1,
+                        'processors_per_node': 12,
+                        'max_run_time': 0.2,
+                        'queue': slurm_env['QUEUE']},
+                    'args': args,
+                    'slurm_id': slurm_env['JOB_ID']
+                }
+            self.job_config = job_config
+            logger.info(f'Starting idev sim {self.job_config}')
+
+        self.slurm_env = slurm_env
         self.setup_job()
         self.run_job()
 
