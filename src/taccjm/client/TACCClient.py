@@ -313,7 +313,7 @@ class TACCClient:
         if self.ssh_client is None or local:
             self.log.info(
                 "Running command locally",
-                extra={"cmnd": cmnd, "wait": wait, "error": error},
+                extra={"cmnd": cmnd, "wait": wait, "fail": fail},
             )
             sub_proc = subprocess.Popen(
                 cmnd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
@@ -985,6 +985,8 @@ class TACCClient:
             env_path = envs["path"][envs["name"] == env].iloc[0]
             pip_path = f"{env_path}/bin/pip"
             self.log.info(f"Installing pip packages using pip path {pip_path}")
+
+            # TODO: Do I need to activate the enviornment here first?
             self.exec(f"{pip_path} install {pip}")
 
         python_env = self.get_python_env(env)

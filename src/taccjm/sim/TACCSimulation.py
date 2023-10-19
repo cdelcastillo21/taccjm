@@ -102,8 +102,8 @@ class TACCSimulation:
     # TODO: Base environment config? for TACC simulation
     BASE_ENV_CONFIG = {
         "modules": ["remora"],
-        "conda_packages": "pip",
-        "pip_packages": "git+https://github.com/cdelcastillo21/taccjm.git@0.0.5-improv",
+        "conda_packages": ["pip"],
+        "pip_packages": ["git+https://github.com/cdelcastillo21/taccjm.git@0.0.5-improv"],
     }
 
     ENV_CONFIG = {
@@ -218,9 +218,16 @@ class TACCSimulation:
         if python_setup:
             self.client.python_env = self.client.get_install_env(
                 self.ENV_CONFIG["conda_env"],
-                conda=self.ENV_CONFIG["conda_packages"],
-                pip=self.ENV_CONFIG["pip_packages"],
+                conda=' '.join(
+                    self.BASE_ENV_CONFIG["conda_packages"] +
+                    self.ENV_CONFIG["conda_packages"]),
+                pip=' '.join(
+                    self.BASE_ENV_CONFIG["pip_packages"] +
+                    self.ENV_CONFIG["pip_packages"]),
             )
+            envs = self.client.get_python_env()
+            if not any(envs["name"] == self.ENV_CONFIG["conda_env"]):
+                raise RuntimeError('Failed to create conda env')
 
         logger.info("Creating job config.")
         job_config = {}
@@ -278,6 +285,23 @@ class TACCSimulation:
 
         run_cmd = f"chmod +x {self.name}.py\n\n"
         if remora:
+            # TODO: ADD Remora options:
+            #  REMORA_PERIOD  - How often statistics are collected.
+            #       Default is 10 seconds.
+            #       Integer values are accepted.
+            #  REMORA_VERBOSE - Verbose mode will save all information to a file.
+            #                  Default is 0 (off).
+            #                  Values 0 and 1 are accepted.
+            #  REMORA_MODE    - How many stats are collected. Possible values:
+            #                  - FULL (default): cpu, memory, network, lustre
+            #                  - BASIC: cpu, memory
+            #  REMORA_PLOT_RESULTS  - Whether the results are plotted. Values:
+            #                          - 1 (default): HTML files are generated.
+            #                          - 0: plots will be generated only if the
+            #                              postprocessing tool (remora_post) is
+            #                              invoked.
+            #  REMORA_CUDA    - Set to 0 to turn off GPU Mem collection when gpu
+            #                  module is available on system.
             run_cmd += f"remora ./{self.name}.py"
         else:
             run_cmd += f"./{self.name}.py"
@@ -405,8 +429,7 @@ class TACCSimulation:
                 remora=remora,
             )
             logger.info(
-                "Job {job_config['job_id']} set up and submitted",
-                extra={"job_config": job_config},
+                f"Job {job_config['job_id']} set up and submitted: {job_config}",
             )
             return job_config
         self.job_config = self.client.get_job(job_dir)
