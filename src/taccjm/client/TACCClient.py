@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import pdb
 import posixpath
 import socket
@@ -42,7 +43,6 @@ class TACCClient:
         system: str = None,
         conn_id: str = None,
         log_config: dict = None,
-        ssh_config: dict = None,
     ):
         """
         Upon initializaiton:
@@ -127,6 +127,18 @@ class TACCClient:
         )
         self.exec(mkdir_cmnd)
         self.pm = None
+
+    def parse_slurm_env(self):
+        """
+        Performs `printenv | grep SLURM` to get all SLURM environment variables
+        """
+        res = self.exec("printenv | grep SLURM")
+
+        pattern = r"SLURM_([^=]+)=(\S+)"
+        matches = re.findall(pattern, res['stdout'])
+        slurm_env_vars = {key: value for key, value in matches}
+
+        return slurm_env_vars
 
     def get_env_var(self, var: str):
         """

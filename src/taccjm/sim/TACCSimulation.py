@@ -5,6 +5,7 @@ import time
 import logging
 from datetime import datetime
 from pathlib import Path
+from alive_progress import alive_bar
 
 import __main__
 
@@ -139,7 +140,7 @@ class TACCSimulation:
         self.job_config = None
         self.class_name = __name__ if class_name is None else class_name
         self.class_name = self.class_name.split(".")[-1]
-        self.jobs = {}
+        self.jobs = []
 
     def _parse_submit_script(self, job_config: dict, run_cmd: str):
         """
@@ -398,6 +399,7 @@ class TACCSimulation:
             logger.error("Failed to submit job", extra={"err": t})
             raise t
         logger.info("Job submitted", extra={"slurm_config": job_config["slurm"]})
+        self.jobs.append(job_config)
 
         return job_config
 
@@ -438,6 +440,44 @@ class TACCSimulation:
         )
         self.setup_job()
         self.run_job()
+
+    def check_job_status(
+        self,
+        job_idx=-1,
+        job_id=None,
+        check_interval_seconds=30,
+    ):
+        job_id = job_id if job_id is not None else self.jobs[job_idx]['job_id']
+        with alive_bar(
+            title='Checking job status...',
+            spinner='dots_waves2',
+            bar=None,
+            dual_line=True,
+            force_tty=True
+        ) as bar:
+            while True:
+                jobs = self.client.showq()  # Replace this with the actual function call
+
+                # Search for the job with the given job_id
+                job_info = next((job for job in jobs if job['job_id'] == job_id), None)
+
+                # If job is not in the queue, break out
+                if not job_info:
+                    bar.text('Job not found in queue.')
+                    break
+
+                # Update the progress bar text with the job status
+                status = job_info['state']
+                nodes_requested = job_info['nodes']
+                start_time = job_info['start_time']
+                # TODO: Figure this out - This prints out lots of messages in jupyter notebooks
+                # bar.text(f'Status: {status} | Nodes: {nodes_requested} | Start Time: {start_time}')
+                print(f'Status: {status} | Nodes: {nodes_requested} | Start Time: {start_time}')
+
+                # Sleep for the check interval before checking again
+                time.sleep(check_interval_seconds)
+
+            bar()
 
     def setup_job(self):
         """
