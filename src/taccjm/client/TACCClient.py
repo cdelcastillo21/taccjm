@@ -405,7 +405,7 @@ class TACCClient:
             if not poll:
                 return active
 
-            processed_commands = [self._process_local(c, wait)
+            processed_commands = [self._process_local(c['id'], wait)
                                   for c in active]
         else:
             processed_commands = tsa.process(
