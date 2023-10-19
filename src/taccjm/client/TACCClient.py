@@ -5,13 +5,12 @@ import posixpath
 import socket
 import stat
 import subprocess
-from typing import Any, str
 import tempfile
 import time
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
-from typing import List, Union, Any, str
+from typing import List, Union, Any
 
 import pandas as pd
 
