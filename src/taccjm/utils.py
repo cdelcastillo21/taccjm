@@ -480,3 +480,63 @@ def check_path(path: str):
     else:
         return True
 
+
+def generate_remora_command(
+    cmd: str,
+    REMORA_PERIOD: int = 10, 
+    REMORA_VERBOSE: int = 0,
+    REMORA_MODE: str = "BASIC",
+    REMORA_PLOT_RESULTS: int = 1,
+    REMORA_CUDA: int = 1
+) -> str:
+    """
+    Generate the Remora command string based on the given parameters.
+
+    See https://docs.tacc.utexas.edu/software/remora/ for more info.
+
+    Parameters
+    ----------
+    REMORA_PERIOD : int, default=10
+        How often statistics are collected.
+    REMORA_VERBOSE : int, default=0
+        Verbose mode; values can be 0 or 1.
+    REMORA_MODE : str, default='FULL'
+        How many stats are collected. Possible values are 'FULL' and 'BASIC'.
+    REMORA_PLOT_RESULTS : int, default=1
+        Whether the results are plotted. Values can be 0 or 1.
+    REMORA_CUDA : int, default=1
+        Set to 0 to turn off GPU Mem collection when the GPU module is available.
+
+    Returns
+    -------
+    str
+        The generated command string.
+    """
+    
+    # Validate values before generating the command
+    if REMORA_PERIOD < 0:
+        raise ValueError("REMORA_PERIOD must be a non-negative integer.")
+    
+    if REMORA_VERBOSE not in [0, 1]:
+        raise ValueError("REMORA_VERBOSE must be 0 or 1.")
+        
+    if REMORA_MODE not in ['FULL', 'BASIC']:
+        raise ValueError("REMORA_MODE must be 'FULL' or 'BASIC'.")
+        
+    if REMORA_PLOT_RESULTS not in [0, 1]:
+        raise ValueError("REMORA_PLOT_RESULTS must be 0 or 1.")
+        
+    if REMORA_CUDA not in [0, 1]:
+        raise ValueError("REMORA_CUDA must be 0 or 1.")
+    
+    # Construct the command string
+    run_cmd = (
+        f"export REMORA_PERIOD={REMORA_PERIOD}; "
+        f"export REMORA_VERBOSE={REMORA_VERBOSE}; "
+        f"export REMORA_MODE={REMORA_MODE}; "
+        f"export REMORA_PLOT_RESULTS={REMORA_PLOT_RESULTS}; "
+        f"export REMORA_CUDA={REMORA_CUDA}; "
+        f"remora {cmd}"
+    )
+    
+    return run_cmd

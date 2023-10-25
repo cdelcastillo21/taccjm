@@ -22,7 +22,7 @@ import tempfile
 import time
 import traceback
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Dict, Union
 
 from pythonjsonlogger import jsonlogger
 
@@ -38,9 +38,8 @@ __license__ = "MIT"
 
 class SLURMTaskQueue:
     """
-    Object that does the maintains a list of Task objects.
-    This is internally created inside a ``LauncherJob`` object.
-
+    Implements a Task Queue of :class:Task objects to be executed in parallel
+    on available compute nodes according to the SLURM environment variables.
 
     Attributes
     ----------
@@ -466,8 +465,15 @@ class SLURMTaskQueue:
         self._logger.info("Queue run finished", extra=self.__dict__)
         self._save_summary()
 
-    def read_log(self):
-        """Return read json log"""
+    def read_log(self) -> List[Dict[str, Union[str, int, float]]]:
+        """
+        Read the JSON log file.
+
+        Returns
+        -------
+        List[Dict[str, Union[str, int, float]]]
+            List of dictionaries containing the log information for each entry.
+        """
         log_entries = []
         with open(self.workdir / "tq_log.json", "r") as f:
             for line in f:
@@ -476,12 +482,32 @@ class SLURMTaskQueue:
 
     def get_log(
         self,
-        fields=["asctime", "levelname", "message"],
-        search=None,
-        match=None,
-        print_log=True,
-    ):
-        """Print log entries"""
+        fields: List[str] = ["asctime", "levelname", "message"],
+        search: Optional[str] = None,
+        match: Optional[str] = None,
+        print_log: bool = True,
+    ) -> List[Dict[str, Union[str, int, float]]]:
+        """
+        Get and optionally print log entries.
+
+        Parameters:
+        -----------
+        fields : List[str], optional
+            List of fields to include in the summary. Defaults to ["asctime",
+            "levelname", "message"].
+        search : str, optional
+            String to search for in the summary. Defaults to None.
+        match : str, optional
+            Regular expression to match against the search string. Defaults to
+            None.
+        print_log : bool, optional
+            Whether to print the log to the console. Defaults to True.
+
+        Returns:
+        --------
+        List[Dict[str, Union[str, int, float]]]
+            List of dictionaries containing the log information for each entry.
+        """
         log = self.read_log()
         filtered = filter_res(
             log, fields=fields, search=search, match=match, print_res=print_log
@@ -490,13 +516,45 @@ class SLURMTaskQueue:
 
     def summary_by_task(
         self,
-        fields=["task_id", "running_time", "cores", "command"],
-        search=None,
-        match=r".",
-        all_fields=False,
-        print_res=True,
-        fname=None,
-    ):
+        fields: List[str] = [
+            "task_id",
+            "running_time",
+            "cores",
+            "command",
+        ],
+        search: Optional[str] = None,
+        match: str = r".",
+        all_fields: bool = False,
+        print_res: bool = True,
+        fname: Optional[str] = None,
+    ) -> List[Dict[str, Union[str, int, float]]]:
+        """
+        Summarize queue stats by task.
+
+        Parameters:
+        -----------
+        fields : List[str], optional
+            List of fields to include in the summary. Defaults to ["task_id",
+            "running_time", "cores", "command"].
+        search : str, optional
+            String to search for in the summary. Defaults to None.
+        match : str, optional
+            Regular expression to match against the search string. Defaults to
+            ".".
+        all_fields : bool, optional
+            Whether to include all available fields in the summary. Defaults
+            to False.
+        print_res : bool, optional
+            Whether to print the summary to the console. Defaults to True.
+        fname : str, optional
+            File name to write the summary to. Defaults to None.
+
+        Returns:
+        --------
+        List[Dict[str, Union[str, int, float]]]
+            List of dictionaries containing the summary information for each
+            task.
+        """
         """Summarize queue stats by task"""
         avail_fields = [
             "task_id",
@@ -552,7 +610,7 @@ class SLURMTaskQueue:
 
     def summary_by_slot(
         self,
-        fields=[
+        fields: List[str] = [
             "idx",
             "host",
             "status",
@@ -561,13 +619,40 @@ class SLURMTaskQueue:
             "free_time",
             "busy_time",
         ],
-        search=None,
-        match=r".",
-        all_fields=False,
-        print_res=True,
-        fname=None,
-    ):
-        """Summarize queue stats by slots"""
+        search: Optional[str] = None,
+        match: str = r".",
+        all_fields: bool = False,
+        print_res: bool = True,
+        fname: Optional[str] = None,
+    ) -> List[Dict[str, Union[int, str, List[int], float]]]:
+        """
+        Summarize queue stats by slots.
+
+        Parameters
+        ----------
+        fields : List[str], optional
+            List of fields to include in the summary. Defaults to
+            ["idx", "host", "status", "num_tasks", "task_ids", "free_time",
+            "busy_time"].
+        search : str, optional
+            String to search for in the summary. Defaults to None.
+        match : str, optional
+            Regular expression to match against the search string. Defaults to
+            ".".
+        all_fields : bool, optional
+            Whether to include all available fields in the summary. Defaults
+            to False.
+        print_res : bool, optional
+            Whether to print the summary to the console. Defaults to True.
+        fname : str, optional
+            File name to write the summary to. Defaults to None.
+
+        Returns
+        -------
+        List[Dict[str, Union[int, str, List[int], float]]]
+            List of dictionaries containing the summary information for each
+            slot.
+        """
         avail_fields = [
             "idx",
             "host",

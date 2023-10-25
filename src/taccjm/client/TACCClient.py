@@ -132,7 +132,10 @@ class TACCClient:
         """
         Performs `printenv | grep SLURM` to get all SLURM environment variables
         """
-        res = self.exec("printenv | grep SLURM")
+        res = self.exec("printenv | grep SLURM", fail=False)
+
+        if res["rc"] != 0:
+            return {}
 
         pattern = r"SLURM_([^=]+)=(\S+)"
         matches = re.findall(pattern, res['stdout'])

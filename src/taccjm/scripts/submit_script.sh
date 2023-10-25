@@ -20,4 +20,6 @@ cd {job_dir}
 
 module load {module_list}
 
+export TACCJM_SIM_RUN=1
+
 {run_cmnd}

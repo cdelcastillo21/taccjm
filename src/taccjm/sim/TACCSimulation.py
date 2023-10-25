@@ -12,7 +12,8 @@ import __main__
 from taccjm.exceptions import TACCCommandError
 from taccjm.client.TACCClient import TACCClient
 from taccjm.utils import (get_default_script, get_log_level_str,
-                          hours_to_runtime_str, read_log)
+                          hours_to_runtime_str, read_log,
+                          generate_remora_command)
 from taccjm.log import logger
 
 # install()
@@ -22,10 +23,12 @@ submit_script_template = get_default_script("submit_script.sh", ret="text")
 main_clause = """if __name__ == '__main__':
     import sys
     import logging
-    simulation = {class_name}(name='{name}',
-                                log_config={{'output': {output},
-                                            'fmt': '{fmt}',
-                                            'level': logging.{level}}})
+    simulation = {class_name}(
+        name='{name}',
+        log_config={{'output': {output},
+        'fmt': '{fmt}',
+        'level': logging.{level}}}
+    )
     simulation.run()"""
 
 
@@ -121,6 +124,7 @@ class TACCSimulation:
         log_config: dict = None,
         script_file: str = None,
         class_name: str = None,
+        job_dir: str = None,
     ):
         if "__file__" in dir(__main__):
             self.is_script = True
@@ -137,10 +141,16 @@ class TACCSimulation:
 
         self.name = name if name is not None else Path(self.script_file).stem
         self.client = TACCClient(system=system, log_config=log_config)
-        self.job_config = None
         self.class_name = __name__ if class_name is None else class_name
         self.class_name = self.class_name.split(".")[-1]
+
         self.jobs = []
+        self.slurm_env = self.client.parse_slurm_env()
+        if 'SUBMIT_DIR' in self.slurm_env.keys() and job_dir is not None:
+            job_dir = self.slurm_env['SUBMIT_DIR']
+        if job_dir is not None:
+            self.jobs.append(self.client.get_job(job_dir))
+            self.job_config = self.jobs[-1]
 
     def _parse_submit_script(self, job_config: dict, run_cmd: str):
         """
@@ -192,7 +202,6 @@ class TACCSimulation:
         slurm_config: dict = {},
         python_setup: bool = False,
         stage: bool = False,
-        run: bool = False,
         remora: bool = True,
     ) -> dict:
         """
@@ -206,17 +215,17 @@ class TACCSimulation:
                     "args": args,
                     "slurm_config": slurm_config,
                     "stage": stage,
-                    "run": run,
                 }
             },
         )
 
         # Checking python env set-up
-        logger.info("Setting up python execution environment")
+        logger.info(f"Checking for python env {self.ENV_CONFIG['conda_env']}")
         envs = self.client.get_python_env()
         if not any(envs["name"] == self.ENV_CONFIG["conda_env"]):
             python_setup = True
         if python_setup:
+            logger.info("Setting up python execution environment")
             self.client.python_env = self.client.get_install_env(
                 self.ENV_CONFIG["conda_env"],
                 conda=' '.join(
@@ -285,25 +294,12 @@ class TACCSimulation:
                 job_config["args"][arg["name"]] = args[arg["name"]]
 
         run_cmd = f"chmod +x {self.name}.py\n\n"
-        if remora:
-            # TODO: ADD Remora options:
-            #  REMORA_PERIOD  - How often statistics are collected.
-            #       Default is 10 seconds.
-            #       Integer values are accepted.
-            #  REMORA_VERBOSE - Verbose mode will save all information to a file.
-            #                  Default is 0 (off).
-            #                  Values 0 and 1 are accepted.
-            #  REMORA_MODE    - How many stats are collected. Possible values:
-            #                  - FULL (default): cpu, memory, network, lustre
-            #                  - BASIC: cpu, memory
-            #  REMORA_PLOT_RESULTS  - Whether the results are plotted. Values:
-            #                          - 1 (default): HTML files are generated.
-            #                          - 0: plots will be generated only if the
-            #                              postprocessing tool (remora_post) is
-            #                              invoked.
-            #  REMORA_CUDA    - Set to 0 to turn off GPU Mem collection when gpu
-            #                  module is available on system.
-            run_cmd += f"remora ./{self.name}.py"
+        # Remora None or false -> no remora 
+        # Remora True 
+        if isinstance(remora, bool):
+            remora = {} if remora else None
+        if remora is not None:
+            run_cmd += generate_remora_command(f"./{self.name}.py", **remora)
         else:
             run_cmd += f"./{self.name}.py"
         # run_cmd += f"{conda_path}/bin/{self.client.pm} run"
@@ -389,16 +385,6 @@ class TACCSimulation:
         logger.info("Uploading job directory", extra={"path": path})
         self.client.upload(tmpdir, "", job_id=job_config["job_id"])
 
-        if not run:
-            return job_config
-
-        logger.info("Submitting job")
-        try:
-            job_config = self.client.submit_job(job_config["job_id"])
-        except TACCCommandError as t:
-            logger.error("Failed to submit job", extra={"err": t})
-            raise t
-        logger.info("Job submitted", extra={"slurm_config": job_config["slurm"]})
         self.jobs.append(job_config)
 
         return job_config
@@ -419,59 +405,36 @@ class TACCSimulation:
         the job to be run, returning the job_config.
         """
         # See if running from within execution environment
-        slurm_env = self.client.parse_slurm_env()
-        logger.info(f'SLURM env: {slurm_env}')
-        if not slurm_env['TACC_JOBNAME'] == 'tap_jupyter':
-            job_dir = os.getenv("SLURM_SUBMIT_DIR")
-            if job_dir is None:
-                logger.info("Not in execution environment. Setting up job...")
-                job_config = self.setup(
-                    args=args,
-                    slurm_config=slurm_config,
-                    stage=stage,
-                    run=run,
-                    python_setup=python_setup,
-                    remora=remora,
-                )
-                logger.info(
-                    f"Job {job_config['job_id']} set up and submitted: {job_config}",
-                )
-                return job_config
-            self.job_config = self.client.get_job(job_dir)
-            logger.info(
-                "Loaded job config. starting job.", extra={"job_config": self.job_config}
+        in_run = os.getenv("TACCJM_SIM_RUN")
+        if not in_run:
+            job_config = self.setup(
+                args=args,
+                slurm_config=slurm_config,
+                stage=stage,
+                python_setup=python_setup,
+                remora=remora,
             )
-        else:
-            # TODO: ADD Cases when in idev (not jupyter)
-            # start_ts = datetime.datetime.now().strftime("%H:%M:%S")
-            # slurm_job_config = {
-            #         'job_id': slurm_env['JOB_ID'],
-            #         'job_name': 'tap_jupyter',
-            #         'username': slurm_env['JOB_USER'],
-            #         'state': 'Running',
-            #         'nodes': slurm_env['JOB_NNODES'],
-            #         'remaining': '1',
-            #         'start_time': start_ts,
-            # }
-            job_config = {
-                    'name': 'tap_jupyter',
-                    'job_id' : 'ADCIRCSim_20231019_101108bb32gb98',
-                    'job_dir' : str(Path.cwd()),
-                    'slurm' : {
-                        'allocation': slurm_env['TACC_ACCOUNT'],
-                        'node_count': 1,
-                        'processors_per_node': 12,
-                        'max_run_time': 0.2,
-                        'queue': slurm_env['QUEUE']},
-                    'args': args,
-                    'slurm_id': slurm_env['JOB_ID']
-                }
-            self.job_config = job_config
-            logger.info(f'Starting idev sim {self.job_config}')
+            logger.info(
+                f"Job {job_config['job_id']} set up and submitted: {job_config}",
+            )
 
-        self.slurm_env = slurm_env
-        self.setup_job()
-        self.run_job()
+        if not run :
+            return job_config
+
+        if 'TACC_JOBNAME' not in self.slurm_env.keys():
+            logger.info("Submitting job")
+            try:
+                job_config = self.client.submit_job(job_config["job_id"])
+            except TACCCommandError as t:
+                logger.error("Failed to submit job", extra={"err": t})
+                raise t
+            logger.info("Job submitted", extra={"slurm_config": job_config["slurm"]})
+            return job_config
+        else:
+            self.job_config = self.client.load_
+            self.setup_job()
+            self.run_job()
+            self.teardown_job()
 
     def check_job_status(
         self,
@@ -518,8 +481,16 @@ class TACCSimulation:
         This is a skeleton method that should be over-written.
         """
         logger.info("Job set-up Start")
-        self.client.exec("sleep 5")
+        self.client.exec("mkdir output; sleep 5")
         logger.info("Job set-up Start")
+
+    def teardown_job(self):
+        """
+        Command to tear-down job directory.
+        """
+        logger.info(f"Job tear-down for")
+        self.client.exec("cp out.txt output/out.txt; sleep 5")
+        logger.info("Job tear-down done")
 
     def run_job(self):
         """
