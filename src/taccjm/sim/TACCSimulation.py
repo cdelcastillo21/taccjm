@@ -5,7 +5,6 @@ import time
 import logging
 from datetime import datetime
 from pathlib import Path
-from alive_progress import alive_bar
 
 import __main__
 
@@ -30,7 +29,7 @@ main_clause = """if __name__ == '__main__':
         log_config={{'output': {output},
         'fmt': '{fmt}',
         'level': logging.{level}}},
-        job_dir='{job_dir}/job.json'
+        job_dir='{job_dir}'
     )
 
     fire.Fire(simulation)
