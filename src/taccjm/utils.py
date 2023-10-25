@@ -531,11 +531,11 @@ def generate_remora_command(
     
     # Construct the command string
     run_cmd = (
-        f"export REMORA_PERIOD={REMORA_PERIOD}; "
-        f"export REMORA_VERBOSE={REMORA_VERBOSE}; "
-        f"export REMORA_MODE={REMORA_MODE}; "
-        f"export REMORA_PLOT_RESULTS={REMORA_PLOT_RESULTS}; "
-        f"export REMORA_CUDA={REMORA_CUDA}; "
+        f"export REMORA_PERIOD={REMORA_PERIOD}\n"
+        f"export REMORA_VERBOSE={REMORA_VERBOSE}\n"
+        f"export REMORA_MODE={REMORA_MODE}\n"
+        f"export REMORA_PLOT_RESULTS={REMORA_PLOT_RESULTS}\n"
+        f"export REMORA_CUDA={REMORA_CUDA}\n"
         f"remora {cmd}"
     )
     

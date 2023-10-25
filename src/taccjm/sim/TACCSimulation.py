@@ -23,13 +23,18 @@ submit_script_template = get_default_script("submit_script.sh", ret="text")
 main_clause = """if __name__ == '__main__':
     import sys
     import logging
+    import fire
+
     simulation = {class_name}(
         name='{name}',
         log_config={{'output': {output},
         'fmt': '{fmt}',
-        'level': logging.{level}}}
+        'level': logging.{level}}},
+        job_dir='{job_dir}/job.json'
     )
-    simulation.run()"""
+
+    fire.Fire(simulation)
+"""
 
 
 class TACCSimulation:
@@ -146,6 +151,7 @@ class TACCSimulation:
 
         self.jobs = []
         self.slurm_env = self.client.parse_slurm_env()
+        self.tacc_env = self.client.parse_tacc_env()
         if 'SUBMIT_DIR' in self.slurm_env.keys() and job_dir is not None:
             job_dir = self.slurm_env['SUBMIT_DIR']
         if job_dir is not None:
@@ -323,6 +329,7 @@ class TACCSimulation:
                 output=f"'{self.name}-log'",
                 fmt="{message}",
                 level=get_log_level_str(logging.INFO).upper(),
+                job_dir=job_config["job_dir"],
             )
 
         logger.info(
@@ -384,9 +391,6 @@ class TACCSimulation:
         # Upload tmpdir to job_path - Non-local operation if necessary
         logger.info("Uploading job directory", extra={"path": path})
         self.client.upload(tmpdir, "", job_id=job_config["job_id"])
-
-        self.jobs.append(job_config)
-
         return job_config
 
     def run(
@@ -405,8 +409,7 @@ class TACCSimulation:
         the job to be run, returning the job_config.
         """
         # See if running from within execution environment
-        in_run = os.getenv("TACCJM_SIM_RUN")
-        if not in_run:
+        if self.slurm_env == {}:
             job_config = self.setup(
                 args=args,
                 slurm_config=slurm_config,
@@ -414,12 +417,14 @@ class TACCSimulation:
                 python_setup=python_setup,
                 remora=remora,
             )
+            self.jobs.append(job_config)
+            self.job_config = job_config
             logger.info(
                 f"Job {job_config['job_id']} set up and submitted: {job_config}",
             )
 
         if not run :
-            return job_config
+            return self.job_config
 
         if 'TACC_JOBNAME' not in self.slurm_env.keys():
             logger.info("Submitting job")
@@ -431,7 +436,6 @@ class TACCSimulation:
             logger.info("Job submitted", extra={"slurm_config": job_config["slurm"]})
             return job_config
         else:
-            self.job_config = self.client.load_
             self.setup_job()
             self.run_job()
             self.teardown_job()

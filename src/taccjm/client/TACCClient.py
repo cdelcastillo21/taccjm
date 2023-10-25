@@ -143,6 +143,20 @@ class TACCClient:
 
         return slurm_env_vars
 
+    def parse_tacc_env(self):
+        """
+        Performs `printenv | grep TACC` to get all TACC environment variables
+        """
+        res = self.exec("printenv | grep TACC", fail=False)
+
+        if res["rc"] != 0:
+            return {}
+
+        pattern = r"TACC_([^=]+)=(\S+)"
+        matches = re.findall(pattern, res['stdout'])
+        tacc_env_vars = {key: value for key, value in matches}
+        return tacc_env_vars
+
     def get_env_var(self, var: str):
         """
         Resolve an environment variable
