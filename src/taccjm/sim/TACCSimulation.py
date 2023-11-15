@@ -5,6 +5,7 @@ import time
 import logging
 from datetime import datetime
 from pathlib import Path
+import json
 
 import __main__
 
@@ -435,6 +436,8 @@ class TACCSimulation:
             logger.info("Job submitted", extra={"slurm_config": job_config["slurm"]})
             return job_config
         else:
+            with open("job.json", "r") as fp:
+                self.job_config = json.load(fp)
             self.setup_job()
             self.run_job()
             self.teardown_job()

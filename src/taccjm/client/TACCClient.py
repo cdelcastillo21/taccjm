@@ -934,7 +934,7 @@ class TACCClient:
         """
         mamba_res = self.exec("mamba --help", wait=False)
         conda_res = self.exec("conda --help", wait=False)
-        mamba_res = self.process(mamba_res["id"], wait=True)[0]
+        mamba_res = self.process(mamba_res["id"], wait=True, error=False)[0]
         if mamba_res["rc"] != 0:
             conda_res = self.process(conda_res["id"], wait=True)[0]
             if conda_res["rc"] == 0:
